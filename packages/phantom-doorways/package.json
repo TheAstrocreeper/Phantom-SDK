@@ -1,0 +1,14 @@
+{
+  "name": "@phantom-local/doorways",
+  "version": "0.0.1",
+  "type": "module",
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "exports": {
+    ".": "./src/index.js",
+    "./browser": "./src/browser-entry.js"
+  },
+  "dependencies": {
+    "@noble/curves": "^2.4.0",
+    "@noble/hashes": "^2.4.0"
+  }
+}

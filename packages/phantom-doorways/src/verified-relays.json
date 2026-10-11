@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "checkedAt": "2026-10-11T07:32:06.409Z",
+  "relays": [
+    "wss://relay.damus.io/",
+    "wss://nostr.mom/",
+    "wss://relay.snort.social/",
+    "wss://relay.primal.net/"
+  ]
+}

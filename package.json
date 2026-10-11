@@ -1,0 +1,13 @@
+{
+  "name": "phantom-sdk-workspace",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "workspaces": [
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=22"
+  }
+}

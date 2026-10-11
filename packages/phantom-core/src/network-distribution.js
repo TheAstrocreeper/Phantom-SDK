@@ -1,0 +1,161 @@
+import {createFileDistribution} from './files.js';
+import {createAdminAuthorization} from './authorization.js';
+
+/** Separate distribution state. Never writes membership, election or private chat state. */
+export function createNetworkDistribution({core, networkId, adminPublicKey, lifecycle, runtime=globalThis,
+  emit=()=>{}, allowed=()=>true, readAdminOrders=async()=>[], checkAdmin, options={}}) {
+  const maxConnections=options.maxConnections??3, batchSize=options.batchSize??8;
+  const jobTimeoutMs=options.jobTimeoutMs??15000, intervalMs=options.intervalMs??250;
+  if(!Number.isInteger(maxConnections)||maxConnections<1||maxConnections>16||!Number.isInteger(batchSize)||batchSize<1||batchSize>64||!Number.isFinite(jobTimeoutMs)||jobTimeoutMs<100||!Number.isFinite(intervalMs)||intervalMs<10)throw new TypeError('Invalid distribution limits');
+  const crypto=runtime.crypto??globalThis.crypto;
+  const policy=adminPublicKey?createAdminAuthorization({networkId,adminPublicKey,crypto}):null;
+  const assets=new Map(),jobs=new Map(),links=new Map(),listeners=new Set(),finished=new Set(),blockedUntil=new Map(),pendingSignals=new Map(),reported=new Map(),mirrored=new Map(),mirrorJobs=new Map(),closedJobs=new Map();
+  let closed=false,sequence=0,leaderToken='',checkedToken='',checking=false,dirty=false,lastReport=0,receivedSequence=-1;
+  const state=()=>core.getState(),self=()=>state().peerId,leader=()=>state().leader;
+  const isLeader=()=>state().role==='syscon1'&&leader()===self();
+  const fire=(type,payload)=>{for(const fn of listeners)fn({type,payload});};
+  function error(error){if(!closed)emit('distributionError',{error:error.message});}
+  function frame(to,body){if(closed||!self()||!leader())return;const packet={networkId,from:self(),to,body};if(to===self()){void handle(self(),packet).catch(error);return;}core.command('PHANTOM_DIST_SEND',{to:isLeader()?to:leader(),frame:packet});}
+  // The facade supplies the committed roster projection. Reading it never changes it.
+  let roster=[];
+  function setRoster(rows){roster=rows.map(r=>r.hKey).filter(k=>/^[0-9a-f]{16}$/.test(k));}
+  function report(){for(const asset of assets.values())if(allowed(asset.id,asset.distributionId)&&asset.holders.has(self())){const sent=reported.get(asset.id)??new Set(),have=asset.holders.get(self());if(reported.has(asset.id)&&sent.size===have.size)continue;const indexes=[...have].filter(i=>!sent.has(i)).sort((a,b)=>a-b);for(let offset=0;offset<Math.max(1,indexes.length);offset+=128)frame(leader(),{type:'inventory',id:asset.id,total:asset.total,distributionId:asset.distributionId,proof:asset.proof,indexes:indexes.slice(offset,offset+128)});reported.set(asset.id,sent);}lastReport=Date.now();}
+  function table(){return {sequence,leader:self(),assets:[...assets.values()].map(a=>({id:a.id,total:a.total,distributionId:a.distributionId,proof:a.proof,holders:[...a.holders].map(([peer,indexes])=>({peer,indexes:[...indexes].sort((a,b)=>a-b)}))}))};}
+  function mirror(){if(!isLeader()||!dirty)return;dirty=false;sequence++;const mirror=state().mirror;if(mirror&&mirror!==self()){
+    // Page by holder; large piece inventories stay bounded to the control frame limit.
+    const rows=table();for(const a of rows.assets)for(const h of a.holders){const key=a.id+':'+h.peer,sent=mirrored.get(key)??new Set();if(mirrored.has(key)&&sent.size===h.indexes.length)continue;const indexes=h.indexes.filter(i=>!sent.has(i));for(let offset=0;offset<Math.max(1,indexes.length);offset+=128)frame(mirror,{type:'mirror',sequence,asset:{...a,holders:undefined},peer:h.peer,indexes:indexes.slice(offset,offset+128)});for(const i of indexes)sent.add(i);mirrored.set(key,sent);}
+    frame(mirror,{type:'mirrorJobs',sequence,reset:true});for(const job of jobs.values())frame(mirror,{type:'mirrorJobs',sequence,job});
+  }}
+  const transport={onEvent(fn){listeners.add(fn);return()=>listeners.delete(fn);},command(type,payload){
+    const link=[...links.values()].find(l=>l.peer===payload.to&&l.job.asset===payload.file?.id&&l.dc?.readyState==='open');
+    if(!link)return;
+    if(type==='SEND_DM'){link.dc.send(JSON.stringify({kind:'message',sys:payload.sys,file:payload.file}));return;}
+    if(type==='SEND_FILE_BIN_CHUNK')void sendBinary(link,payload).catch(error);
+  }};
+  const files=createFileDistribution({core:transport,crypto,allowed,emit:(type,payload)=>{
+    if(type==='fileOffer'){const asset=assets.get(payload.manifest.id);if(!asset||asset.total!==payload.manifest.total||asset.distributionId!==payload.manifest.distributionId){error(Error('Authorized manifest metadata mismatch'));return;}const link=[...links.values()].find(l=>l.job.asset===payload.manifest.id&&l.job.receiver===self()&&l.peer===payload.from);if(link&&!link.started){link.started=true;void receive(link).catch(error);}}
+    emit(type==='fileProgress'?'distributionProgress':type==='fileError'?'distributionError':'distributionFileEvent',{fileEvent:type,...payload});
+  },...Object.fromEntries(Object.entries(options).filter(([key])=>['chunkStore','requestTimeoutMs','maxFileBytes'].includes(key)))});
+  async function sendBinary(link,payload){let ok=false,reason='Distribution connection unavailable';try{
+    const deadline=Date.now()+jobTimeoutMs;
+    while(link.dc.bufferedAmount>1024*1024){if(closed||links.get(link.job.id)!==link||Date.now()>deadline||!allowed(payload.file.id,payload.file.distributionId))throw Error('Distribution send stopped');await new Promise(r=>setTimeout(r,10));}
+    if(closed||links.get(link.job.id)!==link||!allowed(payload.file.id,payload.file.distributionId)||link.dc.readyState!=='open')throw Error('Distribution revoked or disconnected');
+    link.dc.send(JSON.stringify({kind:'binary',file:payload.file}));link.dc.send(payload.bytes);ok=true;
+  }catch(e){reason=e.message;}fire('FILE_BIN_CHUNK_SENT',{...payload,ok,error:ok?undefined:reason});}
+  function closeLink(id){pendingSignals.delete(id);closedJobs.set(id,Date.now());const link=links.get(id);if(!link)return;links.delete(id);link.pc.close();emit('distributionConnectionClosed',{jobId:id,peer:link.peer});}
+  async function receive(link){try{
+    await files.request(link.job.asset,{peers:[link.peer],indexes:link.job.indexes});
+    const asset=assets.get(link.job.asset);if(!asset)throw Error('Unknown distribution');
+    const have=asset.holders.get(self())??new Set();for(const i of link.job.indexes)have.add(i);asset.holders.set(self(),have);dirty=true;
+    link.completed=true;frame(leader(),{type:'done',jobId:link.job.id});report();
+    if(have.size===asset.total&&!finished.has(asset.id)){
+      const blob=await files.request(asset.id,{peers:[link.peer]});finished.add(asset.id);emit('distributionComplete',{id:asset.id,blob});
+    }
+  }catch(e){frame(leader(),{type:'failed',jobId:link.job.id});error(e);}finally{frame(link.peer,{type:'close',jobId:link.job.id});closeLink(link.job.id);}}
+  function bind(link,dc){if(dc.label!=='phantom-distribution'){dc.close();return;}link.dc=dc;dc.binaryType='arraybuffer';
+    dc.onopen=()=>{if(links.get(link.job.id)!==link)return;emit('distributionConnectionOpened',{jobId:link.job.id,peer:link.peer});if(link.job.source===self()&&link.job.needsManifest)void files.share(link.peer,link.job.asset).catch(error);else if(link.job.receiver===self()&&!link.started){try{files.getManifest(link.job.asset);link.started=true;void receive(link).catch(error);}catch{}}};
+    dc.onmessage=event=>{if(links.get(link.job.id)!==link||!allowed(link.job.asset,assets.get(link.job.asset)?.distributionId))return;
+      if(event.data instanceof ArrayBuffer){const file=link.binary;link.binary=null;if(file?.id===link.job.asset)fire('FILE_BIN_CHUNK',{from:link.peer,file,bytes:event.data});return;}
+      let m;try{m=JSON.parse(event.data);}catch{return;}
+      if(m.file?.id!==link.job.asset)return;
+      if(m.kind==='binary')link.binary=m.file;
+      else if(m.kind==='message')fire('INCOMING_MSG',{from:link.peer,sys:m.sys,file:m.file});
+    };
+    dc.onclose=()=>{if(links.get(link.job.id)===link){if(link.job.receiver===self()&&!link.completed)files.cancel(link.job.asset);closeLink(link.job.id);frame(leader(),{type:'failed',jobId:link.job.id});}};
+  }
+  async function open(job){if(links.has(job.id)||closedJobs.has(job.id))return;if(links.size>=maxConnections){frame(leader(),{type:'failed',jobId:job.id});return;}
+    const asset=assets.get(job.asset);if(!asset||!allowed(asset.id,asset.distributionId))return;
+    const peer=job.source===self()?job.receiver:job.source;
+    const pc=new runtime.RTCPeerConnection(options.rtcConfiguration??{}),link={pc,peer,job,started:false,pendingIce:[]};links.set(job.id,link);
+    pc.onicecandidate=e=>{if(e.candidate)frame(peer,{type:'signal',jobId:job.id,candidate:e.candidate.toJSON?.()??e.candidate});};
+    pc.onconnectionstatechange=()=>{if(['failed','closed'].includes(pc.connectionState)&&links.get(job.id)===link){closeLink(job.id);frame(leader(),{type:'failed',jobId:job.id});}};
+    pc.ondatachannel=e=>bind(link,e.channel);
+    if(job.source===self()){
+      bind(link,pc.createDataChannel('phantom-distribution'));await pc.setLocalDescription(await pc.createOffer());frame(peer,{type:'signal',jobId:job.id,description:{type:pc.localDescription.type,sdp:pc.localDescription.sdp}});
+    }
+  }
+  async function signal(from,body){if(closedJobs.has(body.jobId))return;const link=links.get(body.jobId);if(!link){if(pendingSignals.size<maxConnections*2){const pending=pendingSignals.get(body.jobId)??[];pending.createdAt??=Date.now();if(pending.length<64)pending.push({from,body});pendingSignals.set(body.jobId,pending);}return;}if(link.peer!==from)return;
+    if(body.description){await link.pc.setRemoteDescription(body.description);for(const candidate of link.pendingIce.splice(0))await link.pc.addIceCandidate(candidate);
+      if(body.description.type==='offer'){await link.pc.setLocalDescription(await link.pc.createAnswer());frame(from,{type:'signal',jobId:body.jobId,description:{type:link.pc.localDescription.type,sdp:link.pc.localDescription.sdp}});}
+    }else if(body.candidate){if(link.pc.remoteDescription)await link.pc.addIceCandidate(body.candidate);else if(link.pendingIce.length<64)link.pendingIce.push(body.candidate);}
+  }
+  async function acceptAsset(body){if(!policy||typeof body.id!=='string'||!/^sha256:[0-9a-f]{64}$/.test(body.id)||!Number.isInteger(body.total)||body.total<0||body.total>65536||typeof body.distributionId!=='string'||body.distributionId.length>256)return null;
+    const proof=await policy.verify(body.proof);if(!proof||proof.action!=='content.publish'||proof.target!==body.id||!allowed(body.id,body.distributionId))return null;
+    let asset=assets.get(body.id);if(!asset){if(assets.size>=32)return null;asset={id:body.id,total:body.total,distributionId:body.distributionId,proof,holders:new Map()};assets.set(body.id,asset);}else if(asset.total!==body.total||asset.distributionId!==body.distributionId)return null;return asset;
+  }
+  async function handle(from,packet){if(closed||packet?.networkId!==networkId||typeof packet.from!=='string'||!packet.body)return;
+    if(packet.to!==self()){
+      // Only the current leader forwards, retaining the authenticated originating peer.
+      if(isLeader()&&packet.from===from&&roster.includes(from)&&roster.includes(packet.to))core.command('PHANTOM_DIST_SEND',{to:packet.to,frame:packet});return;
+    }
+    if(packet.from!==from&&from!==leader())return;
+    const body=packet.body,sender=packet.from;
+    if(body.type==='inventory'&&isLeader()&&roster.includes(sender)){
+      const asset=await acceptAsset(body);if(!asset||!Array.isArray(body.indexes)||body.indexes.length>128||body.indexes.some(i=>!Number.isInteger(i)||i<0||i>=asset.total))return;
+      const have=asset.holders.get(sender)??new Set(),old=have.size;for(const i of body.indexes)have.add(i);asset.holders.set(sender,have);if(have.size!==old)dirty=true;frame(sender,{type:'inventoryAck',id:asset.id,indexes:body.indexes});return;
+    }
+    if(body.type==='inventoryAck'&&sender===leader()){const have=assets.get(body.id)?.holders.get(self());if(!have||!Array.isArray(body.indexes)||body.indexes.length>128)return;const sent=reported.get(body.id)??new Set();for(const i of body.indexes)if(have.has(i))sent.add(i);reported.set(body.id,sent);return;}
+    if(body.type==='mirrorJobs'&&sender===leader()&&state().role==='syscon2'){if(!Number.isInteger(body.sequence)||body.sequence<receivedSequence)return;receivedSequence=body.sequence;if(body.reset)mirrorJobs.clear();else if(body.job&&mirrorJobs.size<1024)mirrorJobs.set(body.job.id,body.job);return;}
+    if(body.type==='mirror'&&sender===leader()&&state().role==='syscon2'){
+      if(!Number.isInteger(body.sequence)||body.sequence<receivedSequence)return;receivedSequence=body.sequence;
+      const asset=await acceptAsset(body.asset);if(!asset||!Array.isArray(body.indexes)||body.indexes.length>128||body.indexes.some(i=>!Number.isInteger(i)||i<0||i>=asset.total))return;
+      const have=body.reset&&body.peer!==self()?new Set():asset.holders.get(body.peer)??new Set();for(const i of body.indexes)have.add(i);asset.holders.set(body.peer,have);return;
+    }
+    if(body.type==='job'&&sender===leader()){
+      const job=body.job;if(!job||typeof job.id!=='string'||job.id.length>128||![job.source,job.receiver].includes(self())||job.source===job.receiver||!roster.includes(job.source)||!roster.includes(job.receiver)||!Array.isArray(job.indexes)||job.indexes.length>batchSize)return;
+      const asset=await acceptAsset(body.asset);if(!asset||job.indexes.some(i=>!Number.isInteger(i)||i<0||i>=asset.total))return;
+      await open(job);const pending=pendingSignals.get(job.id)??[];pendingSignals.delete(job.id);for(const message of pending)await signal(message.from,message.body);return;
+    }
+    if(body.type==='signal')return signal(sender,body);
+    if(body.type==='close'){const link=links.get(body.jobId);if(link&&(link.peer===sender||sender===leader()))closeLink(body.jobId);return;}
+    if(['done','failed'].includes(body.type)&&isLeader()){
+      const job=jobs.get(body.jobId);if(!job||![job.source,job.receiver].includes(sender))return;
+      // Only the receiver confirms verified receipt.
+      if(body.type==='done'&&sender!==job.receiver)return;
+      if(body.type==='done'){const a=assets.get(job.asset),have=a?.holders.get(sender)??new Set();for(const i of job.indexes)have.add(i);a?.holders.set(sender,have);dirty=true;}
+      else blockedUntil.set(job.source+':'+job.receiver,Date.now()+1000);
+      finishJob(job);return;
+    }
+  }
+  function finishJob(job){jobs.delete(job.id);dirty=true;for(const peer of [job.source,job.receiver])frame(peer,{type:'close',jobId:job.id});}
+  function schedule(){if(!isLeader()||checkedToken!==leaderToken)return;
+    const live=new Set(roster),now=Date.now();
+    for(const job of [...jobs.values()])if(now>job.deadline||!live.has(job.source)||!live.has(job.receiver)||!allowed(job.asset,assets.get(job.asset)?.distributionId)){if(now>job.deadline)blockedUntil.set(job.source+':'+job.receiver,now+1000);finishJob(job);}
+    for(const asset of assets.values()){
+      if(!allowed(asset.id,asset.distributionId))continue;
+      for(const [peer]of asset.holders)if(!live.has(peer)){asset.holders.delete(peer);dirty=true;}
+      // Count reserved pieces as copies too, so concurrent jobs spread seed pieces.
+      const copies=new Map();for(const indexes of asset.holders.values())for(const i of indexes)copies.set(i,(copies.get(i)??0)+1);
+      for(const job of jobs.values())if(job.asset===asset.id)for(const i of job.indexes)copies.set(i,(copies.get(i)??0)+1);
+      const rarity=i=>copies.get(i)??0;
+      for(const receiver of roster){
+        const have=asset.holders.get(receiver)??new Set();if((have.size===asset.total&&(asset.total>0||asset.holders.has(receiver)))||[...jobs.values()].some(j=>j.receiver===receiver))continue;
+        const counts=peer=>[...jobs.values()].filter(j=>j.source===peer||j.receiver===peer).length;
+        if(counts(receiver)>=maxConnections)continue;
+        const candidates=[...asset.holders].filter(([peer,indexes])=>peer!==receiver&&live.has(peer)&&counts(peer)<maxConnections&&(blockedUntil.get(peer+':'+receiver)??0)<=now&&(asset.total===0||[...indexes].some(i=>!have.has(i)))).sort((a,b)=>counts(a[0])-counts(b[0])||a[1].size-b[1].size||a[0].localeCompare(b[0]));
+        if(!candidates.length)continue;const [source,indexes]=candidates[0],wanted=[...indexes].filter(i=>!have.has(i)).sort((a,b)=>rarity(a)-rarity(b)||a-b).slice(0,batchSize);
+        const job={id:crypto.randomUUID(),asset:asset.id,source,receiver,indexes:wanted,needsManifest:!asset.holders.has(receiver),deadline:now+jobTimeoutMs};jobs.set(job.id,job);for(const i of wanted)copies.set(i,rarity(i)+1);dirty=true;
+        const body={type:'job',job,asset:{id:asset.id,total:asset.total,distributionId:asset.distributionId,proof:asset.proof}};
+        // Receiver first so an immediately delivered offer has an assigned owner.
+        frame(receiver,body);frame(source,body);emit('distributionJob',{...job});
+      }
+    }
+  }
+  async function tick(){if(closed||!self())return;for(const [id,at]of closedJobs)if(Date.now()-at>jobTimeoutMs*2)closedJobs.delete(id);for(const [id,pending]of pendingSignals)if(Date.now()-pending.createdAt>jobTimeoutMs)pendingSignals.delete(id);const token=leader()+':'+state().mirror;
+    if(token!==leaderToken){leaderToken=token;checkedToken='';receivedSequence=-1;reported.clear();mirrored.clear();mirrorJobs.clear();for(const job of [...jobs.values()])finishJob(job);for(const id of [...links.keys()]){const link=links.get(id);if(link.job.receiver===self()&&!link.completed)files.cancel(link.job.asset);closeLink(id);}dirty=true;lastReport=0;}
+    if(isLeader()&&state().state==='admitted'&&checkedToken!==token&&!checking){checking=true;try{let approved=true;if(checkAdmin)approved=await checkAdmin();else{const orders=await readAdminOrders({networkId,peerId:self()});if(!Array.isArray(orders))throw Error('Admin orders must be an array');for(const record of orders){if(!await lifecycle?.apply(record))throw Error('Invalid admin order');}}if(approved&&!closed&&leaderToken===token){checkedToken=token;emit('distributionAdminChecked',{peerId:self()});}}catch(e){error(e);}finally{checking=false;}}
+    if(Date.now()-lastReport>1000){if(state().role==='peer'&&state().state!=='admitted')core.command('PHANTOM_DIST_RECOVER_SYS',{});report();}schedule();mirror();
+    for(const [id,link]of links)if(Date.now()>link.job.deadline){if(link.job.receiver===self()&&!link.completed)files.cancel(link.job.asset);closeLink(id);frame(leader(),{type:'failed',jobId:id});}
+  }
+  const off=core.onEvent(event=>{if(event.type==='PRESENCE_ROSTER')setRoster(event.payload?.list??[]);if(event.type==='PHANTOM_ADMIN_LINK_READY'){reported.clear();mirrored.clear();dirty=true;lastReport=0;}if(event.type==='PHANTOM_DIST')void handle(event.payload.from,event.payload.frame).catch(error);});
+  const timer=setInterval(()=>{void tick().catch(error);},intervalMs);
+  return {
+    async publish(file,{authorization,...settings}={}){if(closed)throw Error('Distribution closed');if(!state().admitted)throw Error('Wait for network admission before distributing');if(!policy)throw Error('Distribution requires an admin authority');const manifest=await files.publish(file,settings);
+      const proof=authorization??await lifecycle?.issue('content.publish',manifest.id);const verified=await policy.verify(proof);if(!verified||verified.action!=='content.publish'||verified.target!==manifest.id)throw Error('Admin publish authorization required');
+      const asset=await acceptAsset({...manifest,proof:verified});if(!asset)throw Error('Distribution unavailable');asset.holders.set(self(),new Set(Array.from({length:manifest.total},(_,i)=>i)));finished.add(manifest.id);dirty=true;report();return manifest;
+    },
+    snapshot:()=>({leader:leader(),adminChecked:isLeader()&&checkedToken===leaderToken,assets:table().assets,jobs:[...(isLeader()?jobs:mirrorJobs).values()].map(j=>({...j,indexes:[...j.indexes]})),connections:[...links.values()].map(l=>({jobId:l.job.id,peer:l.peer,state:l.dc?.readyState??'connecting'}))}),
+    stop(target){files.stop(target);for(const job of [...jobs.values()])if(job.asset===target||assets.get(job.asset)?.distributionId===target)finishJob(job);for(const [id,link]of [...links])if(link.job.asset===target||assets.get(link.job.asset)?.distributionId===target)closeLink(id);},
+    close(){if(closed)return;closed=true;clearInterval(timer);off();files.close();for(const id of [...links.keys()])closeLink(id);jobs.clear();assets.clear();reported.clear();mirrored.clear();mirrorJobs.clear();pendingSignals.clear();closedJobs.clear();blockedUntil.clear();finished.clear();listeners.clear();}
+  };
+}
