@@ -1,4 +1,5 @@
 /** Admin proofs are independent of transport identities and elected roles. */
+import {admissionStatement} from './admission.js';
 const hex = bytes => Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
 function bytes(value, length) {
   if (typeof value !== 'string' || !new RegExp(`^[0-9a-f]{${length * 2}}$`).test(value)) throw new TypeError('Invalid public key or signature');
@@ -19,6 +20,11 @@ export async function createAdminIdentity({ crypto = globalThis.crypto } = {}) {
 }
 function adminSigner(privateKey, publicKey, crypto) {
   return Object.freeze({ publicKey,
+    async signAdmission({networkId,peerPublicKey,expiresAt}) {
+      const credential = {version:1,networkId,peerPublicKey,expiresAt};
+      const signature = hex(new Uint8Array(await crypto.subtle.sign('Ed25519',privateKey,admissionStatement(credential))));
+      return Object.freeze({...credential,signature});
+    },
     async exportSeed() { return {version:1, publicKey, privateKey:hex(new Uint8Array(await crypto.subtle.exportKey('pkcs8',privateKey)))}; },
     async sign({networkId, action, target, operationId}) {
     const record = {version:1, networkId, action, target, operationId, publicKey};

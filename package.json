@@ -9,5 +9,9 @@
   ],
   "engines": {
     "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "test:cloudflare:runtime": "node tests/cloudflare-runtime-smoke.mjs"
   }
 }

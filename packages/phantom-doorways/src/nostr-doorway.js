@@ -46,9 +46,9 @@ export function createNostrDoorway({identity,relays,WebSocket=globalThis.WebSock
    }
   });
   const session={
-   announce({roomId:room,peerId:key,handle,bootId,t}) {
+   announce({roomId:room,peerId:key,handle,bootId,t,admissionProof}) {
     if(room!==roomId||key!==peerId)throw new Error('Announcement scope mismatch');
-    if(!own)own={hKey:peerId,from:peerId,hex:identity.publicKey,handle,bootId,roomJoinedAt:t,videoId:roomId};
+    if(!own)own={hKey:peerId,from:peerId,hex:identity.publicKey,handle,bootId,roomJoinedAt:t,videoId:roomId,...(admissionProof?{admissionProof}:{})};
     members.set(peerId,own);roster();announce();
    },
    publishAuthority(snapshot){

@@ -2,6 +2,7 @@ import { schnorr } from '@noble/curves/secp256k1.js';
 import { ed25519 } from '@noble/curves/ed25519.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils.js';
+import {peerProofStatement} from './peer-proof.js';
 const utf8 = value => new TextEncoder().encode(value);
 const binding = (room,key) => utf8(JSON.stringify(['phantom-nostr-binding-v1',room,key]));
 function hash(e) { return bytesToHex(sha256(utf8(JSON.stringify([0,e.pubkey,e.created_at,e.kind,e.tags,e.content])))); }
@@ -9,6 +10,10 @@ export function createNostrIdentity() {
  const nostrSecret=schnorr.utils.randomSecretKey(), secret=ed25519.utils.randomSecretKey();
  const nostrKey=bytesToHex(schnorr.getPublicKey(nostrSecret)), publicKey=bytesToHex(ed25519.getPublicKey(secret));
  return Object.freeze({nostrKey,publicKey,
+  signPeerProof(fields) {
+   const proof={...fields,version:1,peerPublicKey:publicKey};
+   return {...proof,signature:bytesToHex(ed25519.sign(peerProofStatement(proof),secret))};
+  },
   sign(room,payload,{kind=20001,now=Date.now()}={}) {
    const content=JSON.stringify({...payload,protocol:'phantom-nostr-v1',roomId:room,s7pPublicKey:publicKey,
     identityBindingSig:bytesToHex(ed25519.sign(binding(room,nostrKey),secret)),nonce:crypto.randomUUID()});

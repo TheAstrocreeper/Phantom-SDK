@@ -3,5 +3,8 @@
   "version": "0.0.1",
   "type": "module",
   "license": "PolyForm-Noncommercial-1.0.0",
-  "exports": "./src/index.js"
+  "exports": "./src/index.js",
+  "files": [
+    "src"
+  ]
 }

@@ -1,0 +1,8 @@
+{
+ "name":"phantom-shared-canvas-demo",
+ "private":true,
+ "type":"module",
+ "scripts":{"build":"node build.mjs"},
+ "dependencies":{"qrcode":"1.5.4"},
+ "devDependencies":{"esbuild":"0.25.12"}
+}

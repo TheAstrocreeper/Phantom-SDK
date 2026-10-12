@@ -1,0 +1,13 @@
+{
+  "name": "phantom-doorway-template",
+  "main": "src/index.js",
+  "compatibility_date": "2026-10-12",
+  "durable_objects": {
+    "bindings": [{ "name": "SWITCHBOARD", "class_name": "PhantomDoorway" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["PhantomDoorway"] }],
+  "vars": {
+    "ADMISSION_MODE": "restricted",
+    "ALLOWED_ORIGINS": "http://localhost:5173"
+  }
+}

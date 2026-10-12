@@ -1,11 +1,11 @@
+import {COMPATIBILITY_WIRE} from './compatibility.js';
 import {acceptsSuccessorStatus} from './successor-status.js';
 import { canCarrySysRecovery } from './recovery-signaling.js';
 import { resumeDeferredAdmissions } from './deferred-admission.js';
 import { sysBirthDisposition, isCurrentSysBirth, runSysBirth, completeSysBirth, armSysBirthDeadline } from './sys-birth.js';
 import { acceptsSuccessorHandshake } from './successor-handshake.js';
-// Extracted from SIX7 2.0.6; original state-machine functions retained.
-// Compatibility checkpoint: legacy packet names and deadlines remain intentional.
-export function createExtractedEngine(host) {
+/** Peer networking engine: membership, leadership, signaling, and data channels. */
+export function createNetworkEngine(host) {
   const { window, document, localStorage, sessionStorage, location,
     WebSocket, RTCPeerConnection, crypto, setTimeout, clearTimeout,
     setInterval, clearInterval } = host;
@@ -13,14 +13,14 @@ export function createExtractedEngine(host) {
   "use strict";
   const CORE_DEBUG = false;
 
-  const TAG = "[six7][CORE]";
+  const TAG = "[phantom][CORE]";
 
   // ---- Config ----
   const DEFAULT_BOOTSTRAP_WS = host.doorwayUrl;
-  const TOFU_ORIGIN_KEY = "six7_tofu_origin";
-  const TOFU_HKEY_KEY = "six7_tofu_hkey";
-  const TOFU_FIRST_KEY = "six7_tofu_firstSeenAt";
-  const KEYSTORE_KEY = "six7_keystore_v1";
+  const TOFU_ORIGIN_KEY = "phantom_tofu_origin";
+  const TOFU_HKEY_KEY = "phantom_tofu_hkey";
+  const TOFU_FIRST_KEY = "phantom_tofu_firstSeenAt";
+  const KEYSTORE_KEY = "phantom_keystore_v1";
 
   // ---- State ----
   let ctx = null;
@@ -41,14 +41,14 @@ export function createExtractedEngine(host) {
   let videoId = null;
 
   let bootOnce = false;
-  let six7BootId = crypto.randomUUID();
-  const six7RemoteBootIds = new Map();
-  const six7RemoteEndpointIds = new Map();
-  let six7SysTransportAttemptSeq = 0;
-  const six7DoorwayAdmittedPeers = new Set();
+  let phantomBootId = crypto.randomUUID();
+  const phantomRemoteBootIds = new Map();
+  const phantomRemoteEndpointIds = new Map();
+  let phantomSysTransportAttemptSeq = 0;
+  const phantomDoorwayAdmittedPeers = new Set();
   // Terminal membership commands are authority evidence waiting for the
   // current or successor syscon1 to commit the corresponding removal.
-  const six7PendingTerminalExits = new Map(); // hKey -> { bootId, epoch, at, via }
+  const phantomPendingTerminalExits = new Map(); // hKey -> { bootId, epoch, at, via }
   let ws = null;
 
   let tofu = {
@@ -109,9 +109,9 @@ export function createExtractedEngine(host) {
   let wsDoorwayRecovering = false;
   let wsDoorwayBirthFailures = 0;
   let wsDoorwayRecoveryExhausted = false;
-  const SIX7_WS_CONNECT_DEADLINE_MS = 10000;
-  const SIX7_WS_READY_DEADLINE_MS = 10000;
-  const SIX7_WS_WATCH_TICK_MS = 1000;
+  const PHANTOM_WS_CONNECT_DEADLINE_MS = 10000;
+  const PHANTOM_WS_READY_DEADLINE_MS = 10000;
+  const PHANTOM_WS_WATCH_TICK_MS = 1000;
 
   // ======================================================
   // CONCIERGE / SYS v0 — diagnostic state only
@@ -214,34 +214,34 @@ export function createExtractedEngine(host) {
     chatLastDropPeer: null,
     chatLastReconnectPeer: null,
   };
-  const SIX7_EMPTY_CONCIERGE = JSON.parse(JSON.stringify(concierge));
+  const PHANTOM_EMPTY_CONCIERGE = JSON.parse(JSON.stringify(concierge));
 
-  const six7SeenRtcSignals = new Map();
-  const SIX7_RTC_SIGNAL_MAX = 500;
+  const phantomSeenRtcSignals = new Map();
+  const PHANTOM_RTC_SIGNAL_MAX = 500;
 
-  const six7PendingRtcIce = new Map();
-  const SIX7_RTC_ICE_QUEUE_MAX = 24;
+  const phantomPendingRtcIce = new Map();
+  const PHANTOM_RTC_ICE_QUEUE_MAX = 24;
 
-  const six7PendingRelationship = new Map(); // hKey -> [{ msg, type, at }]
-  const SIX7_REL_PENDING_MAX = 12;
-  const six7PendingSysRelay = new Map(); // destination hKey -> SYS_CONTROL envelopes
-  const SIX7_SYS_RELAY_PENDING_MAX = 24;
-  const six7PendingDm = new Map(); // hKey -> [{ text, sys, file, at }]
-  const SIX7_DM_PENDING_MAX = 20;
-  const six7PendingRefreshRelationships = new Set();
-  let six7PendingRefreshRoom = "";
-  const six7PendingIncomingFileOffers = new Map(); // hKey -> Map(fileId -> file)
+  const phantomPendingRelationship = new Map(); // hKey -> [{ msg, type, at }]
+  const PHANTOM_REL_PENDING_MAX = 12;
+  const phantomPendingSysRelay = new Map(); // destination hKey -> SYS_CONTROL envelopes
+  const PHANTOM_SYS_RELAY_PENDING_MAX = 24;
+  const phantomPendingDm = new Map(); // hKey -> [{ text, sys, file, at }]
+  const PHANTOM_DM_PENDING_MAX = 20;
+  const phantomPendingRefreshRelationships = new Set();
+  let phantomPendingRefreshRoom = "";
+  const phantomPendingIncomingFileOffers = new Map(); // hKey -> Map(fileId -> file)
 
   // Temporary SYS is an existing SYS transport in transaction mode. It is
   // used only when no room SYS route exists, carries one allowlisted control
   // transaction, then collapses after acknowledgment.
-  const six7TemporarySysTransactions = new Map(); // hKey -> transaction
-  const SIX7_TEMP_SYS_PURPOSES = new Set(["relationship_unblock"]);
+  const phantomTemporarySysTransactions = new Map(); // hKey -> transaction
+  const PHANTOM_TEMP_SYS_PURPOSES = new Set(["relationship_unblock"]);
 
   // Gossip is never authority. It is only a remembered route hint used to
   // find the accepted syscons and request normal SYS authority again.
-  const six7AuthorityGossipHints = new Map(); // source hKey -> accepted snapshot hint
-  let six7GossipRecovery = {
+  const phantomAuthorityGossipHints = new Map(); // source hKey -> accepted snapshot hint
+  let phantomGossipRecovery = {
     source: null,
     targets: [],
     index: 0,
@@ -250,14 +250,14 @@ export function createExtractedEngine(host) {
     at: 0,
   };
 
-  function six7RtcSignalKey(msg, via = "") {
+  function phantomRtcSignalKey(msg, via = "") {
     if (!msg || typeof msg !== "object") return "";
 
     const type = String(msg.type || "");
-    const from = six7ShortKey(msg.from);
-    const to = six7ShortKey(msg.to);
+    const from = phantomShortKey(msg.from);
+    const to = phantomShortKey(msg.to);
 
-    if (!six7IsRtcSignalType(type) || !from || !to) return "";
+    if (!phantomIsRtcSignalType(type) || !from || !to) return "";
 
     if (type === "rtc_ice") {
       const cand = msg.cand || {};
@@ -277,52 +277,52 @@ export function createExtractedEngine(host) {
     return "";
   }
 
-  function six7RememberRtcSignal(msg, via = "") {
-    const key = six7RtcSignalKey(msg, via);
+  function phantomRememberRtcSignal(msg, via = "") {
+    const key = phantomRtcSignalKey(msg, via);
     if (!key) return false;
 
-    if (six7SeenRtcSignals.has(key)) {
+    if (phantomSeenRtcSignals.has(key)) {
       concierge.lastErr =
         "rtc_duplicate_ignored:" + String(msg?.type || "unknown");
       emitSnapshot("rtc_duplicate_ignored_" + String(msg?.type || "unknown"));
       return true;
     }
 
-    six7SeenRtcSignals.set(key, now());
+    phantomSeenRtcSignals.set(key, now());
 
-    if (six7SeenRtcSignals.size > SIX7_RTC_SIGNAL_MAX) {
-      const rows = Array.from(six7SeenRtcSignals.entries()).sort(
+    if (phantomSeenRtcSignals.size > PHANTOM_RTC_SIGNAL_MAX) {
+      const rows = Array.from(phantomSeenRtcSignals.entries()).sort(
         (a, b) => Number(a[1] || 0) - Number(b[1] || 0),
       );
 
       while (
-        six7SeenRtcSignals.size > Math.floor(SIX7_RTC_SIGNAL_MAX * 0.75) &&
+        phantomSeenRtcSignals.size > Math.floor(PHANTOM_RTC_SIGNAL_MAX * 0.75) &&
         rows.length
       ) {
-        six7SeenRtcSignals.delete(rows.shift()[0]);
+        phantomSeenRtcSignals.delete(rows.shift()[0]);
       }
     }
 
     return false;
   }
 
-  function six7IsRtcSignalType(type) {
+  function phantomIsRtcSignalType(type) {
     type = String(type || "");
     return type === "rtc_offer" || type === "rtc_answer" || type === "rtc_ice";
   }
 
-  function six7MarkControlTx(type, route = concierge.route) {
+  function phantomMarkControlTx(type, route = concierge.route) {
     concierge.lastTxAt = now();
     concierge.lastTxType = String(type || "unknown");
     concierge.route = String(route || concierge.route || "bootstrap_ws");
   }
 
-  function six7MarkControlRx(type) {
+  function phantomMarkControlRx(type) {
     concierge.lastRxAt = now();
     concierge.lastRxType = String(type || "unknown");
   }
 
-  function six7ControlClassFor(type) {
+  function phantomControlClassFor(type) {
     type = String(type || "unknown");
 
     if (
@@ -361,7 +361,7 @@ export function createExtractedEngine(host) {
     return "unknown";
   }
 
-  function six7ControlClassMode(cls, type = "") {
+  function phantomControlClassMode(cls, type = "") {
     cls = String(cls || "unknown");
     type = String(type || "unknown");
 
@@ -380,50 +380,50 @@ export function createExtractedEngine(host) {
     return "bootstrap";
   }
 
-  function six7NewSysTransportAttemptId(remoteHKey) {
-    const key = six7ShortKey(remoteHKey);
+  function phantomNewSysTransportAttemptId(remoteHKey) {
+    const key = phantomShortKey(remoteHKey);
     if (!key) return "";
 
-    six7SysTransportAttemptSeq += 1;
+    phantomSysTransportAttemptSeq += 1;
 
-    return [six7BootId, key, six7SysTransportAttemptSeq].join(":");
+    return [phantomBootId, key, phantomSysTransportAttemptSeq].join(":");
   }
 
-  function six7CommittedMember(remoteHKey) {
-    const key = six7ShortKey(remoteHKey);
+  function phantomCommittedMember(remoteHKey) {
+    const key = phantomShortKey(remoteHKey);
     if (!key) return false;
 
-    return six7AuthorityRosterRows(six7LocalCommittedAuthority()?.roster).some(
+    return phantomAuthorityRosterRows(phantomLocalCommittedAuthority()?.roster).some(
       (row) => row.hKey === key,
     );
   }
 
-  function six7RetireRemoteIncarnationTransport(
+  function phantomRetireRemoteIncarnationTransport(
     remoteHKey,
     reason = "remote_incarnation_changed",
   ) {
-    const key = six7ShortKey(remoteHKey);
+    const key = phantomShortKey(remoteHKey);
     if (!key) return false;
 
-    const oldChatEnt = six7ChatPeers.get(key);
-    const oldSysEnt = six7SysPeers.get(key);
+    const oldChatEnt = phantomChatPeers.get(key);
+    const oldSysEnt = phantomSysPeers.get(key);
 
-    six7CancelReconnect(key);
+    phantomCancelReconnect(key);
     reconnectingPeers.delete(key);
 
-    const reconnectDeadline = six7ChatReconnectDeadlines.get(key);
+    const reconnectDeadline = phantomChatReconnectDeadlines.get(key);
     if (reconnectDeadline) clearTimeout(reconnectDeadline);
-    six7ChatReconnectDeadlines.delete(key);
+    phantomChatReconnectDeadlines.delete(key);
 
     rtcClosing.add(key);
-    six7ChatPeers.delete(key);
-    six7SysPeers.delete(key);
+    phantomChatPeers.delete(key);
+    phantomSysPeers.delete(key);
     rtcDialing.delete(key);
-    six7SysDialing.delete(key);
-    six7SysPreflightUnstableRetries.delete(key);
-    six7PendingRtcIce.delete(key);
-    six7SysLastGoodRx.delete(key);
-    six7SysAdmissionLastSent.delete(key);
+    phantomSysDialing.delete(key);
+    phantomSysPreflightUnstableRetries.delete(key);
+    phantomPendingRtcIce.delete(key);
+    phantomSysLastGoodRx.delete(key);
+    phantomSysAdmissionLastSent.delete(key);
 
     if (oldChatEnt) {
       oldChatEnt.dc = null;
@@ -444,7 +444,7 @@ export function createExtractedEngine(host) {
 
     rtcClosing.delete(key);
 
-    if (six7ShortKey(concierge.sysReadyPeer) === key) {
+    if (phantomShortKey(concierge.sysReadyPeer) === key) {
       concierge.sysReady = false;
       concierge.sysReadyPeer = null;
       concierge.sysReadyAt = 0;
@@ -453,8 +453,8 @@ export function createExtractedEngine(host) {
     }
 
     if (
-      six7ShortKey(concierge.sysPeer) === key ||
-      six7ShortKey(six7SysTargetFromCandidates()) === key
+      phantomShortKey(concierge.sysPeer) === key ||
+      phantomShortKey(phantomSysTargetFromCandidates()) === key
     ) {
       concierge.sysPeer = key;
       concierge.sysPipeState = "missing";
@@ -469,9 +469,9 @@ export function createExtractedEngine(host) {
     return true;
   }
 
-  function six7ObserveRemoteIncarnation(remoteHKey, observation = {}) {
-    const key = six7ShortKey(remoteHKey);
-    const self = six7ShortKey(selfHKey);
+  function phantomObserveRemoteIncarnation(remoteHKey, observation = {}) {
+    const key = phantomShortKey(remoteHKey);
+    const self = phantomShortKey(selfHKey);
     if (!key || key === self) return { changed: false, committed: false };
 
     const incomingBootId = String(observation.bootId || "");
@@ -481,13 +481,13 @@ export function createExtractedEngine(host) {
     const bindCurrent = observation.bindCurrent === true;
     const via = String(observation.via || "remote_incarnation");
 
-    const previousBootId = String(six7RemoteBootIds.get(key) || "");
-    const previousEndpointId = String(six7RemoteEndpointIds.get(key) || "");
-    const currentEnt = six7SysPeers.get(key);
+    const previousBootId = String(phantomRemoteBootIds.get(key) || "");
+    const previousEndpointId = String(phantomRemoteEndpointIds.get(key) || "");
+    const currentEnt = phantomSysPeers.get(key);
     const currentAttemptId = String(
       currentEnt?.attempt?.id || currentEnt?.sysAttemptId || "",
     );
-    const currentPipeOpen = six7HasOpenSysPipe(key);
+    const currentPipeOpen = phantomHasOpenSysPipe(key);
 
     const bootChanged = !!(
       incomingBootId &&
@@ -512,13 +512,13 @@ export function createExtractedEngine(host) {
       !currentPipeOpen
     );
 
-    if (incomingBootId) six7RemoteBootIds.set(key, incomingBootId);
+    if (incomingBootId) phantomRemoteBootIds.set(key, incomingBootId);
     if (incomingEndpointId) {
-      six7RemoteEndpointIds.set(key, incomingEndpointId);
+      phantomRemoteEndpointIds.set(key, incomingEndpointId);
     }
 
     const changed = bootChanged || endpointChanged || offerAttemptChanged;
-    const committed = six7CommittedMember(key);
+    const committed = phantomCommittedMember(key);
 
     if (!changed) {
       if (bindCurrent && currentEnt && incomingBootId) {
@@ -533,7 +533,7 @@ export function createExtractedEngine(host) {
       }
 
       if (committed) {
-        six7SupersedeSysReplacementForCommittedRefresh(
+        phantomSupersedeSysReplacementForCommittedRefresh(
           key,
           previousBootId || previousEndpointId || currentAttemptId,
           incomingBootId || incomingEndpointId || incomingAttemptId,
@@ -545,17 +545,17 @@ export function createExtractedEngine(host) {
     }
 
     if (committed) {
-      six7SupersedeSysReplacementForCommittedRefresh(
+      phantomSupersedeSysReplacementForCommittedRefresh(
         key,
         previousBootId || previousEndpointId || currentAttemptId,
         incomingBootId || incomingEndpointId || incomingAttemptId,
       );
 
-      const relationship = six7Relationships.get(key);
+      const relationship = phantomRelationships.get(key);
       if (relationship && !relationship.endedAt) {
         relationship.remoteBootId = incomingBootId || null;
         relationship.updatedAt = now();
-        six7Relationships.set(key, relationship);
+        phantomRelationships.set(key, relationship);
       }
 
       emitSnapshot("committed_member_remote_incarnation_transition");
@@ -566,20 +566,20 @@ export function createExtractedEngine(host) {
       emitSnapshot("fresh_incarnation_waiting_for_committed_admission");
     }
 
-    six7RetireRemoteIncarnationTransport(key, "remote_incarnation_" + via);
+    phantomRetireRemoteIncarnationTransport(key, "remote_incarnation_" + via);
 
     return { changed: true, committed };
   }
 
-  function six7RefreshSysReadiness(reason = "refresh") {
+  function phantomRefreshSysReadiness(reason = "refresh") {
     const wasSysReady = concierge.sysReady === true;
 
     const hasRoom = !!videoId;
     const hasSelf = !!selfHKey;
     const hasRoster = !!lastRoster && lastRoster.size > 0;
 
-    const readyPeer = six7ShortKey(concierge.sysReadyPeer);
-    const expectedPeer = six7ShortKey(six7SysTargetFromCandidates());
+    const readyPeer = phantomShortKey(concierge.sysReadyPeer);
+    const expectedPeer = phantomShortKey(phantomSysTargetFromCandidates());
 
     // SYS truth is derived from the legal concierge target's actual datachannel.
     const targetPeer = expectedPeer;
@@ -589,8 +589,8 @@ export function createExtractedEngine(host) {
     );
     const epochNow = Number(concierge.sysconEpoch || 0);
 
-    const cfSyscon1 = six7ShortKey(concierge.cfConciergeSyscon1);
-    const cfSyscon2 = six7ShortKey(concierge.cfConciergeSyscon2);
+    const cfSyscon1 = phantomShortKey(concierge.cfConciergeSyscon1);
+    const cfSyscon2 = phantomShortKey(concierge.cfConciergeSyscon2);
 
     let targetEndpointId = "";
 
@@ -618,16 +618,16 @@ export function createExtractedEngine(host) {
 
     if (concierge.sysAttempt.id && concierge.sysAttempt.id !== attemptId) {
       const oldAttemptId = concierge.sysAttempt.id;
-      const oldTarget = six7ShortKey(concierge.sysAttempt.target);
+      const oldTarget = phantomShortKey(concierge.sysAttempt.target);
 
-      const oldEnt = oldTarget ? six7SysPeers.get(oldTarget) : null;
+      const oldEnt = oldTarget ? phantomSysPeers.get(oldTarget) : null;
       const oldSysDc = oldEnt?.sysdc || null;
 
       concierge.sysAttempt.state = "superseded";
       concierge.sysAttempt.lastEvent = "authority_or_target_changed";
 
-      six7SysDialing.delete(oldTarget);
-      six7SysPreflightUnstableRetries.delete(oldTarget);
+      phantomSysDialing.delete(oldTarget);
+      phantomSysPreflightUnstableRetries.delete(oldTarget);
 
       /*
        * A SYS attempt is superseded only by a real authority/role/target change.
@@ -673,7 +673,7 @@ export function createExtractedEngine(host) {
       }
     }
 
-    const ent = targetPeer ? six7SysPeers.get(targetPeer) : null;
+    const ent = targetPeer ? phantomSysPeers.get(targetPeer) : null;
     const dcState = String(ent?.sysdc?.readyState || "");
 
     const sysConnecting = dcState === "connecting";
@@ -727,25 +727,25 @@ export function createExtractedEngine(host) {
       concierge.sysPipeState = "ready";
 
       if (String(concierge.localRoleCandidate || "") === "peer") {
-        const provenTarget = six7ShortKey(targetPeer);
-        const primary = six7ShortKey(concierge.syscon1);
+        const provenTarget = phantomShortKey(targetPeer);
+        const primary = phantomShortKey(concierge.syscon1);
 
-        six7PeerSysCarrier.target = provenTarget || null;
+        phantomPeerSysCarrier.target = provenTarget || null;
 
         if (provenTarget && provenTarget === primary) {
-          six7PeerSysCarrier.primaryRecoveryUsed = false;
+          phantomPeerSysCarrier.primaryRecoveryUsed = false;
         }
       }
 
       // Diagnostic normalization only.
       // Once SYS is proven ready, stale pending/waiting labels are no longer useful.
       const staleSysWait =
-        /six7_sys_pending|waiting_for_sys_pipe|waiting_for_target_sys_pipe|waiting_for_proof|sys_pipe_not_open|sys_pipe_connecting/i;
+        /phantom_sys_pending|waiting_for_sys_pipe|waiting_for_target_sys_pipe|waiting_for_proof|sys_pipe_not_open|sys_pipe_connecting/i;
 
       if (staleSysWait.test(String(concierge.route || ""))) {
-        concierge.route = "six7_sys";
+        concierge.route = "phantom_sys";
         concierge.routeReason = "sys_ready";
-        concierge.wouldRoute = "six7_sys";
+        concierge.wouldRoute = "phantom_sys";
         concierge.wouldRouteReason = "sys_ready";
       }
 
@@ -773,8 +773,8 @@ export function createExtractedEngine(host) {
         concierge.lastRtcIceTxReason = "sys_ready";
       }
 
-      if (targetPeer && six7PendingRtcIce.has(targetPeer)) {
-        six7FlushQueuedRtcIce(targetPeer, "sys_ready_flush_queued_ice");
+      if (targetPeer && phantomPendingRtcIce.has(targetPeer)) {
+        phantomFlushQueuedRtcIce(targetPeer, "sys_ready_flush_queued_ice");
       }
     } else if (sysOpen) {
       concierge.sysAttempt.state = "open";
@@ -820,16 +820,16 @@ export function createExtractedEngine(host) {
     }
 
     if (!wasSysReady && concierge.sysReady) {
-      six7ReconcileRelationshipStatus("relationship_status_sys_ready");
+      phantomReconcileRelationshipStatus("relationship_status_sys_ready");
     }
 
-    six7RefreshSysFallbackIndicator();
+    phantomRefreshSysFallbackIndicator();
   }
 
-  function six7RefreshSysCandidates(rosterList = [], reason = "refresh") {
-    const self = six7ShortKey(selfHKey);
+  function phantomRefreshSysCandidates(rosterList = [], reason = "refresh") {
+    const self = phantomShortKey(selfHKey);
 
-    const sysAuthForRoster = six7LocalCommittedAuthority();
+    const sysAuthForRoster = phantomLocalCommittedAuthority();
     const authorityRoster =
       sysAuthForRoster && Array.isArray(sysAuthForRoster.roster)
         ? sysAuthForRoster.roster
@@ -844,12 +844,12 @@ export function createExtractedEngine(host) {
     const rows = [];
 
     const pushCandidateRow = (row, fallbackHandle = "") => {
-      const hKey = six7ShortKey(
+      const hKey = phantomShortKey(
         typeof row === "string" ? row : row?.hKey || row?.from,
       );
-      if (!hKey || six7PendingTerminalExits.has(hKey)) return null;
+      if (!hKey || phantomPendingTerminalExits.has(hKey)) return null;
 
-      const old = six7PresenceBook.get(hKey) || {};
+      const old = phantomPresenceBook.get(hKey) || {};
 
       const out = {
         hKey,
@@ -868,15 +868,15 @@ export function createExtractedEngine(host) {
       pushCandidateRow(p);
     }
 
-    const cfOne = six7ShortKey(concierge.cfConciergeSyscon1);
-    const cfTwo = six7ShortKey(concierge.cfConciergeSyscon2);
+    const cfOne = phantomShortKey(concierge.cfConciergeSyscon1);
+    const cfTwo = phantomShortKey(concierge.cfConciergeSyscon2);
 
     if (cfOne) pushCandidateRow({ hKey: cfOne }, "cf_syscon1");
     if (cfTwo && cfTwo !== cfOne)
       pushCandidateRow({ hKey: cfTwo }, "cf_syscon2");
 
-    const authOne = six7ShortKey(sysAuthForRoster?.syscon1);
-    const authTwo = six7ShortKey(sysAuthForRoster?.syscon2);
+    const authOne = phantomShortKey(sysAuthForRoster?.syscon1);
+    const authTwo = phantomShortKey(sysAuthForRoster?.syscon2);
 
     if (authOne) pushCandidateRow({ hKey: authOne }, "auth_syscon1");
     if (authTwo && authTwo !== authOne) {
@@ -892,22 +892,22 @@ export function createExtractedEngine(host) {
     }
 
     const unique = Array.from(new Map(rows.map((x) => [x.hKey, x])).values());
-    const byKey = new Map(unique.map((x) => [six7ShortKey(x.hKey), x]));
+    const byKey = new Map(unique.map((x) => [phantomShortKey(x.hKey), x]));
 
     let one = null;
     let two = null;
     let candidateSource = "hkey_fallback";
 
-    const sysAuth = six7FreshSysAuthority();
+    const sysAuth = phantomFreshSysAuthority();
 
     if (sysAuth) {
-      const a = six7ShortKey(sysAuth.syscon1);
-      const b = six7ShortKey(sysAuth.syscon2);
+      const a = phantomShortKey(sysAuth.syscon1);
+      const b = phantomShortKey(sysAuth.syscon2);
 
       if (a && byKey.has(a)) one = byKey.get(a);
       if (b && b !== a && byKey.has(b)) two = byKey.get(b);
 
-      if (a && six7PendingTerminalExits.has(a) && b && byKey.has(b)) {
+      if (a && phantomPendingTerminalExits.has(a) && b && byKey.has(b)) {
         one = byKey.get(b);
         two = unique.find(row => row.hKey !== b) || null;
         candidateSource = "syscon2_promoted_primary";
@@ -916,9 +916,9 @@ export function createExtractedEngine(host) {
       }
     }
 
-    const currentSelf = six7ShortKey(selfHKey);
-    const oldOne = six7ShortKey(concierge.syscon1);
-    const oldTwo = six7ShortKey(concierge.syscon2);
+    const currentSelf = phantomShortKey(selfHKey);
+    const oldOne = phantomShortKey(concierge.syscon1);
+    const oldTwo = phantomShortKey(concierge.syscon2);
 
     if (
       !one &&
@@ -931,7 +931,7 @@ export function createExtractedEngine(host) {
       one = byKey.get(currentSelf) || null;
 
       const next = unique.find((x) => {
-        const k = six7ShortKey(x?.hKey);
+        const k = phantomShortKey(x?.hKey);
         return k && k !== currentSelf;
       });
 
@@ -940,8 +940,8 @@ export function createExtractedEngine(host) {
     }
 
     if (!one && !two) {
-      const a = six7ShortKey(concierge.cfConciergeSyscon1);
-      const b = concierge.bootstrapAdmission === true ? "" : six7ShortKey(concierge.cfConciergeSyscon2);
+      const a = phantomShortKey(concierge.cfConciergeSyscon1);
+      const b = concierge.bootstrapAdmission === true ? "" : phantomShortKey(concierge.cfConciergeSyscon2);
 
       if (a && byKey.has(a)) one = byKey.get(a);
       if (b && b !== a && byKey.has(b)) two = byKey.get(b);
@@ -986,7 +986,7 @@ export function createExtractedEngine(host) {
 
     if (
       candidateSource === "sys_authority" &&
-      cleanReason === "presence_six7_sys"
+      cleanReason === "presence_phantom_sys"
     ) {
       cleanReason = "boss_identity";
     }
@@ -997,14 +997,14 @@ export function createExtractedEngine(host) {
 
     concierge.lastCandidateAt = now();
 
-    six7ApplyLocalRoleCandidate(reason);
+    phantomApplyLocalRoleCandidate(reason);
   }
 
-  function six7ApplyConciergeRoute(msg, reason = "concierge_route") {
+  function phantomApplyConciergeRoute(msg, reason = "concierge_route") {
     if (!msg || typeof msg !== "object") return false;
 
     const advertisedEpoch = Number(msg.epoch || 0);
-    const committedEpoch = Number(six7LocalCommittedAuthority()?.epoch || 0);
+    const committedEpoch = Number(phantomLocalCommittedAuthority()?.epoch || 0);
     const incomingEpoch = committedEpoch || advertisedEpoch;
     const currentEpoch = Number(concierge.sysconEpoch || 0);
 
@@ -1016,24 +1016,24 @@ export function createExtractedEngine(host) {
     const authorityReply = String(reason || msg.type || "");
 
     if (
-      six7PeerSysCarrier.authorityRefreshPending === true &&
+      phantomPeerSysCarrier.authorityRefreshPending === true &&
       authorityReply === "concierge_update" &&
       Array.isArray(msg.list) &&
       incomingEpoch &&
       (!currentEpoch || incomingEpoch >= currentEpoch)
     ) {
-      six7PeerSysCarrier.authorityRefreshPending = false;
+      phantomPeerSysCarrier.authorityRefreshPending = false;
     }
 
     // Candidate admission affects bootstrap direction only; committed SYS truth wins.
     concierge.bootstrapAdmission = msg.bootstrapAdmission === true &&
-      six7ShortKey(msg.syscon2) === six7ShortKey(selfHKey) &&
-      six7ShortKey(msg.syscon1) !== six7ShortKey(selfHKey) &&
-      !six7LocalCommittedAuthority();
+      phantomShortKey(msg.syscon2) === phantomShortKey(selfHKey) &&
+      phantomShortKey(msg.syscon1) !== phantomShortKey(selfHKey) &&
+      !phantomLocalCommittedAuthority();
     concierge.cfConciergeState = String(reason || msg.type || "unknown");
     concierge.cfConciergeAt = now();
-    concierge.cfConciergeSyscon1 = six7ShortKey(msg.syscon1);
-    concierge.cfConciergeSyscon2 = six7ShortKey(msg.syscon2);
+    concierge.cfConciergeSyscon1 = phantomShortKey(msg.syscon1);
+    concierge.cfConciergeSyscon2 = phantomShortKey(msg.syscon2);
 
     concierge.cfConciergeSyscon1EndpointId =
       String(msg.syscon1EndpointId || "") || null;
@@ -1054,10 +1054,10 @@ export function createExtractedEngine(host) {
     const seen = new Set();
 
     const pushAnchorPeer = (row, via = "cf_anchor") => {
-      const hKey = six7ShortKey(row?.hKey || row?.from || row);
+      const hKey = phantomShortKey(row?.hKey || row?.from || row);
       if (!hKey || seen.has(hKey)) return;
 
-      const old = six7PresenceBook.get(hKey) || {};
+      const old = phantomPresenceBook.get(hKey) || {};
 
       seen.add(hKey);
       list.push({
@@ -1072,8 +1072,8 @@ export function createExtractedEngine(host) {
       });
     };
 
-    const one = six7ShortKey(msg.syscon1);
-    const two = six7ShortKey(msg.syscon2);
+    const one = phantomShortKey(msg.syscon1);
+    const two = phantomShortKey(msg.syscon2);
 
     const cfRowsByKey = new Map();
 
@@ -1081,7 +1081,7 @@ export function createExtractedEngine(host) {
       const admittedNow = new Set();
 
       for (const p of msg.list) {
-        const k = six7ShortKey(p?.hKey || p?.from || p);
+        const k = phantomShortKey(p?.hKey || p?.from || p);
         if (!k) continue;
 
         cfRowsByKey.set(k, p);
@@ -1092,11 +1092,11 @@ export function createExtractedEngine(host) {
       // Keep it separate from the SYS-stamped roster so syscon1 can accept
       // a newly arrived plain peer's owned SYS tether before that peer has
       // been incorporated into the next SYS authority publication.
-      six7DoorwayAdmittedPeers.clear();
-      for (const k of admittedNow) six7DoorwayAdmittedPeers.add(k);
+      phantomDoorwayAdmittedPeers.clear();
+      for (const k of admittedNow) phantomDoorwayAdmittedPeers.add(k);
     }
 
-    const self = six7ShortKey(selfHKey);
+    const self = phantomShortKey(selfHKey);
     const incarnationRows = new Map(cfRowsByKey);
 
     if (one && !incarnationRows.has(one)) {
@@ -1116,7 +1116,7 @@ export function createExtractedEngine(host) {
             ? String(msg.syscon2EndpointId || "")
             : "";
 
-      six7ObserveRemoteIncarnation(remoteKey, {
+      phantomObserveRemoteIncarnation(remoteKey, {
         bootId: String(row?.bootId || ""),
         endpointId,
         via: "doorway",
@@ -1156,7 +1156,7 @@ export function createExtractedEngine(host) {
     );
 
     const sysAuthorityReady = !!(
-      concierge.sysReady || six7LocalCommittedAuthority()
+      concierge.sysReady || phantomLocalCommittedAuthority()
     );
 
     const cfAllowedKeys = new Set();
@@ -1166,14 +1166,14 @@ export function createExtractedEngine(host) {
 
     if (Array.isArray(msg.list)) {
       for (const p of msg.list) {
-        const k = six7ShortKey(p?.hKey || p?.from || p);
+        const k = phantomShortKey(p?.hKey || p?.from || p);
         if (k) cfAllowedKeys.add(k);
       }
     }
 
     const committedKeys = new Set(
-      (six7LocalCommittedAuthority()?.roster || Array.from(lastRoster || []))
-        .map((row) => six7ShortKey(row?.hKey || row?.from || row))
+      (phantomLocalCommittedAuthority()?.roster || Array.from(lastRoster || []))
+        .map((row) => phantomShortKey(row?.hKey || row?.from || row))
         .filter(Boolean),
     );
 
@@ -1181,7 +1181,7 @@ export function createExtractedEngine(host) {
       (key) => key && !cfAllowedKeys.has(key),
     );
 
-    const committedAuthority = six7LocalCommittedAuthority();
+    const committedAuthority = phantomLocalCommittedAuthority();
 
     const syscon1ConsumesDoorwayRoster = !!(
       doorwayMembershipAdvance &&
@@ -1199,7 +1199,7 @@ export function createExtractedEngine(host) {
       emitSnapshot("doorway_roster_reduction_held_for_sys_authority");
     }
 
-    const latchedSysList = sysOwnsRoster ? six7LatchedSysRosterList() : [];
+    const latchedSysList = sysOwnsRoster ? phantomLatchedSysRosterList() : [];
 
     const cfSelfOnly = !!(
       cfHasAuthoritativeList &&
@@ -1212,18 +1212,18 @@ export function createExtractedEngine(host) {
     const merged = new Map();
 
     for (const p of latchedSysList) {
-      const hKey = six7ShortKey(p?.hKey || p?.from);
+      const hKey = phantomShortKey(p?.hKey || p?.from);
       if (!hKey) continue;
 
       merged.set(hKey, {
         hKey,
         handle: p.handle || "",
-        seenVia: p.seenVia || "six7_sys",
+        seenVia: p.seenVia || "phantom_sys",
       });
     }
 
     for (const p of list) {
-      const hKey = six7ShortKey(p?.hKey || p?.from);
+      const hKey = phantomShortKey(p?.hKey || p?.from);
       if (!hKey) continue;
 
       // After boss authority exists, doorway rows may refresh only the
@@ -1248,27 +1248,27 @@ export function createExtractedEngine(host) {
     }
 
     if (doorwayMembershipAdvance && !sysOwnsRoster && !cfSelfOnly) {
-      const allowed = new Set(effectiveList.map((p) => six7ShortKey(p.hKey)));
+      const allowed = new Set(effectiveList.map((p) => phantomShortKey(p.hKey)));
 
-      for (const [hKey, row] of Array.from(six7PresenceBook.entries())) {
-        const key = six7ShortKey(hKey || row?.hKey || row?.from);
+      for (const [hKey, row] of Array.from(phantomPresenceBook.entries())) {
+        const key = phantomShortKey(hKey || row?.hKey || row?.from);
 
-        if (!key || key === six7ShortKey(selfHKey)) continue;
+        if (!key || key === phantomShortKey(selfHKey)) continue;
         if (allowed.has(key)) continue;
 
         const via = String(row?.seenVia || row?.via || "");
 
-        if (via === "six7_sys" && sysOwnsRoster) {
+        if (via === "phantom_sys" && sysOwnsRoster) {
           continue;
         }
 
         if (
-          via === "six7_sys" ||
+          via === "phantom_sys" ||
           via === "cf_anchor" ||
           via === "cf_anchor_roster" ||
           via === "cf_anchor_syscon"
         ) {
-          six7PresenceBook.delete(hKey);
+          phantomPresenceBook.delete(hKey);
         }
       }
     }
@@ -1277,13 +1277,13 @@ export function createExtractedEngine(host) {
       effectiveList
         .map((p) => p?.hKey || p?.from)
         .filter(Boolean)
-        .map((k) => six7ShortKey(k)),
+        .map((k) => phantomShortKey(k)),
     );
 
     for (const oldKey of Array.from(lastRoster || [])) {
-      const gone = six7ShortKey(oldKey);
+      const gone = phantomShortKey(oldKey);
 
-      if (!gone || gone === six7ShortKey(selfHKey)) continue;
+      if (!gone || gone === phantomShortKey(selfHKey)) continue;
       if (nextConciergeKeys.has(gone)) continue;
 
       if (syscon1ConsumesDoorwayRoster) {
@@ -1310,7 +1310,7 @@ export function createExtractedEngine(host) {
     }
 
     if (syscon1ConsumesDoorwayRoster || !sysOwnsRoster) {
-      lastRoster = six7MarkRosterAudit(
+      lastRoster = phantomMarkRosterAudit(
         reason || "concierge_anchor",
         Array.from(nextConciergeKeys),
         "concierge_effective_list",
@@ -1328,7 +1328,7 @@ export function createExtractedEngine(host) {
       if (one) {
         initialAuthorityRows.push(
           cfRowsByKey.get(one) ||
-            six7PresenceBook.get(one) || {
+            phantomPresenceBook.get(one) || {
               hKey: one,
               from: one,
               handle: one === self ? selfHandle || null : null,
@@ -1340,7 +1340,7 @@ export function createExtractedEngine(host) {
       if (two && two !== one) {
         initialAuthorityRows.push(
           cfRowsByKey.get(two) ||
-            six7PresenceBook.get(two) || {
+            phantomPresenceBook.get(two) || {
               hKey: two,
               from: two,
               handle: two === self ? selfHandle || null : null,
@@ -1350,19 +1350,19 @@ export function createExtractedEngine(host) {
       }
 
       if (
-        six7CommitSyscon1Roster(
+        phantomCommitSyscon1Roster(
           initialAuthorityRows,
           "syscon1_initial_room_birth",
         )
       ) {
-        six7PublishCommittedAuthority("syscon1_initial_room_birth_published");
+        phantomPublishCommittedAuthority("syscon1_initial_room_birth_published");
       } else {
         emitSnapshot("syscon1_initial_room_birth_commit_failed");
       }
     }
 
     for (const p of effectiveList) {
-      six7RememberPresencePeer(
+      phantomRememberPresencePeer(
         {
           hKey: p.hKey,
           from: p.hKey,
@@ -1378,7 +1378,7 @@ export function createExtractedEngine(host) {
       );
     }
 
-    six7RefreshSysCandidates(effectiveList, reason);
+    phantomRefreshSysCandidates(effectiveList, reason);
 
     /*
      * If both historical authority relays disappear, a committed survivor may
@@ -1387,7 +1387,7 @@ export function createExtractedEngine(host) {
      * observation window for each missing historical spine member; only proven
      * SYS loss plus doorway absence may become terminal authority evidence.
      */
-    const handoffBase = six7LocalCommittedAuthority();
+    const handoffBase = phantomLocalCommittedAuthority();
     const handoffRole = String(
       concierge.localRoleCandidate || concierge.role || "peer",
     );
@@ -1395,27 +1395,27 @@ export function createExtractedEngine(host) {
       handoffBase &&
       self &&
       handoffRole === "syscon1" &&
-      six7ShortKey(concierge.syscon1) === self &&
-      six7ShortKey(handoffBase.syscon1) !== self &&
-      six7AuthorityRosterRows(handoffBase.roster).some(
+      phantomShortKey(concierge.syscon1) === self &&
+      phantomShortKey(handoffBase.syscon1) !== self &&
+      phantomAuthorityRosterRows(handoffBase.roster).some(
         (row) => row.hKey === self,
       )
     ) {
       for (const oldSpineKey of [
-        six7ShortKey(handoffBase.syscon1),
-        six7ShortKey(handoffBase.syscon2),
+        phantomShortKey(handoffBase.syscon1),
+        phantomShortKey(handoffBase.syscon2),
       ]) {
         if (
           !oldSpineKey ||
           oldSpineKey === self ||
-          (host.doorwayPresence === 'live-sockets' && six7DoorwayAdmittedPeers.has(oldSpineKey)) ||
-          six7HasOpenSysPipe(oldSpineKey) ||
-          six7PendingTerminalExits.has(oldSpineKey) ||
-          six7SysReplacementWindows.has(oldSpineKey)
+          (host.doorwayPresence === 'live-sockets' && phantomDoorwayAdmittedPeers.has(oldSpineKey)) ||
+          phantomHasOpenSysPipe(oldSpineKey) ||
+          phantomPendingTerminalExits.has(oldSpineKey) ||
+          phantomSysReplacementWindows.has(oldSpineKey)
         ) {
           continue;
         }
-        six7ArmSysReplacement(
+        phantomArmSysReplacement(
           oldSpineKey,
           "elected_successor_missing_historical_spine",
         );
@@ -1423,23 +1423,23 @@ export function createExtractedEngine(host) {
     }
 
     for (const [remoteKey, rec] of Array.from(
-      six7SysReplacementWindows.entries(),
+      phantomSysReplacementWindows.entries(),
     )) {
       if (
         String(rec?.state || "") === "awaiting_doorway_absence" &&
-        !(host.doorwayPresence === 'live-sockets' && six7DoorwayAdmittedPeers.has(remoteKey)) &&
-        !six7HasOpenSysPipe(remoteKey)
+        !(host.doorwayPresence === 'live-sockets' && phantomDoorwayAdmittedPeers.has(remoteKey)) &&
+        !phantomHasOpenSysPipe(remoteKey)
       ) {
-        six7CompleteFailedSysReplacement(
+        phantomCompleteFailedSysReplacement(
           remoteKey,
           "doorway_absence_after_sys_loss",
         );
       }
     }
 
-    six7ResumeTerminalAuthority("concierge_role_refresh");
+    phantomResumeTerminalAuthority("concierge_role_refresh");
 
-    const epochBase = six7LocalCommittedAuthority();
+    const epochBase = phantomLocalCommittedAuthority();
     const acceptedEpoch = Number(concierge.sysconEpoch || 0);
     const epochOwner = String(
       concierge.localRoleCandidate || concierge.role || "peer",
@@ -1449,63 +1449,63 @@ export function createExtractedEngine(host) {
     // continuing leader advances the exact committed value through the same
     // mirror-accepted authority transaction, even when the roster is unchanged.
     if (
-      !six7SysAuthority.pending &&
-      !six7PendingTerminalExits.size &&
+      !phantomSysAuthority.pending &&
+      !phantomPendingTerminalExits.size &&
       epochBase &&
       self &&
       epochOwner === "syscon1" &&
-      six7ShortKey(concierge.syscon1) === self &&
-      six7ShortKey(epochBase.syscon1) === self &&
+      phantomShortKey(concierge.syscon1) === self &&
+      phantomShortKey(epochBase.syscon1) === self &&
       acceptedEpoch > Number(epochBase.epoch || 0)
     ) {
       if (
-        six7StageSyscon1Authority(
+        phantomStageSyscon1Authority(
           epochBase.roster,
           "syscon1_epoch_advance",
           epochBase,
           {
             syscon1: self,
-            syscon2: six7ShortKey(epochBase.syscon2) || null,
+            syscon2: phantomShortKey(epochBase.syscon2) || null,
           },
         )
       ) {
-        six7PublishCommittedAuthority("syscon1_epoch_advance_published");
+        phantomPublishCommittedAuthority("syscon1_epoch_advance_published");
       }
     }
 
-    six7RefreshSysReadiness(
+    phantomRefreshSysReadiness(
       "concierge_owner_resolve_" + String(reason || "route"),
     );
 
-    six7ReconcileRelationshipStatus(
+    phantomReconcileRelationshipStatus(
       "relationship_status_" + String(reason || "concierge"),
     );
 
     const ownerRole = String(concierge.localRoleCandidate || "peer");
     const authorityHeld =
-      six7PeerSysCarrier.authorityRefreshPending === true &&
+      phantomPeerSysCarrier.authorityRefreshPending === true &&
       String(reason || msg.type || "") !== "concierge_update";
 
     if (authorityHeld) {
       emitSnapshot("concierge_reconcile_waiting_for_authority");
     } else if (ownerRole === "syscon1") {
-      six7MaybeRelinkSysconPair("concierge_owner_" + String(reason || "route"));
+      phantomMaybeRelinkSysconPair("concierge_owner_" + String(reason || "route"));
     } else if (ownerRole === "syscon2") {
-      six7MaybeRelinkSysconPair("concierge_owner_" + String(reason || "route"));
-      six7ScheduleSysPreflight(
+      phantomMaybeRelinkSysconPair("concierge_owner_" + String(reason || "route"));
+      phantomScheduleSysPreflight(
         "concierge_owner_syscon2_" + String(reason || "route"),
       );
     } else {
-      six7ScheduleSysAdmission("concierge_owner_" + String(reason || "route"));
+      phantomScheduleSysAdmission("concierge_owner_" + String(reason || "route"));
     }
 
-    if (ownerRole !== "peer" && !six7CommittedMember(self)) {
-      six7ScheduleSysAdmission(
+    if (ownerRole !== "peer" && !phantomCommittedMember(self)) {
+      phantomScheduleSysAdmission(
         "concierge_uncommitted_role_" + String(reason || "route"),
       );
     }
 
-    six7EmitPresenceRoster("concierge_anchor");
+    phantomEmitPresenceRoster("concierge_anchor");
 
     if (cfSelfOnly && doorwayMembershipAdvance) {
       emitSnapshot("doorway_self_only_held_for_committed_authority");
@@ -1515,8 +1515,8 @@ export function createExtractedEngine(host) {
     return true;
   }
 
-  function six7MaybeRelinkSysconPair(reason = "syscon_relink") {
-    const self = six7ShortKey(selfHKey);
+  function phantomMaybeRelinkSysconPair(reason = "syscon_relink") {
+    const self = phantomShortKey(selfHKey);
     if (!self) return false;
 
     const role = String(concierge.localRoleCandidate || "peer");
@@ -1525,41 +1525,41 @@ export function createExtractedEngine(host) {
     // syscon1 dials syscon2.
     // syscon2 observes/accepts unless it has promoted to syscon1.
     if (role !== "syscon1") {
-      const target = six7ShortKey(
-        concierge.sysPeer || six7SysTargetFromCandidates(),
+      const target = phantomShortKey(
+        concierge.sysPeer || phantomSysTargetFromCandidates(),
       );
       if (!target || target === self) return false;
 
-      const ent = six7SysPeers.get(target);
+      const ent = phantomSysPeers.get(target);
       const dc = ent?.sysdc;
 
       if (dc && (dc.readyState === "open" || dc.readyState === "connecting")) {
         concierge.sysPeer = target;
         concierge.sysPipeState = dc.readyState;
-        six7RefreshSysReadiness("syscon_relink_observe_" + dc.readyState);
+        phantomRefreshSysReadiness("syscon_relink_observe_" + dc.readyState);
         emitSnapshot("syscon_relink_observe_" + dc.readyState);
         return true;
       }
 
-      six7RefreshSysReadiness("syscon_relink_observe_no_pipe");
+      phantomRefreshSysReadiness("syscon_relink_observe_no_pipe");
       emitSnapshot("syscon_relink_observe_no_pipe");
       return false;
     }
 
-    const target = six7ShortKey(concierge.syscon2);
+    const target = phantomShortKey(concierge.syscon2);
     if (!target || target === self) return false;
 
     // Accepted terminal membership evidence preempts SYS rebirth while the
     // authority transaction is pending. The committed-removal owner decides
     // the final roster and teardown; transport cannot reopen this target.
-    if (six7SysReplacementTerminal(target)) {
-      six7SysDialing.delete(target);
-      six7SysPreflightUnstableRetries.delete(target);
+    if (phantomSysReplacementTerminal(target)) {
+      phantomSysDialing.delete(target);
+      phantomSysPreflightUnstableRetries.delete(target);
       emitSnapshot("syscon_relink_blocked_terminal_exit_pending");
       return false;
     }
 
-    const ent = six7SysPeers.get(target);
+    const ent = phantomSysPeers.get(target);
     const dc = ent?.sysdc;
     const pcState = String(ent?.pc?.connectionState || "");
     const iceState = String(ent?.pc?.iceConnectionState || "");
@@ -1584,12 +1584,12 @@ export function createExtractedEngine(host) {
       concierge.sysPipeState = dc.readyState;
 
       if (dc.readyState === "open") {
-        six7RefreshSysReadiness("syscon_relink_primary_already_open");
-        six7RefreshOpenSysPeer("syscon_relink_primary_open");
+        phantomRefreshSysReadiness("syscon_relink_primary_already_open");
+        phantomRefreshOpenSysPeer("syscon_relink_primary_open");
         return true;
       }
 
-      six7RefreshSysReadiness("syscon_relink_primary_already_connecting");
+      phantomRefreshSysReadiness("syscon_relink_primary_already_connecting");
       emitSnapshot("syscon_relink_primary_already_connecting");
       return true;
     }
@@ -1597,21 +1597,21 @@ export function createExtractedEngine(host) {
     concierge.sysPeer = target;
     concierge.sysLastErr = null;
 
-    six7RefreshSysReadiness(
+    phantomRefreshSysReadiness(
       "syscon_relink_primary_request_" + String(reason || "relink"),
     );
     emitSnapshot("syscon_relink_primary_request_" + String(reason || "relink"));
 
-    return six7EnsureSysPipe(
+    return phantomEnsureSysPipe(
       target,
       "syscon1_pair_owner_" + String(reason || "relink"),
     );
   }
 
-  function six7RefreshOpenSysPeer(reason = "sys_refresh") {
-    const self = six7ShortKey(selfHKey);
+  function phantomRefreshOpenSysPeer(reason = "sys_refresh") {
+    const self = phantomShortKey(selfHKey);
 
-    const expected = six7ShortKey(six7SysTargetFromCandidates());
+    const expected = phantomShortKey(phantomSysTargetFromCandidates());
 
     const candidates = [
       expected,
@@ -1619,25 +1619,25 @@ export function createExtractedEngine(host) {
       concierge.syscon1,
       concierge.syscon2,
     ]
-      .map(six7ShortKey)
+      .map(phantomShortKey)
       .filter((x) => x && x !== self);
 
     for (const hKey of Array.from(lastRoster || [])) {
-      const key = six7ShortKey(hKey);
+      const key = phantomShortKey(hKey);
       if (key && key !== self && key !== expected) candidates.push(key);
     }
 
     let target = "";
 
     for (const key of [...new Set(candidates)]) {
-      if (six7HasOpenSysPipe(key)) {
+      if (phantomHasOpenSysPipe(key)) {
         target = key;
         break;
       }
     }
 
     if (!target) {
-      six7RefreshSysReadiness(reason + "_no_open_sys_peer");
+      phantomRefreshSysReadiness(reason + "_no_open_sys_peer");
       emitSnapshot(reason + "_no_open_sys_peer");
       return false;
     }
@@ -1646,8 +1646,8 @@ export function createExtractedEngine(host) {
     concierge.sysPipeState = "open";
     concierge.sysLastErr = null;
 
-    const old = six7PresenceBook.get(target) || {};
-    six7RememberPresencePeer(
+    const old = phantomPresenceBook.get(target) || {};
+    phantomRememberPresencePeer(
       {
         ...old,
         hKey: target,
@@ -1655,16 +1655,16 @@ export function createExtractedEngine(host) {
         videoId: videoId || null,
         t: now(),
       },
-      "six7_sys",
+      "phantom_sys",
       {
         peerEvent: false,
         rosterEvent: false,
       },
     );
 
-    six7RefreshSysReadiness(reason);
+    phantomRefreshSysReadiness(reason);
 
-    const readyTarget = six7ShortKey(concierge.sysReadyPeer);
+    const readyTarget = phantomShortKey(concierge.sysReadyPeer);
     const alreadyReadyForTarget = !!(
       concierge.sysReady &&
       readyTarget &&
@@ -1681,25 +1681,25 @@ export function createExtractedEngine(host) {
       !concierge.sysReady &&
       concierge.sysUnavailableReason === "sys_pipe_waiting_for_proof"
     ) {
-      six7SendSysDC(target, six7SysStatusPayload("SYS_STATUS"));
+      phantomSendSysDC(target, phantomSysStatusPayload("SYS_STATUS"));
       emitSnapshot("sys_status_sent_open_pipe_waiting_for_proof");
     }
 
-    const msg = six7PresencePayload();
+    const msg = phantomPresencePayload();
     msg.to = target;
-    six7SendSysControl(msg, "presence");
+    phantomSendSysControl(msg, "presence");
 
-    six7EmitPresenceRoster("presence_six7_sys");
-    six7RefreshSysReadiness(reason);
+    phantomEmitPresenceRoster("presence_phantom_sys");
+    phantomRefreshSysReadiness(reason);
     emitSnapshot(reason);
     return true;
   }
 
-  function six7ControlRouteFor(msg) {
+  function phantomControlRouteFor(msg) {
     const type = String(msg?.type || "unknown");
-    const cls = six7ControlClassFor(type);
-    const mode = six7ControlClassMode(cls, type);
-    const target = six7ShortKey(msg?.to || concierge.sysPeer);
+    const cls = phantomControlClassFor(type);
+    const mode = phantomControlClassMode(cls, type);
+    const target = phantomShortKey(msg?.to || concierge.sysPeer);
 
     const isRtcSignal =
       type === "rtc_offer" || type === "rtc_answer" || type === "rtc_ice";
@@ -1710,12 +1710,12 @@ export function createExtractedEngine(host) {
       concierge.localRoleCandidate || concierge.role || "peer",
     );
 
-    const self = six7ShortKey(selfHKey);
-    const boss = six7ShortKey(concierge.syscon1);
-    const secondary = six7ShortKey(concierge.syscon2);
-    const currentNeighbor = six7ShortKey(concierge.sysPeer);
+    const self = phantomShortKey(selfHKey);
+    const boss = phantomShortKey(concierge.syscon1);
+    const secondary = phantomShortKey(concierge.syscon2);
+    const currentNeighbor = phantomShortKey(concierge.sysPeer);
 
-    const targetSysOpen = target ? six7HasOpenSysPipe(target) : false;
+    const targetSysOpen = target ? phantomHasOpenSysPipe(target) : false;
 
     const nextHop = targetSysOpen
       ? target
@@ -1726,7 +1726,7 @@ export function createExtractedEngine(host) {
     const nextHopSysOpen = !!(
       nextHop &&
       nextHop !== self &&
-      six7HasOpenSysPipe(nextHop)
+      phantomHasOpenSysPipe(nextHop)
     );
 
     const syscon1CanHoldDirected = !!(
@@ -1739,8 +1739,8 @@ export function createExtractedEngine(host) {
 
     const ownerSysOpen =
       !!concierge.sysReady &&
-      !!six7ShortKey(concierge.sysPeer) &&
-      six7HasOpenSysPipe(concierge.sysPeer);
+      !!phantomShortKey(concierge.sysPeer) &&
+      phantomHasOpenSysPipe(concierge.sysPeer);
 
     let route = "bootstrap_ws";
     let reason = "bootstrap_default";
@@ -1755,9 +1755,9 @@ export function createExtractedEngine(host) {
       wouldRoute = "bootstrap_ws";
       wouldRouteReason = "sys_carrier_bootstrap";
     } else if (isSysCarrier && targetSysOpen) {
-      route = "six7_sys";
+      route = "phantom_sys";
       reason = "sys_carrier_ignored_target_sys_ready";
-      wouldRoute = "six7_sys";
+      wouldRoute = "phantom_sys";
       wouldRouteReason = "sys_ready_route_rtc_signal";
     } else if (mode === "bootstrap") {
       route = "bootstrap_ws";
@@ -1768,17 +1768,17 @@ export function createExtractedEngine(host) {
       wouldRoute = "bootstrap_ws";
       wouldRouteReason = reason;
     } else if (mode === "sys_primary") {
-      wouldRoute = "six7_sys";
+      wouldRoute = "phantom_sys";
 
       if (!concierge.sysEligible) {
-        route = "six7_sys_pending";
+        route = "phantom_sys_pending";
         reason =
           cls === "rtc_signal"
             ? `rtc_sys_pending_ineligible_${concierge.sysUnavailableReason || "unknown"}`
             : `sys_pending_ineligible_${concierge.sysUnavailableReason || "unknown"}`;
         wouldRouteReason = reason;
       } else if (cls === "relationship_control" && !target) {
-        route = "six7_sys_pending";
+        route = "phantom_sys_pending";
         reason = "relationship_missing_target";
         wouldRouteReason = reason;
       } else if (
@@ -1786,11 +1786,11 @@ export function createExtractedEngine(host) {
         !nextHopSysOpen &&
         !syscon1CanHoldDirected
       ) {
-        route = "six7_sys_pending";
+        route = "phantom_sys_pending";
         reason = "relationship_waiting_for_sys_next_hop";
         wouldRouteReason = reason;
       } else if (cls !== "relationship_control" && !concierge.sysReady) {
-        route = "six7_sys_pending";
+        route = "phantom_sys_pending";
         reason =
           cls === "rtc_signal"
             ? `rtc_sys_pending_before_ready_${concierge.sysUnavailableReason || "not_ready"}`
@@ -1801,7 +1801,7 @@ export function createExtractedEngine(host) {
         !nextHopSysOpen &&
         !syscon1CanHoldDirected
       ) {
-        route = "six7_sys_pending";
+        route = "phantom_sys_pending";
         reason = `rtc_${type}_waiting_for_sys_next_hop`;
         wouldRouteReason = reason;
       } else if (
@@ -1809,7 +1809,7 @@ export function createExtractedEngine(host) {
         syscon1CanHoldDirected ||
         (cls === "presence" && ownerSysOpen)
       ) {
-        route = "six7_sys";
+        route = "phantom_sys";
         reason =
           cls === "relationship_control"
             ? "peer_sys_route_relationship_control"
@@ -1819,14 +1819,14 @@ export function createExtractedEngine(host) {
             ? "peer_sys_ready_route_relationship_control"
             : `sys_ready_route_${cls}`;
       } else {
-        route = "six7_sys_pending";
+        route = "phantom_sys_pending";
         reason = `sys_pending_${cls}`;
         wouldRouteReason = reason;
       }
     } else if (mode === "observe") {
-      route = "six7_sys_pending";
+      route = "phantom_sys_pending";
       reason = `observe_hold_${cls}`;
-      wouldRoute = "six7_sys";
+      wouldRoute = "phantom_sys";
       wouldRouteReason = `sys_ready_observe_${cls}`;
     } else {
       route = "bootstrap_ws";
@@ -1846,10 +1846,10 @@ export function createExtractedEngine(host) {
     };
   }
 
-  function six7MaybeDelayRelationshipFallback(msg, type, routeReason) {
+  function phantomMaybeDelayRelationshipFallback(msg, type, routeReason) {
     if (!msg || typeof msg !== "object") return false;
-    if (six7ControlClassFor(type) !== "relationship_control") return false;
-    const target = six7ShortKey(
+    if (phantomControlClassFor(type) !== "relationship_control") return false;
+    const target = phantomShortKey(
       msg.to || concierge.sysAttempt?.target || concierge.sysPeer,
     );
     if (!target) return false;
@@ -1876,17 +1876,17 @@ export function createExtractedEngine(host) {
     if (!concierge.sysEligible) return false;
 
     const attempt = concierge.sysAttempt || {};
-    const attemptTarget = six7ShortKey(attempt.target || concierge.sysPeer);
+    const attemptTarget = phantomShortKey(attempt.target || concierge.sysPeer);
 
     if (attemptTarget && attemptTarget !== target) {
       return false;
     }
 
-    if (six7OwnsPrimarySysState(target)) {
+    if (phantomOwnsPrimarySysState(target)) {
       concierge.sysPeer = target;
     }
 
-    const ent = six7SysPeers.get(target);
+    const ent = phantomSysPeers.get(target);
     const dcState = String(ent?.sysdc?.readyState || "");
 
     if (dcState !== "open" && dcState !== "connecting") {
@@ -1896,16 +1896,16 @@ export function createExtractedEngine(host) {
     concierge.lastErr = "relationship_waiting_for_sysdc:" + type;
     concierge.lastRelationshipTxAt = now();
     concierge.lastRelationshipTxType = type;
-    concierge.lastRelationshipRoute = "six7_sys_pending";
+    concierge.lastRelationshipRoute = "phantom_sys_pending";
     concierge.lastRelationshipReason = "waiting_for_target_sysdc";
 
     emitSnapshot("relationship_waiting_for_sysdc_" + type);
 
-    let pending = six7PendingRelationship.get(target);
+    let pending = phantomPendingRelationship.get(target);
 
     if (!pending) {
       pending = [];
-      six7PendingRelationship.set(target, pending);
+      phantomPendingRelationship.set(target, pending);
     }
 
     pending.push({
@@ -1914,8 +1914,8 @@ export function createExtractedEngine(host) {
       at: now(),
     });
 
-    if (pending.length > SIX7_REL_PENDING_MAX) {
-      pending.splice(0, pending.length - SIX7_REL_PENDING_MAX);
+    if (pending.length > PHANTOM_REL_PENDING_MAX) {
+      pending.splice(0, pending.length - PHANTOM_REL_PENDING_MAX);
     }
 
     emitSnapshot("relationship_pending_for_sysdc_" + type);
@@ -1923,7 +1923,7 @@ export function createExtractedEngine(host) {
     return true;
   }
 
-  function six7SendQueuedRtcIceFallbackWs(msg, why = "ice_queue_fallback_ws") {
+  function phantomSendQueuedRtcIceFallbackWs(msg, why = "ice_queue_fallback_ws") {
     const type = "rtc_ice";
 
     bootstrap.cfHits.total++;
@@ -1934,7 +1934,7 @@ export function createExtractedEngine(host) {
     bootstrap.cfHits.lastReason = String(why || "ice_queue_fallback_ws");
     bootstrap.cfHits.lastAt = now();
 
-    six7MarkControlTx(type, "bootstrap_ws");
+    phantomMarkControlTx(type, "bootstrap_ws");
 
     concierge.routeReason = String(why || "ice_queue_fallback_ws");
     concierge.lastRouteAt = now();
@@ -1978,25 +1978,25 @@ export function createExtractedEngine(host) {
     }
   }
 
-  function six7FlushQueuedRtcIce(remoteHKey, reason = "rtc_ice_queue_flush") {
-    const key = six7ShortKey(remoteHKey);
+  function phantomFlushQueuedRtcIce(remoteHKey, reason = "rtc_ice_queue_flush") {
+    const key = phantomShortKey(remoteHKey);
     if (!key) return false;
 
-    const rec = six7PendingRtcIce.get(key);
+    const rec = phantomPendingRtcIce.get(key);
     if (!rec) return false;
 
-    six7PendingRtcIce.delete(key);
+    phantomPendingRtcIce.delete(key);
 
     const items = Array.isArray(rec.items) ? rec.items : [];
     if (!items.length) return false;
 
-    if (!six7HasOpenSysPipe(key)) {
-      const ent = six7SysPeers.get(key);
+    if (!phantomHasOpenSysPipe(key)) {
+      const ent = phantomSysPeers.get(key);
       const sysState = String(ent?.sysdc?.readyState || "");
 
-      if (sysState === "connecting" || six7SysDialing.has(key)) {
-        const current = six7ShortKey(concierge.sysPeer);
-        const readyPeer = six7ShortKey(concierge.sysReadyPeer);
+      if (sysState === "connecting" || phantomSysDialing.has(key)) {
+        const current = phantomShortKey(concierge.sysPeer);
+        const readyPeer = phantomShortKey(concierge.sysReadyPeer);
         const alreadyReady = !!(
           concierge.sysReady &&
           current &&
@@ -2014,24 +2014,24 @@ export function createExtractedEngine(host) {
         emitSnapshot("rtc_ice_queue_waiting_for_sys_pipe_no_birth");
       }
 
-      six7PendingRtcIce.set(key, {
+      phantomPendingRtcIce.set(key, {
         items,
       });
 
       concierge.lastRtcIceTxAt = now();
-      concierge.lastRtcIceTxRoute = "six7_sys_pending";
+      concierge.lastRtcIceTxRoute = "phantom_sys_pending";
       concierge.lastRtcIceTxMode = "sys_primary";
       concierge.lastRtcIceTxReason = "rtc_ice_queue_waiting_for_sys_pipe";
 
       concierge.lastRtcTxAt = now();
       concierge.lastRtcTxType = "rtc_ice";
-      concierge.lastRtcTxRoute = "six7_sys_pending";
+      concierge.lastRtcTxRoute = "phantom_sys_pending";
       concierge.lastRtcTxMode = "sys_primary";
       concierge.lastRtcTxReason = "rtc_ice_queue_waiting_for_sys_pipe";
 
       concierge.lastErr = "rtc_ice_queue_waiting_for_sys_pipe";
 
-      six7RefreshSysReadiness("rtc_ice_queue_waiting_for_sys_pipe");
+      phantomRefreshSysReadiness("rtc_ice_queue_waiting_for_sys_pipe");
       emitSnapshot("rtc_ice_queue_waiting_for_sys_pipe");
       return true;
     }
@@ -2039,7 +2039,7 @@ export function createExtractedEngine(host) {
     const held = [];
 
     for (const item of items) {
-      six7MarkControlTx("rtc_ice", "six7_sys");
+      phantomMarkControlTx("rtc_ice", "phantom_sys");
 
       concierge.routeReason = "sys_route_rtc_signal_queued";
       concierge.lastRouteAt = now();
@@ -2048,21 +2048,21 @@ export function createExtractedEngine(host) {
       concierge.lastRouteClass = "rtc_signal";
       concierge.routeMode = "sys_primary";
       concierge.lastRouteMode = "sys_primary";
-      concierge.wouldRoute = "six7_sys";
+      concierge.wouldRoute = "phantom_sys";
       concierge.wouldRouteReason = "sys_ready_route_rtc_signal_queued";
 
       concierge.lastRtcTxAt = now();
       concierge.lastRtcTxType = "rtc_ice";
-      concierge.lastRtcTxRoute = "six7_sys";
+      concierge.lastRtcTxRoute = "phantom_sys";
       concierge.lastRtcTxMode = "sys_primary";
       concierge.lastRtcTxReason = concierge.routeReason;
 
       concierge.lastRtcIceTxAt = now();
-      concierge.lastRtcIceTxRoute = "six7_sys";
+      concierge.lastRtcIceTxRoute = "phantom_sys";
       concierge.lastRtcIceTxMode = "sys_primary";
       concierge.lastRtcIceTxReason = concierge.routeReason;
 
-      const ok = six7SendSysControl(item.msg, "rtc_ice");
+      const ok = phantomSendSysControl(item.msg, "rtc_ice");
 
       if (ok) {
         concierge.lastErr = null;
@@ -2072,8 +2072,8 @@ export function createExtractedEngine(host) {
     }
 
     if (held.length) {
-      six7PendingRtcIce.set(key, {
-        items: held.slice(-SIX7_RTC_ICE_QUEUE_MAX),
+      phantomPendingRtcIce.set(key, {
+        items: held.slice(-PHANTOM_RTC_ICE_QUEUE_MAX),
       });
 
       concierge.lastErr = "rtc_ice_queue_sys_send_failed_held";
@@ -2085,7 +2085,7 @@ export function createExtractedEngine(host) {
     return true;
   }
 
-  function six7MaybeQueueRtcIceFallback(msg, type, routeReason) {
+  function phantomMaybeQueueRtcIceFallback(msg, type, routeReason) {
     if (!msg || typeof msg !== "object") return false;
     if (String(type || "") !== "rtc_ice") return false;
 
@@ -2104,19 +2104,19 @@ export function createExtractedEngine(host) {
       return false;
     }
 
-    const target = six7ShortKey(msg.to || concierge.sysPeer);
+    const target = phantomShortKey(msg.to || concierge.sysPeer);
     if (!target) return false;
 
-    if (six7HasOpenSysPipe(target)) return false;
+    if (phantomHasOpenSysPipe(target)) return false;
 
-    six7SendSysAdmissionPresence("rtc_ice_queue", target);
+    phantomSendSysAdmissionPresence("rtc_ice_queue", target);
 
-    const ent = six7SysPeers.get(target);
+    const ent = phantomSysPeers.get(target);
     const sysState = String(ent?.sysdc?.readyState || "");
 
     if (sysState === "connecting") {
-      const current = six7ShortKey(concierge.sysPeer);
-      const readyPeer = six7ShortKey(concierge.sysReadyPeer);
+      const current = phantomShortKey(concierge.sysPeer);
+      const readyPeer = phantomShortKey(concierge.sysReadyPeer);
       const alreadyReady = !!(
         concierge.sysReady &&
         current &&
@@ -2129,7 +2129,7 @@ export function createExtractedEngine(host) {
       if (!alreadyReady) {
         concierge.sysPeer = target;
         concierge.sysPipeState = "connecting";
-        six7RefreshSysReadiness("rtc_ice_queue_target_sys_connecting");
+        phantomRefreshSysReadiness("rtc_ice_queue_target_sys_connecting");
       } else {
         emitSnapshot("rtc_ice_queue_target_sys_connecting_observed");
       }
@@ -2137,13 +2137,13 @@ export function createExtractedEngine(host) {
       emitSnapshot("rtc_ice_queue_target_pipe_missing");
     }
 
-    let rec = six7PendingRtcIce.get(target);
+    let rec = phantomPendingRtcIce.get(target);
 
     if (!rec) {
       rec = {
         items: [],
       };
-      six7PendingRtcIce.set(target, rec);
+      phantomPendingRtcIce.set(target, rec);
     }
 
     rec.items.push({
@@ -2151,18 +2151,18 @@ export function createExtractedEngine(host) {
       at: now(),
     });
 
-    if (rec.items.length > SIX7_RTC_ICE_QUEUE_MAX) {
-      rec.items.splice(0, rec.items.length - SIX7_RTC_ICE_QUEUE_MAX);
+    if (rec.items.length > PHANTOM_RTC_ICE_QUEUE_MAX) {
+      rec.items.splice(0, rec.items.length - PHANTOM_RTC_ICE_QUEUE_MAX);
     }
 
     concierge.lastRtcIceTxAt = now();
-    concierge.lastRtcIceTxRoute = "six7_sys_pending";
+    concierge.lastRtcIceTxRoute = "phantom_sys_pending";
     concierge.lastRtcIceTxMode = "sys_primary";
     concierge.lastRtcIceTxReason = "rtc_ice_waiting_for_target_sys_pipe";
 
     concierge.lastRtcTxAt = now();
     concierge.lastRtcTxType = "rtc_ice";
-    concierge.lastRtcTxRoute = "six7_sys_pending";
+    concierge.lastRtcTxRoute = "phantom_sys_pending";
     concierge.lastRtcTxMode = "sys_primary";
     concierge.lastRtcTxReason = "rtc_ice_waiting_for_target_sys_pipe";
 
@@ -2172,10 +2172,10 @@ export function createExtractedEngine(host) {
     return true;
   }
 
-  function six7SendControl(msg, reason = "") {
+  function phantomSendControl(msg, reason = "") {
     if (!msg || typeof msg !== "object") return false;
 
-    const decision = six7ControlRouteFor(msg);
+    const decision = phantomControlRouteFor(msg);
     const type = String(decision.type || msg.type || reason || "unknown");
     const route = String(decision.route || "bootstrap_ws");
 
@@ -2183,10 +2183,10 @@ export function createExtractedEngine(host) {
       const cfReason = String(decision.reason || reason || route);
       let cfBucket = "fallback";
 
-      const cfTarget = six7ShortKey(msg?.to || concierge.sysPeer);
+      const cfTarget = phantomShortKey(msg?.to || concierge.sysPeer);
       const cfIsRtcSignal =
         type === "rtc_offer" || type === "rtc_answer" || type === "rtc_ice";
-      const cfTargetSysOpen = cfTarget ? six7HasOpenSysPipe(cfTarget) : false;
+      const cfTargetSysOpen = cfTarget ? phantomHasOpenSysPipe(cfTarget) : false;
       const cfIsSysCarrier = !!(
         cfIsRtcSignal &&
         (msg?.sysCarrier === true || cfReason.includes("sys_carrier"))
@@ -2230,7 +2230,7 @@ export function createExtractedEngine(host) {
     }
 
     if (decision.cls === "relationship_control") {
-      six7PrepareRelationshipControl(msg, type);
+      phantomPrepareRelationshipControl(msg, type);
     }
 
     concierge.routeReason = String(decision.reason || "none");
@@ -2243,7 +2243,7 @@ export function createExtractedEngine(host) {
     concierge.wouldRoute = String(decision.wouldRoute || "bootstrap_ws");
     concierge.wouldRouteReason = String(decision.wouldRouteReason || "none");
 
-    six7MarkControlTx(type, route);
+    phantomMarkControlTx(type, route);
 
     if (decision.cls === "relationship_control") {
       concierge.lastRelationshipTxAt = now();
@@ -2273,28 +2273,28 @@ export function createExtractedEngine(host) {
       concierge.lastRtcIceTxReason = concierge.routeReason;
     }
 
-    if (route === "six7_sys_pending") {
+    if (route === "phantom_sys_pending") {
       // Directed chat signaling can enter the pending route before
-      // six7SendSysControl is called at all. Preserve the whole sequence here,
+      // phantomSendSysControl is called at all. Preserve the whole sequence here,
       // not just ICE, so offer/answer cannot disappear or be overtaken.
       if (decision.cls === "rtc_signal" && msg?.sysCarrier !== true) {
-        const target = six7ShortKey(msg.to || concierge.sysPeer);
+        const target = phantomShortKey(msg.to || concierge.sysPeer);
 
         if (target) {
           const envelope = {
             t: "SYS_CONTROL",
             at: now(),
-            from: six7ShortKey(selfHKey),
+            from: phantomShortKey(selfHKey),
             room: videoId || null,
             kind: type,
             cid: msg.cid || null,
             msg,
           };
 
-          const held = six7QueueDirectedSysControl(
+          const held = phantomQueueDirectedSysControl(
             target,
             envelope,
-            "six7_sys_pending_" + type,
+            "phantom_sys_pending_" + type,
           );
 
           if (held) {
@@ -2314,20 +2314,20 @@ export function createExtractedEngine(host) {
       }
 
       if (type === "rtc_ice") {
-        return six7MaybeQueueRtcIceFallback(msg, type, concierge.routeReason);
+        return phantomMaybeQueueRtcIceFallback(msg, type, concierge.routeReason);
       }
 
       if (decision.cls === "relationship_control") {
-        const target = six7ShortKey(msg.to || concierge.sysPeer);
+        const target = phantomShortKey(msg.to || concierge.sysPeer);
 
         if (target) {
-          const normalSysTarget = six7ShortKey(six7SysTargetFromCandidates());
+          const normalSysTarget = phantomShortKey(phantomSysTargetFromCandidates());
           const temporaryUnblock = !!(
             type === "sys_unblock" &&
             !normalSysTarget &&
-            !six7HasOpenSysPipe(concierge.sysPeer)
+            !phantomHasOpenSysPipe(concierge.sysPeer)
           );
-          const queuePeer = six7ShortKey(
+          const queuePeer = phantomShortKey(
             (type === "sys_unblock" || type === "sys_unblock_ack") &&
               normalSysTarget
               ? normalSysTarget
@@ -2339,23 +2339,23 @@ export function createExtractedEngine(host) {
             msg.recoveryProbe = true;
           }
 
-          let q = six7PendingRelationship.get(queuePeer);
+          let q = phantomPendingRelationship.get(queuePeer);
           if (!q) {
             q = [];
-            six7PendingRelationship.set(queuePeer, q);
+            phantomPendingRelationship.set(queuePeer, q);
           }
 
           q.push({ msg: { ...msg }, type, at: now() });
 
-          if (q.length > SIX7_REL_PENDING_MAX) {
-            q.splice(0, q.length - SIX7_REL_PENDING_MAX);
+          if (q.length > PHANTOM_REL_PENDING_MAX) {
+            q.splice(0, q.length - PHANTOM_REL_PENDING_MAX);
           }
 
           if (type === "sys_unblock") {
             if (temporaryUnblock) {
-              six7StartTemporarySysTransaction(target, msg);
+              phantomStartTemporarySysTransaction(target, msg);
             } else {
-              six7ScheduleSysAdmission("sys_unblock_waiting_for_room_sys");
+              phantomScheduleSysAdmission("sys_unblock_waiting_for_room_sys");
             }
           }
 
@@ -2363,7 +2363,7 @@ export function createExtractedEngine(host) {
             "relationship_queued_waiting_for_existing_sys_pipe_" + type,
           );
 
-          concierge.lastRelationshipRoute = "six7_sys_pending";
+          concierge.lastRelationshipRoute = "phantom_sys_pending";
           concierge.lastRelationshipReason = concierge.routeReason;
           concierge.lastErr = "relationship_waiting_for_peer_sys_pipe:" + type;
           emitSnapshot("relationship_queued_for_sys_" + type);
@@ -2372,20 +2372,20 @@ export function createExtractedEngine(host) {
       }
 
       if (decision.cls === "presence") {
-        const target = six7ShortKey(msg.to || concierge.sysPeer);
+        const target = phantomShortKey(msg.to || concierge.sysPeer);
 
         if (target) {
-          const ent = six7SysPeers.get(target);
+          const ent = phantomSysPeers.get(target);
           const sysState = String(ent?.sysdc?.readyState || "");
 
-          if (sysState === "connecting" || six7SysDialing.has(target)) {
-            six7RefreshSysReadiness("presence_waiting_for_sys_pipe");
+          if (sysState === "connecting" || phantomSysDialing.has(target)) {
+            phantomRefreshSysReadiness("presence_waiting_for_sys_pipe");
             emitSnapshot("presence_waiting_for_sys_pipe");
           } else {
             emitSnapshot("presence_waiting_for_sys_pipe_no_birth");
           }
         } else {
-          six7ScheduleSysAdmission("presence_waiting_for_sys_target");
+          phantomScheduleSysAdmission("presence_waiting_for_sys_target");
         }
 
         concierge.lastErr = "presence_waiting_for_sys_pipe";
@@ -2397,14 +2397,14 @@ export function createExtractedEngine(host) {
       return false;
     }
 
-    if (route === "six7_sys") {
-      const ok = six7SendSysControl(msg, type);
+    if (route === "phantom_sys") {
+      const ok = phantomSendSysControl(msg, type);
       if (ok) return true;
 
       concierge.lastErr = "sys_route_failed_no_ws_fallback:" + type;
 
       if (decision.cls === "relationship_control") {
-        const target = six7ShortKey(msg.to || concierge.sysPeer);
+        const target = phantomShortKey(msg.to || concierge.sysPeer);
 
         if (type === "veil_typing") {
           concierge.lastErr = "typing_dropped_no_open_sys_route";
@@ -2413,13 +2413,13 @@ export function createExtractedEngine(host) {
         }
 
         if (target) {
-          const normalSysTarget = six7ShortKey(six7SysTargetFromCandidates());
+          const normalSysTarget = phantomShortKey(phantomSysTargetFromCandidates());
           const temporaryUnblock = !!(
             type === "sys_unblock" &&
             !normalSysTarget &&
-            !six7HasOpenSysPipe(concierge.sysPeer)
+            !phantomHasOpenSysPipe(concierge.sysPeer)
           );
-          const queuePeer = six7ShortKey(
+          const queuePeer = phantomShortKey(
             (type === "sys_unblock" || type === "sys_unblock_ack") &&
               normalSysTarget
               ? normalSysTarget
@@ -2431,23 +2431,23 @@ export function createExtractedEngine(host) {
             msg.recoveryProbe = true;
           }
 
-          let q = six7PendingRelationship.get(queuePeer);
+          let q = phantomPendingRelationship.get(queuePeer);
           if (!q) {
             q = [];
-            six7PendingRelationship.set(queuePeer, q);
+            phantomPendingRelationship.set(queuePeer, q);
           }
 
           q.push({ msg: { ...msg }, type, at: now() });
 
-          if (q.length > SIX7_REL_PENDING_MAX) {
-            q.splice(0, q.length - SIX7_REL_PENDING_MAX);
+          if (q.length > PHANTOM_REL_PENDING_MAX) {
+            q.splice(0, q.length - PHANTOM_REL_PENDING_MAX);
           }
 
           if (type === "sys_unblock") {
             if (temporaryUnblock) {
-              six7StartTemporarySysTransaction(target, msg);
+              phantomStartTemporarySysTransaction(target, msg);
             } else {
-              six7ScheduleSysAdmission("sys_unblock_requeued_room_sys");
+              phantomScheduleSysAdmission("sys_unblock_requeued_room_sys");
             }
           }
 
@@ -2457,7 +2457,7 @@ export function createExtractedEngine(host) {
             emitSnapshot("relationship_requeued_no_birth_" + type);
           }
 
-          concierge.lastRelationshipRoute = "six7_sys_pending";
+          concierge.lastRelationshipRoute = "phantom_sys_pending";
           concierge.lastRelationshipReason = "sys_send_failed_requeue";
           emitSnapshot("relationship_requeued_no_ws_fallback_" + type);
           return true;
@@ -2493,13 +2493,13 @@ export function createExtractedEngine(host) {
   }
 
   let rtcInFlight = false;
-  let six7SessionKilling = false;
+  let phantomSessionKilling = false;
   let lastRosterRequestAt = 0;
   const ROSTER_MIN_INTERVAL = 15000; // 15s
   let lastRoster = new Set();
-  const six7PresenceBook = new Map(); // hKey -> latest presence-ish peer row
+  const phantomPresenceBook = new Map(); // hKey -> latest presence-ish peer row
 
-  let six7RosterAudit = {
+  let phantomRosterAudit = {
     source: "none",
     count: 0,
     added: "none",
@@ -2508,18 +2508,18 @@ export function createExtractedEngine(host) {
     at: 0,
   };
 
-  function six7MarkRosterAudit(source, nextKeys, pruneReason = "none") {
+  function phantomMarkRosterAudit(source, nextKeys, pruneReason = "none") {
     const prev = lastRoster instanceof Set ? lastRoster : new Set();
     const next = new Set(
       Array.from(nextKeys || [])
-        .map(six7ShortKey)
+        .map(phantomShortKey)
         .filter(Boolean),
     );
 
     const added = Array.from(next).find((k) => !prev.has(k)) || "none";
     const removed = Array.from(prev).find((k) => !next.has(k)) || "none";
 
-    six7RosterAudit = {
+    phantomRosterAudit = {
       source: String(source || "unknown"),
       count: next.size,
       added,
@@ -2534,9 +2534,9 @@ export function createExtractedEngine(host) {
     return next;
   }
 
-  function six7LatchedSysRosterList() {
-    const self = six7ShortKey(selfHKey);
-    const authority = six7LocalCommittedAuthority();
+  function phantomLatchedSysRosterList() {
+    const self = phantomShortKey(selfHKey);
+    const authority = phantomLocalCommittedAuthority();
 
     const source =
       authority && Array.isArray(authority.roster) ? authority.roster : [];
@@ -2544,10 +2544,10 @@ export function createExtractedEngine(host) {
     const rows = [];
 
     for (const row of source) {
-      const key = six7ShortKey(row?.hKey || row?.from);
+      const key = phantomShortKey(row?.hKey || row?.from);
       if (!key) continue;
 
-      const presence = six7PresenceBook.get(key) || {};
+      const presence = phantomPresenceBook.get(key) || {};
 
       rows.push({
         hKey: key,
@@ -2578,8 +2578,8 @@ export function createExtractedEngine(host) {
   }
 
   // ======================================================
-  // P2P WebRTC (DataChannel) — brain owns it
-  // Signaling is relayed via TOP/BG using:
+  // Peer WebRTC data channels owned by the engine.
+  // Signaling crosses the host interface through:
   //   post("RTC_SEND", {to, kind, data})
   // and inbound:
   //   d.type === "RTC_SIGNAL" with payload {from, kind, data}
@@ -2589,34 +2589,33 @@ export function createExtractedEngine(host) {
   const RTC_CFG = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
 
   // remoteHKey -> { pc, dc }
-  const six7SysPeers = new Map();
-  const six7ChatPeers = new Map();
+  const phantomSysPeers = new Map();
+  const phantomChatPeers = new Map();
 
   // ======================================================
   // CONCIERGE / SYS preflight
-  // Opens six7-sys after roster so Phase 4 relationship
-  // control has a pipe before invite/accept/block traffic.
+  // Establish the system channel before invite, accept, or block traffic.
   // ======================================================
 
-  const six7SysDialing = new Set();
-  const six7SysPreflightUnstableRetries = new Map();
-  const SIX7_SYS_PREFLIGHT_UNSTABLE_MAX = 6;
-  const six7SysAdmissionLastSent = new Map();
-  const six7SysLastGoodRx = new Map();
+  const phantomSysDialing = new Set();
+  const phantomSysPreflightUnstableRetries = new Map();
+  const PHANTOM_SYS_PREFLIGHT_UNSTABLE_MAX = 6;
+  const phantomSysAdmissionLastSent = new Map();
+  const phantomSysLastGoodRx = new Map();
 
-  const six7PeerSysCarrier = {
+  const phantomPeerSysCarrier = {
     epoch: 0,
     target: null,
     primaryRecoveryUsed: false,
     authorityRefreshPending: false,
   };
 
-  let six7LastSysFallbackIndicator = "unknown";
+  let phantomLastSysFallbackIndicator = "unknown";
 
-  function six7RefreshSysFallbackIndicator() {
-    if (six7LastSysFallbackIndicator === "off") return;
+  function phantomRefreshSysFallbackIndicator() {
+    if (phantomLastSysFallbackIndicator === "off") return;
 
-    six7LastSysFallbackIndicator = "off";
+    phantomLastSysFallbackIndicator = "off";
 
     post("SYS_FALLBACK_STATE", {
       state: "off",
@@ -2627,7 +2626,7 @@ export function createExtractedEngine(host) {
     });
   }
 
-  const six7SysAuthority = {
+  const phantomSysAuthority = {
     at: 0,
     via: "none",
     from: null,
@@ -2645,7 +2644,7 @@ export function createExtractedEngine(host) {
 
   // Diagnostic-only membership transaction trace. This object never
   // participates in routing, authority, membership, or retry decisions.
-  const six7MembershipAudit = {
+  const phantomMembershipAudit = {
     at: 0,
     stage: "idle",
     peer: null,
@@ -2653,7 +2652,7 @@ export function createExtractedEngine(host) {
     detail: "none",
   };
 
-  function six7MembershipAuditToken(value) {
+  function phantomMembershipAuditToken(value) {
     const text = String(value || "");
     if (!text) return "none";
 
@@ -2666,10 +2665,10 @@ export function createExtractedEngine(host) {
     return (hash >>> 0).toString(16).padStart(8, "0");
   }
 
-  function six7MembershipAuditSet(stage, fields = {}) {
-    const peer = six7ShortKey(fields.peer || fields.from || fields.transport);
-    const id = fields.id ? six7MembershipAuditToken(fields.id) : "none";
-    const topology = six7MembershipAuditTopology();
+  function phantomMembershipAuditSet(stage, fields = {}) {
+    const peer = phantomShortKey(fields.peer || fields.from || fields.transport);
+    const id = fields.id ? phantomMembershipAuditToken(fields.id) : "none";
+    const topology = phantomMembershipAuditTopology();
 
     const merged = {
       ...fields,
@@ -2717,64 +2716,64 @@ export function createExtractedEngine(host) {
 
     const at = now();
 
-    six7MembershipAudit.at = at;
-    six7MembershipAudit.stage = String(stage || "unknown");
-    six7MembershipAudit.peer = peer || null;
-    six7MembershipAudit.id = id;
-    six7MembershipAudit.detail = detail || "none";
+    phantomMembershipAudit.at = at;
+    phantomMembershipAudit.stage = String(stage || "unknown");
+    phantomMembershipAudit.peer = peer || null;
+    phantomMembershipAudit.id = id;
+    phantomMembershipAudit.detail = detail || "none";
 
-    six7MembershipAuditTrace.push({
+    phantomMembershipAuditTrace.push({
       at,
-      stage: six7MembershipAudit.stage,
-      peer: six7MembershipAudit.peer,
-      id: six7MembershipAudit.id,
-      detail: six7MembershipAudit.detail,
+      stage: phantomMembershipAudit.stage,
+      peer: phantomMembershipAudit.peer,
+      id: phantomMembershipAudit.id,
+      detail: phantomMembershipAudit.detail,
     });
 
-    if (six7MembershipAuditTrace.length > SIX7_MEMBERSHIP_AUDIT_TRACE_MAX) {
-      six7MembershipAuditTrace.splice(
+    if (phantomMembershipAuditTrace.length > PHANTOM_MEMBERSHIP_AUDIT_TRACE_MAX) {
+      phantomMembershipAuditTrace.splice(
         0,
-        six7MembershipAuditTrace.length - SIX7_MEMBERSHIP_AUDIT_TRACE_MAX,
+        phantomMembershipAuditTrace.length - PHANTOM_MEMBERSHIP_AUDIT_TRACE_MAX,
       );
     }
 
-    emitSnapshot("membership_audit_" + six7MembershipAudit.stage);
+    emitSnapshot("membership_audit_" + phantomMembershipAudit.stage);
   }
 
-  function six7MembershipAuditText() {
-    if (!six7MembershipAudit.at) return "";
+  function phantomMembershipAuditText() {
+    if (!phantomMembershipAudit.at) return "";
 
-    const peer = six7MembershipAudit.peer
-      ? six7MembershipAudit.peer.slice(0, 8)
+    const peer = phantomMembershipAudit.peer
+      ? phantomMembershipAudit.peer.slice(0, 8)
       : "none";
-    const trace = six7MembershipAuditTraceText();
+    const trace = phantomMembershipAuditTraceText();
 
     return [
       "MEMAUDIT",
-      six7MembershipAudit.stage,
+      phantomMembershipAudit.stage,
       `peer=${peer}`,
-      `id=${six7MembershipAudit.id || "none"}`,
-      six7MembershipAudit.detail || "none",
+      `id=${phantomMembershipAudit.id || "none"}`,
+      phantomMembershipAudit.detail || "none",
       trace ? `TRACE[${trace}]` : "",
-      six7ChatSignalAuditText()
-        ? `CHATTRACE[${six7ChatSignalAuditText()}]`
+      phantomChatSignalAuditText()
+        ? `CHATTRACE[${phantomChatSignalAuditText()}]`
         : "",
     ]
       .filter(Boolean)
       .join(" ");
   }
 
-  const six7MembershipAuditTrace = [];
-  const SIX7_MEMBERSHIP_AUDIT_TRACE_MAX = 16;
-  const six7ChatSignalTrace = [];
-  const SIX7_CHAT_SIGNAL_TRACE_MAX = 20;
+  const phantomMembershipAuditTrace = [];
+  const PHANTOM_MEMBERSHIP_AUDIT_TRACE_MAX = 16;
+  const phantomChatSignalTrace = [];
+  const PHANTOM_CHAT_SIGNAL_TRACE_MAX = 20;
 
-  function six7ChatSignalAudit(stage, fields = {}) {
+  function phantomChatSignalAudit(stage, fields = {}) {
     const row = {
       at: now(),
       stage: String(stage || "unknown"),
       peer:
-        six7ShortKey(fields.peer || fields.to || fields.from)?.slice(0, 8) ||
+        phantomShortKey(fields.peer || fields.to || fields.from)?.slice(0, 8) ||
         "none",
       kind: String(fields.kind || "none"),
       route: String(fields.route || concierge.lastRouteMode || "none"),
@@ -2791,22 +2790,22 @@ export function createExtractedEngine(host) {
       detail: String(fields.detail || "none"),
     };
 
-    six7ChatSignalTrace.push(row);
+    phantomChatSignalTrace.push(row);
 
-    if (six7ChatSignalTrace.length > SIX7_CHAT_SIGNAL_TRACE_MAX) {
-      six7ChatSignalTrace.splice(
+    if (phantomChatSignalTrace.length > PHANTOM_CHAT_SIGNAL_TRACE_MAX) {
+      phantomChatSignalTrace.splice(
         0,
-        six7ChatSignalTrace.length - SIX7_CHAT_SIGNAL_TRACE_MAX,
+        phantomChatSignalTrace.length - PHANTOM_CHAT_SIGNAL_TRACE_MAX,
       );
     }
 
     emitSnapshot("chat_signal_audit_" + row.stage);
   }
 
-  function six7ChatSignalAuditText() {
-    if (!six7ChatSignalTrace.length) return "";
+  function phantomChatSignalAuditText() {
+    if (!phantomChatSignalTrace.length) return "";
 
-    return six7ChatSignalTrace
+    return phantomChatSignalTrace
       .slice(-12)
       .map((row) =>
         [
@@ -2826,11 +2825,11 @@ export function createExtractedEngine(host) {
       .join(" || ");
   }
 
-  function six7MembershipAuditTopology() {
-    const self = six7ShortKey(selfHKey);
-    const committedRows = six7AuthorityRosterRows(six7SysAuthority.roster);
-    const pending = six7SysAuthority.pending;
-    const pendingRows = six7AuthorityRosterRows(pending?.snapshot?.roster);
+  function phantomMembershipAuditTopology() {
+    const self = phantomShortKey(selfHKey);
+    const committedRows = phantomAuthorityRosterRows(phantomSysAuthority.roster);
+    const pending = phantomSysAuthority.pending;
+    const pendingRows = phantomAuthorityRosterRows(pending?.snapshot?.roster);
 
     return {
       self: self ? self.slice(0, 8) : "none",
@@ -2838,19 +2837,19 @@ export function createExtractedEngine(host) {
       epoch: Number(concierge.sysconEpoch || 0),
       cfEpoch: Number(concierge.cfConciergeEpoch || 0),
 
-      committedFrom: six7ShortKey(six7SysAuthority.from)?.slice(0, 8) || "none",
+      committedFrom: phantomShortKey(phantomSysAuthority.from)?.slice(0, 8) || "none",
       committedOne:
-        six7ShortKey(six7SysAuthority.syscon1)?.slice(0, 8) || "none",
+        phantomShortKey(phantomSysAuthority.syscon1)?.slice(0, 8) || "none",
       committedTwo:
-        six7ShortKey(six7SysAuthority.syscon2)?.slice(0, 8) || "none",
-      committedEpoch: Number(six7SysAuthority.epoch || 0),
-      committedSeq: Number(six7SysAuthority.rosterSeq || 0),
+        phantomShortKey(phantomSysAuthority.syscon2)?.slice(0, 8) || "none",
+      committedEpoch: Number(phantomSysAuthority.epoch || 0),
+      committedSeq: Number(phantomSysAuthority.rosterSeq || 0),
       committedCount: committedRows.length,
       committedKeys: committedRows.map((row) => row.hKey.slice(0, 8)).join(","),
 
-      pendingId: pending?.id ? six7MembershipAuditToken(pending.id) : "none",
+      pendingId: pending?.id ? phantomMembershipAuditToken(pending.id) : "none",
       pendingMirror:
-        six7ShortKey(pending?.mirror || pending?.snapshot?.syscon2)?.slice(
+        phantomShortKey(pending?.mirror || pending?.snapshot?.syscon2)?.slice(
           0,
           8,
         ) || "none",
@@ -2861,25 +2860,25 @@ export function createExtractedEngine(host) {
       pendingCount: pendingRows.length,
       pendingKeys: pendingRows.map((row) => row.hKey.slice(0, 8)).join(","),
 
-      cfOne: six7ShortKey(concierge.cfConciergeSyscon1)?.slice(0, 8) || "none",
-      cfTwo: six7ShortKey(concierge.cfConciergeSyscon2)?.slice(0, 8) || "none",
+      cfOne: phantomShortKey(concierge.cfConciergeSyscon1)?.slice(0, 8) || "none",
+      cfTwo: phantomShortKey(concierge.cfConciergeSyscon2)?.slice(0, 8) || "none",
 
-      terminalKeys: Array.from(six7PendingTerminalExits.keys())
-        .map((key) => six7ShortKey(key)?.slice(0, 8))
+      terminalKeys: Array.from(phantomPendingTerminalExits.keys())
+        .map((key) => phantomShortKey(key)?.slice(0, 8))
         .filter(Boolean)
         .join(","),
 
       sysTarget:
-        six7ShortKey(concierge.sysAttempt?.target)?.slice(0, 8) || "none",
+        phantomShortKey(concierge.sysAttempt?.target)?.slice(0, 8) || "none",
       sysAttempt: String(concierge.sysAttempt?.state || "none"),
       sysPipe: String(concierge.sysPipeState || "none"),
     };
   }
 
-  function six7MembershipAuditTraceText() {
-    if (!six7MembershipAuditTrace.length) return "";
+  function phantomMembershipAuditTraceText() {
+    if (!phantomMembershipAuditTrace.length) return "";
 
-    return six7MembershipAuditTrace
+    return phantomMembershipAuditTrace
       .slice(-10)
       .map((row) => {
         const peer = row.peer ? String(row.peer).slice(0, 8) : "none";
@@ -2899,39 +2898,39 @@ export function createExtractedEngine(host) {
   // incarnation proves it is still alive after the chat edge dropped.
   const reconnectingPeers = new Map(); // hKey -> { reason, startedAt, presented, probeCid, probeSent }
 
-  const SIX7_CHAT_RECONNECT_MS = 20000;
-  const six7ChatReconnectDeadlines = new Map();
-  let six7ChatAttemptSeq = 0;
+  const PHANTOM_CHAT_RECONNECT_MS = 20000;
+  const phantomChatReconnectDeadlines = new Map();
+  let phantomChatAttemptSeq = 0;
 
-  function six7NewChatAttemptId(remoteHKey) {
-    const key = six7ShortKey(remoteHKey);
+  function phantomNewChatAttemptId(remoteHKey) {
+    const key = phantomShortKey(remoteHKey);
     if (!key) return "";
-    six7ChatAttemptSeq += 1;
-    return [six7BootId, key, six7ChatAttemptSeq].join(":");
+    phantomChatAttemptSeq += 1;
+    return [phantomBootId, key, phantomChatAttemptSeq].join(":");
   }
 
-  function six7CancelChatAttemptDeadline(remoteHKey) {
-    const key = six7ShortKey(remoteHKey);
+  function phantomCancelChatAttemptDeadline(remoteHKey) {
+    const key = phantomShortKey(remoteHKey);
     if (!key) return;
-    const timer = six7ChatReconnectDeadlines.get(key);
+    const timer = phantomChatReconnectDeadlines.get(key);
     if (timer) clearTimeout(timer);
-    six7ChatReconnectDeadlines.delete(key);
+    phantomChatReconnectDeadlines.delete(key);
   }
 
-  function six7ArmChatAttemptDeadline(
+  function phantomArmChatAttemptDeadline(
     remoteHKey,
     attemptId,
     reason = "chat_birth",
   ) {
-    const key = six7ShortKey(remoteHKey);
+    const key = phantomShortKey(remoteHKey);
     if (!key || !attemptId) return false;
 
-    six7CancelChatAttemptDeadline(key);
+    phantomCancelChatAttemptDeadline(key);
 
     const timer = setTimeout(() => {
-      six7ChatReconnectDeadlines.delete(key);
+      phantomChatReconnectDeadlines.delete(key);
 
-      const ent = six7ChatPeers.get(key);
+      const ent = phantomChatPeers.get(key);
       if (!ent || String(ent.chatAttemptId || "") !== String(attemptId)) {
         emitSnapshot("chat_attempt_deadline_ignored_stale");
         return;
@@ -2944,18 +2943,18 @@ export function createExtractedEngine(host) {
       );
       if (ready) return;
 
-      const relationship = six7RelationshipGet(key);
+      const relationship = phantomRelationshipGet(key);
       if (
-        !six7RelationshipIsAccepted(relationship) ||
+        !phantomRelationshipIsAccepted(relationship) ||
         !lastRoster.has(key) ||
-        six7PendingTerminalExits.has(key) ||
-        __six7GoneNotified.has(key)
+        phantomPendingTerminalExits.has(key) ||
+        __phantomGoneNotified.has(key)
       ) {
         emitSnapshot("chat_attempt_deadline_observed_terminal_relationship");
         return;
       }
 
-      if (!six7OwnsChatPipeOffer(key)) {
+      if (!phantomOwnsChatPipeOffer(key)) {
         ent.chatAttemptState = "waiting_owner";
         ent.chatFault = "owner_attempt_expired_remote";
         emitSnapshot("chat_attempt_deadline_waiting_for_pair_owner");
@@ -2981,7 +2980,7 @@ export function createExtractedEngine(host) {
 
       rtcTeardown(key, "chat_attempt_nonprogress");
 
-      const successor = six7GetOrCreateChatPeer(key);
+      const successor = phantomGetOrCreateChatPeer(key);
       if (successor) {
         successor.relationshipCycleId = relationship.cycleId;
         successor.chatAttemptRecoveryCount = nextRecoveryCount;
@@ -2993,33 +2992,33 @@ export function createExtractedEngine(host) {
         pipe: "chat",
         reason: "chat_attempt_successor_" + String(reason || "nonprogress"),
       });
-    }, SIX7_CHAT_RECONNECT_MS);
+    }, PHANTOM_CHAT_RECONNECT_MS);
 
-    six7ChatReconnectDeadlines.set(key, timer);
+    phantomChatReconnectDeadlines.set(key, timer);
     return true;
   }
 
-  const SIX7_SYS_REPLACEMENT_MS = 10000;
-  const six7SysReplacementWindows = new Map(); // hKey -> { state, timer, attemptId, bootId, startedAt, terminalAt, committedAt }
+  const PHANTOM_SYS_REPLACEMENT_MS = 10000;
+  const phantomSysReplacementWindows = new Map(); // hKey -> { state, timer, attemptId, bootId, startedAt, terminalAt, committedAt }
 
-  function six7SysReplacementState(remoteHKey) {
-    const key = six7ShortKey(remoteHKey);
+  function phantomSysReplacementState(remoteHKey) {
+    const key = phantomShortKey(remoteHKey);
     return key
-      ? String(six7SysReplacementWindows.get(key)?.state || "healthy")
+      ? String(phantomSysReplacementWindows.get(key)?.state || "healthy")
       : "healthy";
   }
 
-  function six7SysReplacementTerminal(remoteHKey) {
-    const state = six7SysReplacementState(remoteHKey);
+  function phantomSysReplacementTerminal(remoteHKey) {
+    const state = phantomSysReplacementState(remoteHKey);
     return state === "terminal_staged" || state === "committed";
   }
 
-  function six7SupersedeSysReplacementForCommittedRefresh(
+  function phantomSupersedeSysReplacementForCommittedRefresh(
     remoteHKey,
     previousGeneration,
     incomingGeneration,
   ) {
-    const key = six7ShortKey(remoteHKey);
+    const key = phantomShortKey(remoteHKey);
     if (
       !key ||
       !previousGeneration ||
@@ -3029,13 +3028,13 @@ export function createExtractedEngine(host) {
       return false;
     }
 
-    const committed = six7LocalCommittedAuthority();
+    const committed = phantomLocalCommittedAuthority();
     const committedKeys = new Set(
-      six7AuthorityRosterRows(committed?.roster).map((row) => row.hKey),
+      phantomAuthorityRosterRows(committed?.roster).map((row) => row.hKey),
     );
     if (!committedKeys.has(key)) return false;
 
-    const rec = six7SysReplacementWindows.get(key);
+    const rec = phantomSysReplacementWindows.get(key);
     if (
       rec &&
       (String(rec.state || "") === "replacing" ||
@@ -3044,14 +3043,14 @@ export function createExtractedEngine(host) {
       try {
         if (rec.timer) clearTimeout(rec.timer);
       } catch {}
-      six7SysReplacementWindows.delete(key);
+      phantomSysReplacementWindows.delete(key);
     }
 
-    six7SysDialing.delete(key);
-    six7SysPreflightUnstableRetries.delete(key);
-    six7PendingRtcIce.delete(key);
+    phantomSysDialing.delete(key);
+    phantomSysPreflightUnstableRetries.delete(key);
+    phantomPendingRtcIce.delete(key);
 
-    if (six7ShortKey(concierge.sysAttempt?.target) === key) {
+    if (phantomShortKey(concierge.sysAttempt?.target) === key) {
       concierge.sysAttempt.recoveryCount = 0;
       concierge.sysAttempt.state = "connecting";
       concierge.sysAttempt.lastEvent = "committed_member_new_boot";
@@ -3061,14 +3060,14 @@ export function createExtractedEngine(host) {
     emitSnapshot("sys_replacement_superseded_committed_refresh");
     return true;
   }
-  function six7CancelSysReplacement(
+  function phantomCancelSysReplacement(
     remoteHKey,
     reason = "replacement_cancelled",
   ) {
-    const key = six7ShortKey(remoteHKey);
+    const key = phantomShortKey(remoteHKey);
     if (!key) return false;
 
-    const rec = six7SysReplacementWindows.get(key);
+    const rec = phantomSysReplacementWindows.get(key);
     const state = String(rec?.state || "");
     if (
       !rec ||
@@ -3081,9 +3080,9 @@ export function createExtractedEngine(host) {
       if (rec.timer) clearTimeout(rec.timer);
     } catch {}
 
-    six7SysReplacementWindows.delete(key);
+    phantomSysReplacementWindows.delete(key);
 
-    if (six7ShortKey(concierge.sysAttempt?.target) === key) {
+    if (phantomShortKey(concierge.sysAttempt?.target) === key) {
       concierge.sysAttempt.recoveryCount = 0;
       concierge.sysAttempt.lastEvent = String(
         reason || "replacement_cancelled",
@@ -3096,14 +3095,14 @@ export function createExtractedEngine(host) {
     );
     return true;
   }
-  function six7CompleteFailedSysReplacement(
+  function phantomCompleteFailedSysReplacement(
     remoteHKey,
     reason = "replacement_failed",
   ) {
-    const key = six7ShortKey(remoteHKey);
+    const key = phantomShortKey(remoteHKey);
     if (!key) return false;
 
-    const rec = six7SysReplacementWindows.get(key);
+    const rec = phantomSysReplacementWindows.get(key);
     const state = String(rec?.state || "");
     if (
       !rec ||
@@ -3112,43 +3111,43 @@ export function createExtractedEngine(host) {
       return false;
     }
 
-    const self = six7ShortKey(selfHKey);
-    const committed = six7LocalCommittedAuthority();
+    const self = phantomShortKey(selfHKey);
+    const committed = phantomLocalCommittedAuthority();
     const committedKeys = new Set(
-      six7AuthorityRosterRows(committed?.roster).map((row) => row.hKey),
+      phantomAuthorityRosterRows(committed?.roster).map((row) => row.hKey),
     );
     const mode = String(rec.mode || "");
     const leaderOwnsMember = !!(
       mode === "leader_observes_member" &&
       self &&
-      six7ShortKey(committed?.syscon1) === self &&
+      phantomShortKey(committed?.syscon1) === self &&
       committedKeys.has(key)
     );
     const mirrorOwnsLeaderLoss = !!(
       mode === "mirror_observes_leader" &&
       self &&
-      six7ShortKey(committed?.syscon2) === self &&
-      six7ShortKey(committed?.syscon1) === key &&
+      phantomShortKey(committed?.syscon2) === self &&
+      phantomShortKey(committed?.syscon1) === key &&
       committedKeys.has(key)
     );
     const currentRole = String(
       concierge.localRoleCandidate || concierge.role || "peer",
     );
-    const currentOne = six7ShortKey(concierge.syscon1);
+    const currentOne = phantomShortKey(concierge.syscon1);
     const successorOwnsSpineLoss = !!(
       mode === "successor_observes_spine" &&
       self &&
       currentRole === "syscon1" &&
       currentOne === self &&
-      six7ShortKey(committed?.syscon1) !== self &&
+      phantomShortKey(committed?.syscon1) !== self &&
       committedKeys.has(self) &&
       committedKeys.has(key) &&
-      (six7ShortKey(committed?.syscon1) === key ||
-        six7ShortKey(committed?.syscon2) === key)
+      (phantomShortKey(committed?.syscon1) === key ||
+        phantomShortKey(committed?.syscon2) === key)
     );
 
-    const restored = six7HasOpenSysPipe(key);
-    const knownBoot = String(six7RemoteBootIds.get(key) || "");
+    const restored = phantomHasOpenSysPipe(key);
+    const knownBoot = String(phantomRemoteBootIds.get(key) || "");
     const sameIncarnation = !(
       rec.bootId &&
       knownBoot &&
@@ -3160,10 +3159,10 @@ export function createExtractedEngine(host) {
       !committedKeys.has(key) ||
       restored ||
       !sameIncarnation ||
-      __six7GoneNotified.has(key) ||
+      __phantomGoneNotified.has(key) ||
       (!leaderOwnsMember && !mirrorOwnsLeaderLoss && !successorOwnsSpineLoss)
     ) {
-      six7CancelSysReplacement(
+      phantomCancelSysReplacement(
         key,
         restored
           ? "replacement_restored"
@@ -3175,19 +3174,19 @@ export function createExtractedEngine(host) {
     }
 
     const elapsed = now() - Number(rec.startedAt || 0);
-    if (elapsed < SIX7_SYS_REPLACEMENT_MS) return false;
+    if (elapsed < PHANTOM_SYS_REPLACEMENT_MS) return false;
 
     // Doorway visibility is corroborating liveness only. It never mutates
     // membership; it merely prevents a transient SYS fault from becoming a
     // terminal command while the same incarnation still owns a live socket.
-    if (host.doorwayPresence === 'live-sockets' && six7DoorwayAdmittedPeers.has(key)) {
+    if (host.doorwayPresence === 'live-sockets' && phantomDoorwayAdmittedPeers.has(key)) {
       try {
         if (rec.timer) clearTimeout(rec.timer);
       } catch {}
       rec.timer = null;
       rec.state = "awaiting_doorway_absence";
       rec.awaitingDoorwayAt = now();
-      six7SysReplacementWindows.set(key, rec);
+      phantomSysReplacementWindows.set(key, rec);
       emitSnapshot("sys_replacement_waiting_for_doorway_absence");
       return false;
     }
@@ -3199,21 +3198,21 @@ export function createExtractedEngine(host) {
     rec.state = "terminal_staged";
     rec.terminalAt = now();
     rec.terminalReason = String(reason || "replacement_failed");
-    six7SysReplacementWindows.set(key, rec);
+    phantomSysReplacementWindows.set(key, rec);
 
-    if (six7ShortKey(concierge.sysAttempt?.target) === key) {
+    if (phantomShortKey(concierge.sysAttempt?.target) === key) {
       concierge.sysAttempt.state = "terminal";
       concierge.sysAttempt.lastEvent = "replacement_failed_terminal";
       concierge.sysAttempt.faultReason = String(reason || "replacement_failed");
       concierge.sysAttempt.recoveryCount = 1;
     }
 
-    six7TeardownSysPeer(
+    phantomTeardownSysPeer(
       key,
       "sys_replacement_terminal_" + String(reason || "failed"),
     );
 
-    const terminal = six7TerminalExitCommand(
+    const terminal = phantomTerminalExitCommand(
       {
         type: "authority_exit",
         from: key,
@@ -3228,11 +3227,11 @@ export function createExtractedEngine(host) {
       "sys_replacement_failed",
     );
 
-    const accepted = terminal || six7PendingTerminalExits.has(key);
+    const accepted = terminal || phantomPendingTerminalExits.has(key);
     if (accepted) {
-      six7SysDialing.delete(key);
-      six7SysPreflightUnstableRetries.delete(key);
-      six7PendingRtcIce.delete(key);
+      phantomSysDialing.delete(key);
+      phantomSysPreflightUnstableRetries.delete(key);
+      phantomPendingRtcIce.delete(key);
     }
 
     emitSnapshot(
@@ -3242,11 +3241,11 @@ export function createExtractedEngine(host) {
     );
     return accepted;
   }
-  function six7ArmSysReplacement(remoteHKey, reason = "sys_transport_lost") {
-    const key = six7ShortKey(remoteHKey);
+  function phantomArmSysReplacement(remoteHKey, reason = "sys_transport_lost") {
+    const key = phantomShortKey(remoteHKey);
     if (!key) return false;
 
-    const currentState = six7SysReplacementState(key);
+    const currentState = phantomSysReplacementState(key);
     if (
       currentState === "replacing" ||
       currentState === "awaiting_doorway_absence" ||
@@ -3257,13 +3256,13 @@ export function createExtractedEngine(host) {
       return false;
     }
 
-    const self = six7ShortKey(selfHKey);
-    const committed = six7LocalCommittedAuthority();
+    const self = phantomShortKey(selfHKey);
+    const committed = phantomLocalCommittedAuthority();
     const committedKeys = new Set(
-      six7AuthorityRosterRows(committed?.roster).map((row) => row.hKey),
+      phantomAuthorityRosterRows(committed?.roster).map((row) => row.hKey),
     );
-    const committedOne = six7ShortKey(committed?.syscon1);
-    const committedTwo = six7ShortKey(committed?.syscon2);
+    const committedOne = phantomShortKey(committed?.syscon1);
+    const committedTwo = phantomShortKey(committed?.syscon2);
 
     const leaderObservesMember = !!(
       self &&
@@ -3280,7 +3279,7 @@ export function createExtractedEngine(host) {
     const currentRole = String(
       concierge.localRoleCandidate || concierge.role || "peer",
     );
-    const currentOne = six7ShortKey(concierge.syscon1);
+    const currentOne = phantomShortKey(concierge.syscon1);
     const successorObservesSpine = !!(
       self &&
       currentRole === "syscon1" &&
@@ -3305,14 +3304,14 @@ export function createExtractedEngine(host) {
         ? "mirror_observes_leader"
         : "successor_observes_spine";
     const attemptId = String(
-      six7SysPeers.get(key)?.attempt?.id || concierge.sysAttempt?.id || "",
+      phantomSysPeers.get(key)?.attempt?.id || concierge.sysAttempt?.id || "",
     );
-    const bootId = String(six7RemoteBootIds.get(key) || "");
+    const bootId = String(phantomRemoteBootIds.get(key) || "");
     const timer = setTimeout(() => {
-      six7CompleteFailedSysReplacement(key, "replacement_window_expired");
-    }, SIX7_SYS_REPLACEMENT_MS);
+      phantomCompleteFailedSysReplacement(key, "replacement_window_expired");
+    }, PHANTOM_SYS_REPLACEMENT_MS);
 
-    six7SysReplacementWindows.set(key, {
+    phantomSysReplacementWindows.set(key, {
       state: "replacing",
       mode,
       timer,
@@ -3322,7 +3321,7 @@ export function createExtractedEngine(host) {
       reason: String(reason || "sys_transport_lost"),
     });
 
-    if (six7ShortKey(concierge.sysAttempt?.target) === key) {
+    if (phantomShortKey(concierge.sysAttempt?.target) === key) {
       concierge.sysAttempt.recoveryCount = 1;
       concierge.sysAttempt.state = "recovering";
       concierge.sysAttempt.lastEvent = "replacement_window_started";
@@ -3348,41 +3347,41 @@ export function createExtractedEngine(host) {
 
   // One authoritative relationship lifecycle record per peer.
   // Transport generations may come and go, but they must bind to this cycle.
-  const six7Relationships = new Map(); // hKey -> relationship record
+  const phantomRelationships = new Map(); // hKey -> relationship record
 
-  const six7RelationshipRevoked = new Set();
+  const phantomRelationshipRevoked = new Set();
 
-  function six7RelationshipCycleId(peer, seed = "cycle") {
-    const self = six7ShortKey(selfHKey) || "self";
-    const remote = six7ShortKey(peer) || "peer";
+  function phantomRelationshipCycleId(peer, seed = "cycle") {
+    const self = phantomShortKey(selfHKey) || "self";
+    const remote = phantomShortKey(peer) || "peer";
     return `${[self, remote].sort().join(":")}:${String(seed || "cycle")}:${now()}:${Math.random().toString(16).slice(2)}`;
   }
 
-  function six7RelationshipGet(hKey) {
-    const key = six7ShortKey(hKey);
+  function phantomRelationshipGet(hKey) {
+    const key = phantomShortKey(hKey);
     if (!key) return null;
 
-    let rec = six7Relationships.get(key);
+    let rec = phantomRelationships.get(key);
     if (!rec) {
       rec = {
         hKey: key,
         state: VEIL.OUTSIDE,
         cycleId: null,
         inviteCid: null,
-        localBootId: six7BootId,
-        remoteBootId: String(six7RemoteBootIds.get(key) || "") || null,
+        localBootId: phantomBootId,
+        remoteBootId: String(phantomRemoteBootIds.get(key) || "") || null,
         membershipEpoch: Number(concierge.sysconEpoch || 0),
         createdAt: 0,
         updatedAt: now(),
         endedAt: 0,
         endReason: "none",
       };
-      six7Relationships.set(key, rec);
+      phantomRelationships.set(key, rec);
     }
     return rec;
   }
 
-  function six7RelationshipIsAccepted(rec) {
+  function phantomRelationshipIsAccepted(rec) {
     return (
       !!rec &&
       !rec.endedAt &&
@@ -3390,21 +3389,21 @@ export function createExtractedEngine(host) {
     );
   }
 
-  function six7RelationshipBegin(hKey, state, options = {}) {
-    const key = six7ShortKey(hKey);
+  function phantomRelationshipBegin(hKey, state, options = {}) {
+    const key = phantomShortKey(hKey);
     if (!key) return null;
 
     const at = Number(options.at || now());
-    const rec = six7RelationshipGet(key);
+    const rec = phantomRelationshipGet(key);
     rec.state = String(state || VEIL.OUTSIDE);
     rec.cycleId = String(
       options.cycleId ||
-        six7RelationshipCycleId(key, options.origin || state || "cycle"),
+        phantomRelationshipCycleId(key, options.origin || state || "cycle"),
     );
     rec.inviteCid = String(options.inviteCid || "") || null;
-    rec.localBootId = six7BootId;
+    rec.localBootId = phantomBootId;
     rec.remoteBootId =
-      String(options.remoteBootId || six7RemoteBootIds.get(key) || "") || null;
+      String(options.remoteBootId || phantomRemoteBootIds.get(key) || "") || null;
     rec.membershipEpoch = Number(
       options.membershipEpoch || concierge.sysconEpoch || 0,
     );
@@ -3412,31 +3411,31 @@ export function createExtractedEngine(host) {
     rec.updatedAt = at;
     rec.endedAt = 0;
     rec.endReason = "none";
-    six7Relationships.set(key, rec);
+    phantomRelationships.set(key, rec);
     return rec;
   }
 
-  function six7RelationshipEnd(
+  function phantomRelationshipEnd(
     hKey,
     reason = "ended",
     at = now(),
     revoke = true,
   ) {
-    const key = six7ShortKey(hKey);
+    const key = phantomShortKey(hKey);
     if (!key) return null;
 
-    const rec = six7RelationshipGet(key);
+    const rec = phantomRelationshipGet(key);
     rec.state = VEIL.OUTSIDE;
     rec.updatedAt = Number(at || now());
     rec.endedAt = rec.updatedAt;
     rec.endReason = String(reason || "ended");
-    six7Relationships.set(key, rec);
+    phantomRelationships.set(key, rec);
 
-    if (revoke) six7RelationshipRevoked.add(key);
+    if (revoke) phantomRelationshipRevoked.add(key);
     return rec;
   }
 
-  function six7RelationshipMatches(msg, rec) {
+  function phantomRelationshipMatches(msg, rec) {
     if (!rec || !rec.cycleId) return false;
     const cycleId = String(msg?.cycleId || "");
     if (cycleId && cycleId === String(rec.cycleId)) return true;
@@ -3448,28 +3447,28 @@ export function createExtractedEngine(host) {
     return false;
   }
 
-  const six7BlockedPeers = new Set(); // peers I blocked
-  const six7BlockedByPeers = new Set(); // peers who blocked me
+  const phantomBlockedPeers = new Set(); // peers I blocked
+  const phantomBlockedByPeers = new Set(); // peers who blocked me
 
-  const six7SeenControlCids = new Map();
-  const SIX7_CONTROL_CID_MAX = 300;
+  const phantomSeenControlCids = new Map();
+  const PHANTOM_CONTROL_CID_MAX = 300;
 
-  function six7NewControlCid(type) {
-    const me = six7ShortKey(selfHKey) || "self";
+  function phantomNewControlCid(type) {
+    const me = phantomShortKey(selfHKey) || "self";
     return `${me}:${String(type || "control")}:${now()}:${Math.random().toString(16).slice(2)}`;
   }
 
-  function six7PrepareRelationshipControl(msg, type) {
+  function phantomPrepareRelationshipControl(msg, type) {
     if (!msg || typeof msg !== "object") return msg;
 
     msg.type = String(msg.type || type || "unknown");
-    msg.from = six7ShortKey(msg.from || selfHKey);
-    msg.to = six7ShortKey(msg.to);
+    msg.from = phantomShortKey(msg.from || selfHKey);
+    msg.to = phantomShortKey(msg.to);
     msg.videoId = msg.videoId || videoId || null;
-    msg.cid = msg.cid || six7NewControlCid(msg.type);
+    msg.cid = msg.cid || phantomNewControlCid(msg.type);
     msg.sentAt = msg.sentAt || now();
 
-    const relationship = six7Relationships.get(msg.to);
+    const relationship = phantomRelationships.get(msg.to);
     if (relationship?.cycleId && !msg.cycleId) {
       msg.cycleId = relationship.cycleId;
     }
@@ -3481,37 +3480,37 @@ export function createExtractedEngine(host) {
     return msg;
   }
 
-  function six7AuthorityGossipSnapshot() {
-    const authority = six7LocalCommittedAuthority();
+  function phantomAuthorityGossipSnapshot() {
+    const authority = phantomLocalCommittedAuthority();
     if (!authority) return null;
 
     return {
       gossip: true,
       room: String(authority.room || videoId || ""),
-      from: six7ShortKey(authority.from || authority.syscon1),
+      from: phantomShortKey(authority.from || authority.syscon1),
       role: "syscon1",
-      syscon1: six7ShortKey(authority.syscon1),
-      syscon2: six7ShortKey(authority.syscon2) || null,
+      syscon1: phantomShortKey(authority.syscon1),
+      syscon2: phantomShortKey(authority.syscon2) || null,
       epoch: Number(authority.epoch || 0),
       rosterSeq: Number(authority.rosterSeq || 0),
-      roster: six7AuthorityRosterRows(authority.roster),
+      roster: phantomAuthorityRosterRows(authority.roster),
       acceptedAt: Number(authority.at || 0),
       relayedAt: now(),
     };
   }
 
-  function six7RememberAuthorityGossip(sourceHKey, hint) {
-    const source = six7ShortKey(sourceHKey);
-    const self = six7ShortKey(selfHKey);
+  function phantomRememberAuthorityGossip(sourceHKey, hint) {
+    const source = phantomShortKey(sourceHKey);
+    const self = phantomShortKey(selfHKey);
     if (!source || !self || !hint || hint.gossip !== true) return false;
 
     const room = String(hint.room || "");
-    const one = six7ShortKey(hint.syscon1);
-    const two = six7ShortKey(hint.syscon2);
-    const from = six7ShortKey(hint.from || one);
+    const one = phantomShortKey(hint.syscon1);
+    const two = phantomShortKey(hint.syscon2);
+    const from = phantomShortKey(hint.from || one);
     const epoch = Number(hint.epoch || 0);
     const rosterSeq = Number(hint.rosterSeq || 0);
-    const roster = six7AuthorityRosterRows(hint.roster);
+    const roster = phantomAuthorityRosterRows(hint.roster);
     const rosterKeys = new Set(roster.map((row) => row.hKey));
 
     if (
@@ -3545,14 +3544,14 @@ export function createExtractedEngine(host) {
       at: now(),
     };
 
-    six7AuthorityGossipHints.set(source, normalized);
+    phantomAuthorityGossipHints.set(source, normalized);
 
     // Local committed authority remains the only source of truth. Gossip
     // contributes route hints only; it never replaces the committed value.
-    const localAuthority = six7LocalCommittedAuthority();
+    const localAuthority = phantomLocalCommittedAuthority();
     if (localAuthority) {
-      six7RefreshSysCandidates(
-        six7LatchedSysRosterList(),
+      phantomRefreshSysCandidates(
+        phantomLatchedSysRosterList(),
         "authority_gossip_local_authority_rebind",
       );
     }
@@ -3565,20 +3564,20 @@ export function createExtractedEngine(host) {
     );
 
     const routeOne = localIsAtLeastAsFresh
-      ? six7ShortKey(localAuthority?.syscon1)
+      ? phantomShortKey(localAuthority?.syscon1)
       : one;
     const routeTwo = localIsAtLeastAsFresh
-      ? six7ShortKey(localAuthority?.syscon2)
+      ? phantomShortKey(localAuthority?.syscon2)
       : two;
 
     const targets = [routeOne, routeTwo]
-      .map(six7ShortKey)
+      .map(phantomShortKey)
       .filter(
         (key, index, rows) =>
           key && key !== self && rows.indexOf(key) === index,
       );
 
-    six7GossipRecovery = {
+    phantomGossipRecovery = {
       source,
       targets,
       index: 0,
@@ -3588,7 +3587,7 @@ export function createExtractedEngine(host) {
     };
 
     if (targets.length) {
-      six7ScheduleSysAdmission("authority_gossip_recovery_target");
+      phantomScheduleSysAdmission("authority_gossip_recovery_target");
       emitSnapshot("authority_gossip_recovery_started");
     } else {
       emitSnapshot("authority_gossip_no_remote_syscon_target");
@@ -3597,21 +3596,21 @@ export function createExtractedEngine(host) {
     return true;
   }
 
-  function six7BeginGossipSuccessorRecovery(
+  function phantomBeginGossipSuccessorRecovery(
     reason = "authority_gossip_syscons_unreachable",
   ) {
-    const self = six7ShortKey(selfHKey);
-    const authority = six7LocalCommittedAuthority();
+    const self = phantomShortKey(selfHKey);
+    const authority = phantomLocalCommittedAuthority();
     if (!self || !authority) {
       emitSnapshot("authority_gossip_successor_missing_committed_base");
       return false;
     }
 
-    const oldOne = six7ShortKey(authority.syscon1);
-    const oldTwo = six7ShortKey(authority.syscon2);
+    const oldOne = phantomShortKey(authority.syscon1);
+    const oldTwo = phantomShortKey(authority.syscon2);
     const oldSpine = [oldOne, oldTwo].filter(Boolean);
     const attempted = new Set(
-      (six7GossipRecovery.targets || []).map(six7ShortKey).filter(Boolean),
+      (phantomGossipRecovery.targets || []).map(phantomShortKey).filter(Boolean),
     );
 
     if (oldSpine.some((key) => key !== self && !attempted.has(key))) {
@@ -3619,19 +3618,19 @@ export function createExtractedEngine(host) {
       return false;
     }
 
-    const survivors = six7AuthorityRosterRows(authority.roster).filter(
+    const survivors = phantomAuthorityRosterRows(authority.roster).filter(
       (row) => row.hKey !== oldOne && row.hKey !== oldTwo,
     );
-    const winner = six7ElectAuthorityCandidate(survivors, "", false, true);
+    const winner = phantomElectAuthorityCandidate(survivors, "", false, true);
 
     if (!winner || winner !== self) {
-      six7GossipRecovery.successor = winner || null;
-      six7GossipRecovery.state = "waiting_for_elected_survivor";
+      phantomGossipRecovery.successor = winner || null;
+      phantomGossipRecovery.state = "waiting_for_elected_survivor";
       emitSnapshot("authority_gossip_waiting_for_elected_survivor");
       return false;
     }
 
-    const mirror = six7ElectAuthorityCandidate(survivors, self, false, false);
+    const mirror = phantomElectAuthorityCandidate(survivors, self, false, false);
 
     // This is only the same provisional topology candidate produced by the
     // normal concierge reconciliation path. Committed authority is unchanged;
@@ -3643,23 +3642,23 @@ export function createExtractedEngine(host) {
     concierge.candidateReason =
       "authority_gossip_provisional_successor_" + String(reason || "loss");
     concierge.lastCandidateAt = now();
-    six7ApplyLocalRoleCandidate("authority_gossip_provisional_successor");
+    phantomApplyLocalRoleCandidate("authority_gossip_provisional_successor");
 
-    six7GossipRecovery.successor = self;
-    six7GossipRecovery.state = "replacement_proof";
-    six7GossipRecovery.exhaustedAt = now();
+    phantomGossipRecovery.successor = self;
+    phantomGossipRecovery.state = "replacement_proof";
+    phantomGossipRecovery.exhaustedAt = now();
 
     let armed = false;
     for (const oldKey of oldSpine) {
       if (!oldKey || oldKey === self) continue;
       if (
-        six7ArmSysReplacement(oldKey, "authority_gossip_syscon_unreachable")
+        phantomArmSysReplacement(oldKey, "authority_gossip_syscon_unreachable")
       ) {
         armed = true;
       }
     }
 
-    six7RefreshSysReadiness("authority_gossip_provisional_successor");
+    phantomRefreshSysReadiness("authority_gossip_provisional_successor");
     emitSnapshot(
       armed
         ? "authority_gossip_successor_replacement_proof_started"
@@ -3668,9 +3667,9 @@ export function createExtractedEngine(host) {
     return armed;
   }
 
-  function six7StartTemporarySysTransaction(targetHKey, msg) {
-    const target = six7ShortKey(targetHKey);
-    const self = six7ShortKey(selfHKey);
+  function phantomStartTemporarySysTransaction(targetHKey, msg) {
+    const target = phantomShortKey(targetHKey);
+    const self = phantomShortKey(selfHKey);
     const purpose = "relationship_unblock";
     const id = String(msg?.sysTxId || msg?.cid || "");
 
@@ -3679,26 +3678,26 @@ export function createExtractedEngine(host) {
       !self ||
       target === self ||
       !id ||
-      !SIX7_TEMP_SYS_PURPOSES.has(purpose) ||
-      !six7CommittedMember(self) ||
-      !six7CommittedMember(target) ||
-      six7PendingTerminalExits.has(target) ||
-      __six7MembershipExitApplied.has(target)
+      !PHANTOM_TEMP_SYS_PURPOSES.has(purpose) ||
+      !phantomCommittedMember(self) ||
+      !phantomCommittedMember(target) ||
+      phantomPendingTerminalExits.has(target) ||
+      __phantomMembershipExitApplied.has(target)
     ) {
       emitSnapshot("temporary_sys_transaction_start_rejected");
       return false;
     }
 
-    const current = six7TemporarySysTransactions.get(target);
+    const current = phantomTemporarySysTransactions.get(target);
     if (current && current.id !== id && current.state !== "closed") {
       emitSnapshot("temporary_sys_transaction_busy");
       return false;
     }
 
     const createdAt = now();
-    const deadlineAt = createdAt + SIX7_SYS_REPLACEMENT_MS;
+    const deadlineAt = createdAt + PHANTOM_SYS_REPLACEMENT_MS;
     const deadlineTimer = setTimeout(() => {
-      const active = six7TemporarySysTransactions.get(target);
+      const active = phantomTemporarySysTransactions.get(target);
       if (
         !active ||
         String(active.id || "") !== id ||
@@ -3707,10 +3706,10 @@ export function createExtractedEngine(host) {
       ) {
         return;
       }
-      six7CloseTemporarySysTransaction(target, "transaction_deadline");
-    }, SIX7_SYS_REPLACEMENT_MS + 25);
+      phantomCloseTemporarySysTransaction(target, "transaction_deadline");
+    }, PHANTOM_SYS_REPLACEMENT_MS + 25);
 
-    six7TemporarySysTransactions.set(target, {
+    phantomTemporarySysTransactions.set(target, {
       id,
       purpose,
       peer: target,
@@ -3724,31 +3723,31 @@ export function createExtractedEngine(host) {
       deadlineTimer,
     });
 
-    const ent = six7SysPeers.get(target);
+    const ent = phantomSysPeers.get(target);
     if (ent) {
       ent.temporary = true;
       ent.tempSysPurpose = purpose;
       ent.tempSysTxId = id;
     }
 
-    void six7EnsureSysPipe(target, "temporary_sys_" + purpose);
+    void phantomEnsureSysPipe(target, "temporary_sys_" + purpose);
     emitSnapshot("temporary_sys_transaction_birth_requested");
     return true;
   }
 
-  function six7BindInboundTemporarySysTransaction(fromHKey, meta = {}) {
-    const from = six7ShortKey(fromHKey);
-    const self = six7ShortKey(selfHKey);
+  function phantomBindInboundTemporarySysTransaction(fromHKey, meta = {}) {
+    const from = phantomShortKey(fromHKey);
+    const self = phantomShortKey(selfHKey);
     const purpose = String(meta?.sysPurpose || "");
     const id = String(meta?.sysTxId || "");
     const room = String(meta?.room || videoId || "");
 
     if (meta?.sysTemporary !== true) return false;
 
-    const relationship = six7RelationshipGet(from);
+    const relationship = phantomRelationshipGet(from);
     const expectedUnblock = !!(
-      six7BlockedByPeers.has(from) ||
-      six7RelationshipRevoked.has(from) ||
+      phantomBlockedByPeers.has(from) ||
+      phantomRelationshipRevoked.has(from) ||
       String(relationship?.endReason || "") === "blocked_by_peer"
     );
 
@@ -3757,13 +3756,13 @@ export function createExtractedEngine(host) {
       !self ||
       from === self ||
       !id ||
-      !SIX7_TEMP_SYS_PURPOSES.has(purpose) ||
+      !PHANTOM_TEMP_SYS_PURPOSES.has(purpose) ||
       purpose !== "relationship_unblock" ||
       !expectedUnblock ||
-      !six7CommittedMember(self) ||
-      !six7CommittedMember(from) ||
-      six7PendingTerminalExits.has(from) ||
-      __six7MembershipExitApplied.has(from) ||
+      !phantomCommittedMember(self) ||
+      !phantomCommittedMember(from) ||
+      phantomPendingTerminalExits.has(from) ||
+      __phantomMembershipExitApplied.has(from) ||
       !room ||
       (videoId && room !== String(videoId))
     ) {
@@ -3771,26 +3770,26 @@ export function createExtractedEngine(host) {
       return false;
     }
 
-    const current = six7TemporarySysTransactions.get(from);
+    const current = phantomTemporarySysTransactions.get(from);
     if (current && current.id !== id && current.state !== "closed") {
       emitSnapshot("temporary_sys_transaction_offer_conflict");
       return false;
     }
 
-    const existing = six7SysPeers.get(from);
-    if (existing && !existing.temporary && six7HasOpenSysPipe(from)) {
+    const existing = phantomSysPeers.get(from);
+    if (existing && !existing.temporary && phantomHasOpenSysPipe(from)) {
       emitSnapshot("temporary_sys_transaction_rejected_normal_pipe_open");
       return false;
     }
 
     if (existing && !existing.temporary) {
-      six7TeardownSysPeer(from, "temporary_sys_retires_stale_edge");
+      phantomTeardownSysPeer(from, "temporary_sys_retires_stale_edge");
     }
 
     const createdAt = now();
-    const deadlineAt = createdAt + SIX7_SYS_REPLACEMENT_MS;
+    const deadlineAt = createdAt + PHANTOM_SYS_REPLACEMENT_MS;
     const deadlineTimer = setTimeout(() => {
-      const active = six7TemporarySysTransactions.get(from);
+      const active = phantomTemporarySysTransactions.get(from);
       if (
         !active ||
         String(active.id || "") !== id ||
@@ -3799,10 +3798,10 @@ export function createExtractedEngine(host) {
       ) {
         return;
       }
-      six7CloseTemporarySysTransaction(from, "transaction_deadline");
-    }, SIX7_SYS_REPLACEMENT_MS + 25);
+      phantomCloseTemporarySysTransaction(from, "transaction_deadline");
+    }, PHANTOM_SYS_REPLACEMENT_MS + 25);
 
-    six7TemporarySysTransactions.set(from, {
+    phantomTemporarySysTransactions.set(from, {
       id,
       purpose,
       peer: from,
@@ -3820,9 +3819,9 @@ export function createExtractedEngine(host) {
     return true;
   }
 
-  function six7CloseTemporarySysTransaction(remoteHKey, reason = "complete") {
-    const key = six7ShortKey(remoteHKey);
-    const rec = six7TemporarySysTransactions.get(key);
+  function phantomCloseTemporarySysTransaction(remoteHKey, reason = "complete") {
+    const key = phantomShortKey(remoteHKey);
+    const rec = phantomTemporarySysTransactions.get(key);
     if (!key || !rec) return false;
 
     rec.state = "closed";
@@ -3832,23 +3831,23 @@ export function createExtractedEngine(host) {
       if (rec.deadlineTimer) clearTimeout(rec.deadlineTimer);
     } catch {}
     rec.deadlineTimer = null;
-    six7TemporarySysTransactions.delete(key);
+    phantomTemporarySysTransactions.delete(key);
 
-    const pending = six7PendingRelationship.get(key);
+    const pending = phantomPendingRelationship.get(key);
     if (pending?.length) {
       const kept = pending.filter(
         (item) => String(item?.msg?.sysTxId || "") !== String(rec.id || ""),
       );
-      if (kept.length) six7PendingRelationship.set(key, kept);
-      else six7PendingRelationship.delete(key);
+      if (kept.length) phantomPendingRelationship.set(key, kept);
+      else phantomPendingRelationship.delete(key);
     }
 
-    const ent = six7SysPeers.get(key);
+    const ent = phantomSysPeers.get(key);
     if (
       ent?.temporary === true &&
       String(ent.tempSysTxId || "") === String(rec.id || "")
     ) {
-      six7TeardownSysPeer(
+      phantomTeardownSysPeer(
         key,
         "temporary_sys_transaction_" + String(reason || "complete"),
       );
@@ -3860,9 +3859,9 @@ export function createExtractedEngine(host) {
     return true;
   }
 
-  function six7TemporarySysAllowsEnvelope(remoteHKey, envelope) {
-    const key = six7ShortKey(remoteHKey);
-    const rec = six7TemporarySysTransactions.get(key);
+  function phantomTemporarySysAllowsEnvelope(remoteHKey, envelope) {
+    const key = phantomShortKey(remoteHKey);
+    const rec = phantomTemporarySysTransactions.get(key);
     if (!rec || rec.state === "closed") return true;
 
     const type = String(envelope?.t || envelope?.type || "");
@@ -3880,22 +3879,22 @@ export function createExtractedEngine(host) {
     );
   }
 
-  function six7ControlSeenKey(msg, via = "") {
+  function phantomControlSeenKey(msg, via = "") {
     const cid = String(msg?.cid || "");
     if (!cid) return "";
     return [
       String(msg?.type || "unknown"),
-      six7ShortKey(msg?.from),
-      six7ShortKey(msg?.to),
+      phantomShortKey(msg?.from),
+      phantomShortKey(msg?.to),
       cid,
     ].join("|");
   }
 
-  function six7RememberControlCid(msg, via = "") {
-    const key = six7ControlSeenKey(msg, via);
+  function phantomRememberControlCid(msg, via = "") {
+    const key = phantomControlSeenKey(msg, via);
     if (!key) return false;
 
-    if (six7SeenControlCids.has(key)) {
+    if (phantomSeenControlCids.has(key)) {
       concierge.lastErr =
         "control_duplicate_ignored:" + String(msg?.type || "unknown");
       emitSnapshot(
@@ -3904,50 +3903,50 @@ export function createExtractedEngine(host) {
       return true;
     }
 
-    six7SeenControlCids.set(key, now());
+    phantomSeenControlCids.set(key, now());
 
-    if (six7SeenControlCids.size > SIX7_CONTROL_CID_MAX) {
-      const rows = Array.from(six7SeenControlCids.entries()).sort(
+    if (phantomSeenControlCids.size > PHANTOM_CONTROL_CID_MAX) {
+      const rows = Array.from(phantomSeenControlCids.entries()).sort(
         (a, b) => Number(a[1] || 0) - Number(b[1] || 0),
       );
 
       while (
-        six7SeenControlCids.size > Math.floor(SIX7_CONTROL_CID_MAX * 0.75) &&
+        phantomSeenControlCids.size > Math.floor(PHANTOM_CONTROL_CID_MAX * 0.75) &&
         rows.length
       ) {
-        six7SeenControlCids.delete(rows.shift()[0]);
+        phantomSeenControlCids.delete(rows.shift()[0]);
       }
     }
 
     return false;
   }
 
-  function six7HandleInboundRelationshipControl(msg, via = "unknown") {
+  function phantomHandleInboundRelationshipControl(msg, via = "unknown") {
     if (!msg || typeof msg !== "object") return false;
 
     const type = String(msg.type || "");
-    if (six7ControlClassFor(type) !== "relationship_control") return false;
+    if (phantomControlClassFor(type) !== "relationship_control") return false;
     if (!isDirectMsgForMe(msg)) return true;
 
-    const from = six7ShortKey(msg.from);
+    const from = phantomShortKey(msg.from);
     if (!from) return true;
 
-    if (six7RememberControlCid(msg, via)) return true;
+    if (phantomRememberControlCid(msg, via)) return true;
 
-    six7MarkControlRx(type);
+    phantomMarkControlRx(type);
     concierge.lastRelationshipRxAt = now();
     concierge.lastRelationshipRxType = type;
     concierge.lastRelationshipRxVia = String(via || "unknown");
     concierge.lastRxType = type;
     concierge.lastRxAt = now();
 
-    const pendingExit = six7PendingTerminalExits.has(from);
+    const pendingExit = phantomPendingTerminalExits.has(from);
     const committedMember = !!(
-      lastRoster.has(from) && six7CommittedMember(from)
+      lastRoster.has(from) && phantomCommittedMember(from)
     );
     const membershipGone = !!(
       pendingExit ||
-      __six7MembershipExitApplied.has(from) ||
+      __phantomMembershipExitApplied.has(from) ||
       !committedMember
     );
 
@@ -3968,8 +3967,8 @@ export function createExtractedEngine(host) {
       return true;
     }
 
-    if (via === "six7_sys_temporary") {
-      const transaction = six7TemporarySysTransactions.get(from);
+    if (via === "phantom_sys_temporary") {
+      const transaction = phantomTemporarySysTransactions.get(from);
       const txId = String(msg?.sysTxId || "");
       if (
         !transaction ||
@@ -3985,20 +3984,20 @@ export function createExtractedEngine(host) {
     }
 
     if (type === "veil_invite") {
-      if (via === "six7_sys") {
-        const ent = six7SysPeers.get(from);
+      if (via === "phantom_sys") {
+        const ent = phantomSysPeers.get(from);
         const sysState = String(ent?.sysdc?.readyState || "");
         concierge.sysPeer = from;
         if (sysState === "open" || sysState === "connecting") {
-          six7RefreshSysReadiness("relationship_rx_invite_observe_" + sysState);
+          phantomRefreshSysReadiness("relationship_rx_invite_observe_" + sysState);
           emitSnapshot("relationship_rx_invite_observe_" + sysState);
         }
       }
 
-      if (six7IsBlocked(from) || six7IsBlockedBy(from)) {
-        six7RelationshipEnd(from, "invite_blocked", now(), true);
+      if (phantomIsBlocked(from) || phantomIsBlockedBy(from)) {
+        phantomRelationshipEnd(from, "invite_blocked", now(), true);
         setState(from, VEIL.OUTSIDE, true);
-        six7SendControl(
+        phantomSendControl(
           {
             type: "veil_deny",
             from: selfHKey,
@@ -4015,18 +4014,18 @@ export function createExtractedEngine(host) {
       // CHAT_ENDED closes only the relationship cycle. A still-committed
       // member may begin a new cycle; membership-exit latches are never
       // cleared here.
-      __six7GoneNotified.delete(from);
-      six7RelationshipRevoked.delete(from);
+      __phantomGoneNotified.delete(from);
+      phantomRelationshipRevoked.delete(from);
 
-      const current = six7RelationshipGet(from);
+      const current = phantomRelationshipGet(from);
       const incomingCycle = String(
         msg.cycleId ||
           msg.cid ||
-          six7RelationshipCycleId(from, "remote_invite"),
+          phantomRelationshipCycleId(from, "remote_invite"),
       );
       const incomingInviteCid = String(msg.cid || "") || null;
 
-      if (six7RelationshipIsAccepted(current)) {
+      if (phantomRelationshipIsAccepted(current)) {
         if (String(current.cycleId || "") !== incomingCycle) {
           emitSnapshot("relationship_invite_ignored_active_cycle");
         }
@@ -4043,10 +4042,10 @@ export function createExtractedEngine(host) {
         current.updatedAt = now();
         current.endedAt = 0;
         current.endReason = "none";
-        six7Relationships.set(from, current);
-        six7RelationshipRevoked.delete(from);
+        phantomRelationships.set(from, current);
+        phantomRelationshipRevoked.delete(from);
         setState(from, VEIL.INSIDE);
-        six7SendControl(
+        phantomSendControl(
           {
             type: "veil_accept",
             from: selfHKey,
@@ -4058,14 +4057,14 @@ export function createExtractedEngine(host) {
           "veil_accept",
         );
         post("VEIL_ACCEPTED", { from, simultaneous: true });
-        six7RequestChatPipe(from, "relationship_simultaneous_accept");
+        phantomRequestChatPipe(from, "relationship_simultaneous_accept");
         return true;
       }
 
-      six7RelationshipRevoked.delete(from);
-      six7CancelReconnect(from);
+      phantomRelationshipRevoked.delete(from);
+      phantomCancelReconnect(from);
       rtcTeardown(from, "relationship_new_cycle");
-      six7RelationshipBegin(from, VEIL.INVITE_RECEIVED, {
+      phantomRelationshipBegin(from, VEIL.INVITE_RECEIVED, {
         cycleId: incomingCycle,
         inviteCid: incomingInviteCid,
         origin: "remote_invite",
@@ -4076,9 +4075,9 @@ export function createExtractedEngine(host) {
     }
 
     if (type === "veil_accept") {
-      const current = six7RelationshipGet(from);
-      if (six7IsBlocked(from) || six7IsBlockedBy(from)) {
-        six7RelationshipEnd(from, "accept_blocked", now(), true);
+      const current = phantomRelationshipGet(from);
+      if (phantomIsBlocked(from) || phantomIsBlockedBy(from)) {
+        phantomRelationshipEnd(from, "accept_blocked", now(), true);
         setState(from, VEIL.OUTSIDE, true);
         return true;
       }
@@ -4086,35 +4085,35 @@ export function createExtractedEngine(host) {
       if (
         current.state !== VEIL.INVITE_SENT ||
         current.endedAt ||
-        !six7RelationshipMatches(msg, current)
+        !phantomRelationshipMatches(msg, current)
       ) {
         concierge.lastErr = "veil_accept_ignored_wrong_relationship_cycle";
         emitSnapshot("veil_accept_ignored_wrong_relationship_cycle");
         return true;
       }
 
-      six7RelationshipRevoked.delete(from);
+      phantomRelationshipRevoked.delete(from);
       current.state = VEIL.INSIDE;
       current.updatedAt = now();
       current.endedAt = 0;
       current.endReason = "none";
-      six7Relationships.set(from, current);
+      phantomRelationships.set(from, current);
       setState(from, VEIL.INSIDE);
       post("VEIL_ACCEPTED", { from });
-      six7RequestChatPipe(from, "relationship_accept");
+      phantomRequestChatPipe(from, "relationship_accept");
       return true;
     }
 
     if (type === "veil_deny") {
-      const current = six7RelationshipGet(from);
+      const current = phantomRelationshipGet(from);
       if (
         !current.cycleId ||
         !msg.cycleId ||
-        six7RelationshipMatches(msg, current)
+        phantomRelationshipMatches(msg, current)
       ) {
-        six7RelationshipEnd(from, "remote_deny", now(), false);
+        phantomRelationshipEnd(from, "remote_deny", now(), false);
         setState(from, VEIL.OUTSIDE, true);
-        six7CancelReconnect(from);
+        phantomCancelReconnect(from);
         rtcTeardown(from, "relationship_denied");
       } else {
         emitSnapshot("veil_deny_ignored_wrong_relationship_cycle");
@@ -4130,14 +4129,14 @@ export function createExtractedEngine(host) {
     }
 
     if (type === "veil_typing") {
-      const current = six7RelationshipGet(from);
+      const current = phantomRelationshipGet(from);
 
       if (
-        via !== "six7_sys" ||
-        six7IsBlocked(from) ||
-        six7IsBlockedBy(from) ||
-        !six7RelationshipIsAccepted(current) ||
-        !six7RelationshipMatches(msg, current)
+        via !== "phantom_sys" ||
+        phantomIsBlocked(from) ||
+        phantomIsBlockedBy(from) ||
+        !phantomRelationshipIsAccepted(current) ||
+        !phantomRelationshipMatches(msg, current)
       ) {
         emitSnapshot("veil_typing_ignored_invalid_relationship");
         return true;
@@ -4153,11 +4152,11 @@ export function createExtractedEngine(host) {
     }
 
     if (type === "veil_status") {
-      let current = six7RelationshipGet(from);
-      if (six7IsBlocked(from) || six7IsBlockedBy(from)) return true;
+      let current = phantomRelationshipGet(from);
+      if (phantomIsBlocked(from) || phantomIsBlockedBy(from)) return true;
       if (
         !(lastRoster instanceof Set && lastRoster.has(from)) ||
-        via !== "six7_sys"
+        via !== "phantom_sys"
       )
         return true;
 
@@ -4167,67 +4166,67 @@ export function createExtractedEngine(host) {
         incomingState === VEIL.INSIDE || incomingState === VEIL.ESTABLISHED;
 
       const continuityPending = !!(
-        six7PendingRefreshRoom === String(videoId || "") &&
-        six7PendingRefreshRelationships.has(from)
+        phantomPendingRefreshRoom === String(videoId || "") &&
+        phantomPendingRefreshRelationships.has(from)
       );
 
       if (
-        !six7RelationshipRevoked.has(from) &&
-        !six7RelationshipIsAccepted(current) &&
+        !phantomRelationshipRevoked.has(from) &&
+        !phantomRelationshipIsAccepted(current) &&
         !current?.cycleId &&
         incomingAccepted &&
         incomingCycleId
       ) {
-        current = six7RelationshipBegin(from, VEIL.ESTABLISHED, {
+        current = phantomRelationshipBegin(from, VEIL.ESTABLISHED, {
           cycleId: incomingCycleId,
           remoteBootId:
-            String(msg?.bootId || six7RemoteBootIds.get(from) || "") || null,
+            String(msg?.bootId || phantomRemoteBootIds.get(from) || "") || null,
           membershipEpoch: Number(concierge.sysconEpoch || 0),
           origin: "surviving_peer_continuity_proof",
         });
 
-        six7PendingRefreshRelationships.delete(from);
-        if (!six7PendingRefreshRelationships.size) {
-          six7PendingRefreshRoom = "";
+        phantomPendingRefreshRelationships.delete(from);
+        if (!phantomPendingRefreshRelationships.size) {
+          phantomPendingRefreshRoom = "";
           try {
-            sessionStorage.removeItem("six7_refresh_relationships_v1");
+            sessionStorage.removeItem("phantom_refresh_relationships_v1");
           } catch {}
         }
 
         emitSnapshot("relationship_continuity_adopted_from_surviving_peer");
       } else if (continuityPending) {
         if (
-          six7RelationshipRevoked.has(from) ||
+          phantomRelationshipRevoked.has(from) ||
           !current?.cycleId ||
           current.endedAt ||
           !incomingAccepted ||
-          !six7RelationshipMatches(msg, current)
+          !phantomRelationshipMatches(msg, current)
         ) {
           emitSnapshot("veil_status_ignored_wrong_continuity_cycle");
           return true;
         }
 
-        six7RelationshipRevoked.delete(from);
+        phantomRelationshipRevoked.delete(from);
         setState(from, VEIL.ESTABLISHED, true);
-        six7PendingRefreshRelationships.delete(from);
+        phantomPendingRefreshRelationships.delete(from);
 
-        if (!six7PendingRefreshRelationships.size) {
-          six7PendingRefreshRoom = "";
+        if (!phantomPendingRefreshRelationships.size) {
+          phantomPendingRefreshRoom = "";
           try {
-            sessionStorage.removeItem("six7_refresh_relationships_v1");
+            sessionStorage.removeItem("phantom_refresh_relationships_v1");
           } catch {}
         }
 
         emitSnapshot("relationship_continuity_peer_validated");
       } else {
         if (
-          six7RelationshipRevoked.has(from) ||
-          !six7RelationshipIsAccepted(current)
+          phantomRelationshipRevoked.has(from) ||
+          !phantomRelationshipIsAccepted(current)
         ) {
           emitSnapshot("veil_status_ignored_no_active_relationship_cycle");
           return true;
         }
-        if (!six7RelationshipMatches(msg, current)) {
+        if (!phantomRelationshipMatches(msg, current)) {
           emitSnapshot("veil_status_ignored_wrong_relationship_cycle");
           return true;
         }
@@ -4242,7 +4241,7 @@ export function createExtractedEngine(host) {
       );
 
       if (reconnectProof) {
-        six7PresentReconnect(
+        phantomPresentReconnect(
           from,
           "veil_status_reply",
           String(msg?.bootId || ""),
@@ -4250,7 +4249,7 @@ export function createExtractedEngine(host) {
       }
 
       if (!msg.replyTo) {
-        six7SendControl(
+        phantomSendControl(
           {
             type: "veil_status",
             from: selfHKey,
@@ -4260,25 +4259,25 @@ export function createExtractedEngine(host) {
             cycleId: current.cycleId,
             replyTo: msg.cid || null,
             reconnectProbe: msg?.reconnectProbe === true,
-            bootId: six7BootId,
+            bootId: phantomBootId,
           },
           "veil_status",
         );
       }
 
-      six7RequestChatPipe(from, "relationship_status_reconcile");
+      phantomRequestChatPipe(from, "relationship_status_reconcile");
       return true;
     }
 
     if (type === "sys_block") {
-      six7BlockedByPeers.add(from);
-      six7BlockedPeers.delete(from);
-      six7RelationshipEnd(from, "blocked_by_peer", now(), true);
-      six7CancelReconnect(from);
+      phantomBlockedByPeers.add(from);
+      phantomBlockedPeers.delete(from);
+      phantomRelationshipEnd(from, "blocked_by_peer", now(), true);
+      phantomCancelReconnect(from);
       loungeWaiters.delete(from);
-      six7PendingRelationship.delete(from);
-      six7PendingDm.delete(from);
-      six7PendingRtcIce.delete(from);
+      phantomPendingRelationship.delete(from);
+      phantomPendingDm.delete(from);
+      phantomPendingRtcIce.delete(from);
       setState(from, VEIL.OUTSIDE, true);
       rtcTeardown(from, "blocked_by_peer");
       post("BLOCKED_BY", { from, at: msg.t || msg.sentAt || Date.now() });
@@ -4286,26 +4285,26 @@ export function createExtractedEngine(host) {
     }
 
     if (type === "sys_unblock") {
-      six7BlockedByPeers.delete(from);
-      six7BlockedPeers.delete(from);
-      six7RelationshipRevoked.delete(from);
+      phantomBlockedByPeers.delete(from);
+      phantomBlockedPeers.delete(from);
+      phantomRelationshipRevoked.delete(from);
       if (
-        six7CommittedMember(from) &&
-        !six7PendingTerminalExits.has(from) &&
-        !__six7MembershipExitApplied.has(from)
+        phantomCommittedMember(from) &&
+        !phantomPendingTerminalExits.has(from) &&
+        !__phantomMembershipExitApplied.has(from)
       ) {
-        __six7GoneNotified.delete(from);
+        __phantomGoneNotified.delete(from);
       }
-      six7RelationshipEnd(from, "unblocked", now(), false);
+      phantomRelationshipEnd(from, "unblocked", now(), false);
       setState(from, VEIL.OUTSIDE, true);
       post("UNBLOCKED_BY", { from, at: msg.t || msg.sentAt || Date.now() });
 
-      const transaction = six7TemporarySysTransactions.get(from);
+      const transaction = phantomTemporarySysTransactions.get(from);
       if (transaction) {
         transaction.state = "command_received";
       }
 
-      const ackSent = six7SendControl(
+      const ackSent = phantomSendControl(
         {
           type: "sys_unblock_ack",
           from: selfHKey,
@@ -4314,8 +4313,8 @@ export function createExtractedEngine(host) {
           ackFor: msg.cid || null,
           sysTxId: msg.sysTxId || msg.cid || null,
           authorityHint:
-            msg.recoveryProbe === true || via === "six7_sys_temporary"
-              ? six7AuthorityGossipSnapshot()
+            msg.recoveryProbe === true || via === "phantom_sys_temporary"
+              ? phantomAuthorityGossipSnapshot()
               : null,
           t: now(),
         },
@@ -4331,21 +4330,21 @@ export function createExtractedEngine(host) {
     }
 
     if (type === "sys_unblock_ack") {
-      six7BlockedPeers.delete(from);
-      six7BlockedByPeers.delete(from);
-      six7RelationshipRevoked.delete(from);
+      phantomBlockedPeers.delete(from);
+      phantomBlockedByPeers.delete(from);
+      phantomRelationshipRevoked.delete(from);
       if (
-        six7CommittedMember(from) &&
-        !six7PendingTerminalExits.has(from) &&
-        !__six7MembershipExitApplied.has(from)
+        phantomCommittedMember(from) &&
+        !phantomPendingTerminalExits.has(from) &&
+        !__phantomMembershipExitApplied.has(from)
       ) {
-        __six7GoneNotified.delete(from);
+        __phantomGoneNotified.delete(from);
       }
-      six7RelationshipEnd(from, "unblocked_ack", now(), false);
+      phantomRelationshipEnd(from, "unblocked_ack", now(), false);
       setState(from, VEIL.OUTSIDE, true);
 
       if (msg.authorityHint) {
-        six7RememberAuthorityGossip(from, msg.authorityHint);
+        phantomRememberAuthorityGossip(from, msg.authorityHint);
       }
 
       post("SYS_UNBLOCK_ACK", {
@@ -4354,14 +4353,14 @@ export function createExtractedEngine(host) {
         at: msg.t || msg.sentAt || Date.now(),
       });
 
-      const transaction = six7TemporarySysTransactions.get(from);
+      const transaction = phantomTemporarySysTransactions.get(from);
       if (
         transaction &&
         String(msg.sysTxId || "") === String(transaction.id || "")
       ) {
         transaction.state = "acknowledged";
         transaction.ackAt = now();
-        six7CloseTemporarySysTransaction(from, "acknowledged");
+        phantomCloseTemporarySysTransaction(from, "acknowledged");
       }
 
       return true;
@@ -4370,36 +4369,36 @@ export function createExtractedEngine(host) {
     return true;
   }
 
-  function six7BlockKey(hKey) {
+  function phantomBlockKey(hKey) {
     return String(hKey || "")
       .slice(0, 16)
       .toLowerCase();
   }
 
-  function six7IsBlocked(hKey) {
-    const key = six7BlockKey(hKey);
-    return !!key && six7BlockedPeers.has(key);
+  function phantomIsBlocked(hKey) {
+    const key = phantomBlockKey(hKey);
+    return !!key && phantomBlockedPeers.has(key);
   }
 
-  function six7IsBlockedBy(hKey) {
-    const key = six7BlockKey(hKey);
-    return !!key && six7BlockedByPeers.has(key);
+  function phantomIsBlockedBy(hKey) {
+    const key = phantomBlockKey(hKey);
+    return !!key && phantomBlockedByPeers.has(key);
   }
 
   function getState(hKey) {
-    return six7RelationshipGet(hKey)?.state || VEIL.OUTSIDE;
+    return phantomRelationshipGet(hKey)?.state || VEIL.OUTSIDE;
   }
 
-  function six7RequestChatPipe(hKey, reason = "relationship") {
+  function phantomRequestChatPipe(hKey, reason = "relationship") {
     if (!selfHKey) return false;
 
-    const key = six7ShortKey(hKey);
+    const key = phantomShortKey(hKey);
     if (!key) return false;
 
     if (
-      six7RelationshipRevoked.has(key) ||
-      six7PendingTerminalExits.has(key) ||
-      __six7GoneNotified.has(key)
+      phantomRelationshipRevoked.has(key) ||
+      phantomPendingTerminalExits.has(key) ||
+      __phantomGoneNotified.has(key)
     ) {
       concierge.lastErr =
         "chat_pipe_blocked_relationship_terminal:" +
@@ -4408,11 +4407,11 @@ export function createExtractedEngine(host) {
       return false;
     }
 
-    const relationship = six7RelationshipGet(key);
+    const relationship = phantomRelationshipGet(key);
     const st = relationship?.state || VEIL.OUTSIDE;
 
     if (
-      !six7RelationshipIsAccepted(relationship) ||
+      !phantomRelationshipIsAccepted(relationship) ||
       (st !== VEIL.ESTABLISHED && st !== VEIL.INSIDE)
     ) {
       concierge.lastErr =
@@ -4421,12 +4420,12 @@ export function createExtractedEngine(host) {
       return false;
     }
 
-    return six7EnsureChatPipe(key, reason);
+    return phantomEnsureChatPipe(key, reason);
   }
 
-  function six7OwnsChatPipeOffer(hKey) {
-    const key = six7ShortKey(hKey);
-    const self = six7ShortKey(selfHKey);
+  function phantomOwnsChatPipeOffer(hKey) {
+    const key = phantomShortKey(hKey);
+    const self = phantomShortKey(selfHKey);
     if (!key || !self || key === self) return false;
 
     // Chat pipe ownership is per accepted peer pair.
@@ -4434,17 +4433,17 @@ export function createExtractedEngine(host) {
     return self < key;
   }
 
-  async function six7EnsureChatPipe(hKey, reason = "relationship") {
+  async function phantomEnsureChatPipe(hKey, reason = "relationship") {
     if (!selfHKey) return false;
 
-    const key = six7ShortKey(hKey);
+    const key = phantomShortKey(hKey);
     if (!key) return false;
 
-    const relationship = six7RelationshipGet(key);
+    const relationship = phantomRelationshipGet(key);
     if (
-      !six7RelationshipIsAccepted(relationship) ||
-      six7PendingTerminalExits.has(key) ||
-      __six7GoneNotified.has(key)
+      !phantomRelationshipIsAccepted(relationship) ||
+      phantomPendingTerminalExits.has(key) ||
+      __phantomGoneNotified.has(key)
     ) {
       emitSnapshot("chat_pipe_ensure_blocked_relationship_cycle");
       return false;
@@ -4460,7 +4459,7 @@ export function createExtractedEngine(host) {
 
     loungeWaiters.delete(key);
 
-    let ent = six7ChatPeers.get(key);
+    let ent = phantomChatPeers.get(key);
     if (
       ent &&
       ent.relationshipCycleId &&
@@ -4502,7 +4501,7 @@ export function createExtractedEngine(host) {
           ent.chatReadyAt = ent.chatReadyAt || now();
           ent.chatProof = "chat_hello";
           ent.chatFault = "none";
-          six7CancelChatAttemptDeadline(key);
+          phantomCancelChatAttemptDeadline(key);
         }
 
         if (deferredReadyTransition) {
@@ -4519,11 +4518,11 @@ export function createExtractedEngine(host) {
             concierge.chatLastReconnectPeer = key;
           }
 
-          six7CancelReconnect(key, true);
+          phantomCancelReconnect(key, true);
           post("P2P_CHAT_READY", { from: key });
           rtcSendHello(key);
 
-          const q = six7PendingDm.get(key);
+          const q = phantomPendingDm.get(key);
 
           if (q && q.length) {
             const rest = [];
@@ -4551,11 +4550,11 @@ export function createExtractedEngine(host) {
             }
 
             if (rest.length) {
-              six7PendingDm.set(key, rest.slice(-SIX7_DM_PENDING_MAX));
+              phantomPendingDm.set(key, rest.slice(-PHANTOM_DM_PENDING_MAX));
               concierge.lastErr = "pending_dm_flush_partial";
               emitSnapshot("pending_dm_flush_partial");
             } else {
-              six7PendingDm.delete(key);
+              phantomPendingDm.delete(key);
               concierge.lastErr = null;
               emitSnapshot("pending_dm_flushed_chat_ready");
             }
@@ -4563,7 +4562,7 @@ export function createExtractedEngine(host) {
 
           emitSnapshot("chat_pipe_ready_from_deferred_hello");
         } else {
-          six7CancelReconnect(key, true);
+          phantomCancelReconnect(key, true);
           post("P2P_CHAT_READY", { from: key });
           emitSnapshot("chat_pipe_existing_hello_observed");
         }
@@ -4596,7 +4595,7 @@ export function createExtractedEngine(host) {
       return false;
     }
 
-    if (!six7OwnsChatPipeOffer(key)) {
+    if (!phantomOwnsChatPipeOffer(key)) {
       const role = String(
         concierge.localRoleCandidate || concierge.role || "peer",
       );
@@ -4616,7 +4615,7 @@ export function createExtractedEngine(host) {
       return false;
     }
 
-    const target = six7GetOrCreateChatPeer(key);
+    const target = phantomGetOrCreateChatPeer(key);
     if (target) {
       target.relationshipCycleId = relationship.cycleId;
       target.chatState = "needed";
@@ -4631,35 +4630,35 @@ export function createExtractedEngine(host) {
     return true;
   }
 
-  function six7ReconcileRelationshipStatus(reason = "relationship_status") {
+  function phantomReconcileRelationshipStatus(reason = "relationship_status") {
     if (!selfHKey || !videoId || !lastRoster || !lastRoster.size) return false;
     if (!concierge.sysReady) return false;
 
     if (
-      six7PendingRefreshRelationships.size &&
-      six7PendingRefreshRoom === String(videoId || "")
+      phantomPendingRefreshRelationships.size &&
+      phantomPendingRefreshRoom === String(videoId || "")
     ) {
       let probed = 0;
 
-      for (const peer of Array.from(six7PendingRefreshRelationships)) {
-        const key = six7ShortKey(peer);
+      for (const peer of Array.from(phantomPendingRefreshRelationships)) {
+        const key = phantomShortKey(peer);
 
-        if (!key || key === six7ShortKey(selfHKey)) {
-          six7PendingRefreshRelationships.delete(peer);
+        if (!key || key === phantomShortKey(selfHKey)) {
+          phantomPendingRefreshRelationships.delete(peer);
           continue;
         }
 
-        if (six7RelationshipRevoked.has(key)) {
-          six7PendingRefreshRelationships.delete(peer);
+        if (phantomRelationshipRevoked.has(key)) {
+          phantomPendingRefreshRelationships.delete(peer);
           continue;
         }
 
         if (!lastRoster.has(key)) continue;
 
-        const relationship = six7RelationshipGet(key);
+        const relationship = phantomRelationshipGet(key);
         if (!relationship?.cycleId || relationship.endedAt) continue;
 
-        six7SendControl(
+        phantomSendControl(
           {
             type: "veil_status",
             from: selfHKey,
@@ -4673,11 +4672,11 @@ export function createExtractedEngine(host) {
         probed++;
       }
 
-      if (!six7PendingRefreshRelationships.size) {
-        six7PendingRefreshRoom = "";
+      if (!phantomPendingRefreshRelationships.size) {
+        phantomPendingRefreshRoom = "";
 
         try {
-          sessionStorage.removeItem("six7_refresh_relationships_v1");
+          sessionStorage.removeItem("phantom_refresh_relationships_v1");
         } catch {}
 
         emitSnapshot("relationship_continuity_pending_drained");
@@ -4691,26 +4690,26 @@ export function createExtractedEngine(host) {
     let sent = 0;
 
     for (const hKey of Array.from(lastRoster || [])) {
-      const peer = six7ShortKey(hKey);
-      if (!peer || peer === six7ShortKey(selfHKey)) continue;
-      if (six7RelationshipRevoked.has(peer)) continue;
+      const peer = phantomShortKey(hKey);
+      if (!peer || peer === phantomShortKey(selfHKey)) continue;
+      if (phantomRelationshipRevoked.has(peer)) continue;
 
       const state = getState(peer);
       if (state !== VEIL.INSIDE && state !== VEIL.ESTABLISHED) continue;
 
-      six7SendControl(
+      phantomSendControl(
         {
           type: "veil_status",
           from: selfHKey,
           to: peer,
           videoId,
           state,
-          cycleId: six7RelationshipGet(peer)?.cycleId || null,
+          cycleId: phantomRelationshipGet(peer)?.cycleId || null,
         },
         "veil_status",
       );
 
-      six7RequestChatPipe(peer, "relationship_status_reconcile");
+      phantomRequestChatPipe(peer, "relationship_status_reconcile");
 
       sent++;
     }
@@ -4725,7 +4724,7 @@ export function createExtractedEngine(host) {
     const key = String(hKey || "").toLowerCase();
     if (!key) return;
 
-    const ent = six7ChatPeers.get(key);
+    const ent = phantomChatPeers.get(key);
     const pc = ent?.pc || null;
     const dc = ent?.dc || null;
     const dcState = String(dc?.readyState || "");
@@ -4741,28 +4740,28 @@ export function createExtractedEngine(host) {
     }
 
     if (!lastRoster.has(key)) {
-      CORE_DEBUG && console.log("[six7][CORE] waiting for roster →", key);
+      CORE_DEBUG && console.log("[phantom][CORE] waiting for roster →", key);
       loungeWaiters.add(key);
       return;
     }
 
     loungeWaiters.delete(key);
 
-    await six7EnsureChatPipe(key, "lounge_entry");
+    await phantomEnsureChatPipe(key, "lounge_entry");
   }
 
   function setState(hKey, next, force = false) {
     CORE_DEBUG && console.log("STATE", hKey, next);
 
-    const key = six7ShortKey(hKey);
+    const key = phantomShortKey(hKey);
     if (!key) return;
 
-    const rec = six7RelationshipGet(key);
+    const rec = phantomRelationshipGet(key);
     const prev = rec.state;
     if (prev === next && !force) return;
 
     if (next !== VEIL.OUTSIDE && !rec.cycleId) {
-      rec.cycleId = six7RelationshipCycleId(key, "state_transition");
+      rec.cycleId = phantomRelationshipCycleId(key, "state_transition");
       rec.createdAt = now();
       rec.endedAt = 0;
       rec.endReason = "none";
@@ -4774,13 +4773,13 @@ export function createExtractedEngine(host) {
       rec.endedAt = 0;
       rec.endReason = "none";
     }
-    six7Relationships.set(key, rec);
+    phantomRelationships.set(key, rec);
 
     try {
-      const relationships = Array.from(six7Relationships.values())
-        .filter((row) => six7RelationshipIsAccepted(row))
+      const relationships = Array.from(phantomRelationships.values())
+        .filter((row) => phantomRelationshipIsAccepted(row))
         .map((row) => ({
-          hKey: six7ShortKey(row.hKey),
+          hKey: phantomShortKey(row.hKey),
           cycleId: String(row.cycleId || ""),
           inviteCid: String(row.inviteCid || "") || null,
           remoteBootId: String(row.remoteBootId || "") || null,
@@ -4790,7 +4789,7 @@ export function createExtractedEngine(host) {
 
       if (videoId && relationships.length) {
         sessionStorage.setItem(
-          "six7_refresh_relationships_v1",
+          "phantom_refresh_relationships_v1",
           JSON.stringify({
             room: videoId,
             peers: relationships.map((row) => row.hKey),
@@ -4798,7 +4797,7 @@ export function createExtractedEngine(host) {
           }),
         );
       } else {
-        sessionStorage.removeItem("six7_refresh_relationships_v1");
+        sessionStorage.removeItem("phantom_refresh_relationships_v1");
       }
     } catch {}
 
@@ -4806,30 +4805,30 @@ export function createExtractedEngine(host) {
     emitSnapshot("veil_state_" + next);
   }
 
-  function six7ShortKey(hKey) {
+  function phantomShortKey(hKey) {
     return String(hKey || "")
       .slice(0, 16)
       .toLowerCase();
   }
 
-  function six7IsSysconRole(role) {
+  function phantomIsSysconRole(role) {
     role = String(role || "");
     return role === "syscon1" || role === "syscon2";
   }
 
-  function six7IsAuthoritySysTether(remoteHKey) {
-    const key = six7ShortKey(remoteHKey);
-    const self = six7ShortKey(selfHKey);
-    const one = six7ShortKey(concierge.syscon1);
-    const two = six7ShortKey(concierge.syscon2);
+  function phantomIsAuthoritySysTether(remoteHKey) {
+    const key = phantomShortKey(remoteHKey);
+    const self = phantomShortKey(selfHKey);
+    const one = phantomShortKey(concierge.syscon1);
+    const two = phantomShortKey(concierge.syscon2);
 
     if (!key || !self || !one || !two) return false;
 
     return (self === one && key === two) || (self === two && key === one);
   }
 
-  function six7OwnsPrimarySysState(remoteHKey) {
-    const key = six7ShortKey(remoteHKey);
+  function phantomOwnsPrimarySysState(remoteHKey) {
+    const key = phantomShortKey(remoteHKey);
     if (!key) return false;
 
     const role = String(
@@ -4837,30 +4836,30 @@ export function createExtractedEngine(host) {
     );
 
     if (role === "syscon1" || role === "syscon2") {
-      return six7IsAuthoritySysTether(key);
+      return phantomIsAuthoritySysTether(key);
     }
 
-    return key === six7ShortKey(six7SysTargetFromCandidates());
+    return key === phantomShortKey(phantomSysTargetFromCandidates());
   }
 
-  function six7SysBirthRole(remoteHKey) {
-    const key = six7ShortKey(remoteHKey);
-    const self = six7ShortKey(selfHKey);
-    const one = six7ShortKey(concierge.syscon1);
-    const two = six7ShortKey(concierge.syscon2);
+  function phantomSysBirthRole(remoteHKey) {
+    const key = phantomShortKey(remoteHKey);
+    const self = phantomShortKey(selfHKey);
+    const one = phantomShortKey(concierge.syscon1);
+    const two = phantomShortKey(concierge.syscon2);
     const role = String(
       concierge.localRoleCandidate || concierge.role || "peer",
     );
 
     if (!key || !self || key === self) return "illegal";
 
-    const transaction = six7TemporarySysTransactions.get(key);
+    const transaction = phantomTemporarySysTransactions.get(key);
     if (
       transaction &&
       transaction.state !== "closed" &&
-      SIX7_TEMP_SYS_PURPOSES.has(String(transaction.purpose || ""))
+      PHANTOM_TEMP_SYS_PURPOSES.has(String(transaction.purpose || ""))
     ) {
-      return six7ShortKey(transaction.initiator) === self
+      return phantomShortKey(transaction.initiator) === self
         ? "opener"
         : "acceptor";
     }
@@ -4872,15 +4871,15 @@ export function createExtractedEngine(host) {
     // Every ordinary peer owns exactly one SYS tether to its authoritative
     // target. No peer may open a SYS edge to another ordinary peer.
     if (role === "peer") {
-      const target = six7ShortKey(six7SysTargetFromCandidates());
+      const target = phantomShortKey(phantomSysTargetFromCandidates());
       return target && key === target ? "opener" : "illegal";
     }
 
     // Syscon1 accepts every doorway-admitted ordinary peer tether. This is a
     // separate per-peer SYS edge, not the syscon1<->syscon2 authority attempt.
     if (role === "syscon1" && self === one && key !== one && key !== two) {
-      const doorwayAdmitted = six7DoorwayAdmittedPeers.has(key);
-      const committedMember = six7CommittedMember(key);
+      const doorwayAdmitted = phantomDoorwayAdmittedPeers.has(key);
+      const committedMember = phantomCommittedMember(key);
 
       // A continuing committed member may restore its ordinary SYS tether
       // without re-entering through CF. Doorway admission remains required
@@ -4892,17 +4891,17 @@ export function createExtractedEngine(host) {
     return "illegal";
   }
 
-  function six7SysEdgeAttempt(remoteHKey, create = true) {
-    const key = six7ShortKey(remoteHKey);
+  function phantomSysEdgeAttempt(remoteHKey, create = true) {
+    const key = phantomShortKey(remoteHKey);
     if (!key) return null;
 
-    const ent = create ? six7GetOrCreateSysPeer(key) : six7SysPeers.get(key);
+    const ent = create ? phantomGetOrCreateSysPeer(key) : phantomSysPeers.get(key);
     if (!ent) return null;
 
     if (!ent.attempt && create) {
       ent.attempt = {
-        id: six7NewSysTransportAttemptId(key),
-        role: six7SysBirthRole(key),
+        id: phantomNewSysTransportAttemptId(key),
+        role: phantomSysBirthRole(key),
         state: "missing",
         startedAt: 0,
         lastEvent: "created",
@@ -4913,12 +4912,12 @@ export function createExtractedEngine(host) {
     return ent.attempt || null;
   }
 
-  function six7AuthorityRosterRows(rows = []) {
+  function phantomAuthorityRosterRows(rows = []) {
     const out = [];
     const seen = new Set();
 
     for (const row of Array.isArray(rows) ? rows : []) {
-      const key = six7ShortKey(row?.hKey || row?.from || row);
+      const key = phantomShortKey(row?.hKey || row?.from || row);
       if (!key || seen.has(key)) continue;
       seen.add(key);
 
@@ -4929,7 +4928,7 @@ export function createExtractedEngine(host) {
        * boot metadata, timestamps, and presentation provenance stay in the
        * presence/identity plane and must never be duplicated into SYS STATUS.
        */
-      const presence = six7PresenceBook.get(key) || {};
+      const presence = phantomPresenceBook.get(key) || {};
       const handle = String(
         (row && typeof row === "object" ? row.handle : "") ||
           presence.handle ||
@@ -4946,16 +4945,16 @@ export function createExtractedEngine(host) {
     return out;
   }
 
-  function six7AuthorityRosterKey(rows = []) {
-    return six7AuthorityRosterRows(rows)
+  function phantomAuthorityRosterKey(rows = []) {
+    return phantomAuthorityRosterRows(rows)
       .map((row) => row.hKey)
       .sort()
       .join(",");
   }
-  function six7TerminalExitCommand(msg, via = "authority_exit") {
+  function phantomTerminalExitCommand(msg, via = "authority_exit") {
     if (!msg || typeof msg !== "object") return false;
 
-    const member = six7ShortKey(msg.from || msg.member);
+    const member = phantomShortKey(msg.from || msg.member);
     const room = String(msg.room || msg.videoId || "");
     const bootId = String(msg.bootId || "");
     const epoch = Number(msg.epoch || concierge.sysconEpoch || 0);
@@ -4963,33 +4962,33 @@ export function createExtractedEngine(host) {
 
     if (!member || !room || (videoId && room !== String(videoId))) return false;
 
-    const self = six7ShortKey(selfHKey);
+    const self = phantomShortKey(selfHKey);
     if (self && member === self) {
-      const selfReplacement = six7SysReplacementWindows.get(member);
+      const selfReplacement = phantomSysReplacementWindows.get(member);
       try {
         if (selfReplacement?.timer) clearTimeout(selfReplacement.timer);
       } catch {}
-      six7PendingTerminalExits.delete(member);
-      six7SysReplacementWindows.delete(member);
+      phantomPendingTerminalExits.delete(member);
+      phantomSysReplacementWindows.delete(member);
       emitSnapshot("terminal_exit_self_ignored");
       return false;
     }
 
-    const knownBootId = String(six7RemoteBootIds.get(member) || "");
+    const knownBootId = String(phantomRemoteBootIds.get(member) || "");
     if (bootId && knownBootId && bootId !== knownBootId) {
       emitSnapshot("stale_terminal_exit_boot_ignored");
       return false;
     }
 
-    const committed = six7LocalCommittedAuthority();
-    const committedRows = six7AuthorityRosterRows(committed?.roster);
+    const committed = phantomLocalCommittedAuthority();
+    const committedRows = phantomAuthorityRosterRows(committed?.roster);
     const committedKeys = new Set(committedRows.map((row) => row.hKey));
 
-    const pending = six7SysAuthority.pending;
-    const pendingRows = six7AuthorityRosterRows(pending?.snapshot?.roster);
+    const pending = phantomSysAuthority.pending;
+    const pendingRows = phantomAuthorityRosterRows(pending?.snapshot?.roster);
     const pendingKeys = new Set(pendingRows.map((row) => row.hKey));
     const pendingBaseKeys = new Set(
-      six7AuthorityRosterRows(pending?.baseRoster).map((row) => row.hKey),
+      phantomAuthorityRosterRows(pending?.baseRoster).map((row) => row.hKey),
     );
     const pendingUncommittedMember = !!(
       pending &&
@@ -5001,16 +5000,16 @@ export function createExtractedEngine(host) {
     // never room truth. Abort that uncommitted transaction without projecting
     // ROOM_EXITED, then restore the committed base (or self-only genesis).
     if (pendingUncommittedMember) {
-      const pendingLeader = six7ShortKey(pending?.snapshot?.syscon1);
+      const pendingLeader = phantomShortKey(pending?.snapshot?.syscon1);
       const survivors = pendingRows.filter((row) => row.hKey !== member);
       const pendingId = String(pending?.id || "");
 
-      six7SysAuthority.pending = null;
-      six7TeardownSysPeer(member, "uncommitted_member_exit");
-      six7PendingTerminalExits.delete(member);
-      six7SysReplacementWindows.delete(member);
+      phantomSysAuthority.pending = null;
+      phantomTeardownSysPeer(member, "uncommitted_member_exit");
+      phantomPendingTerminalExits.delete(member);
+      phantomSysReplacementWindows.delete(member);
 
-      six7MembershipAuditSet("pending_aborted", {
+      phantomMembershipAuditSet("pending_aborted", {
         peer: member,
         id: pendingId,
         reason: "uncommitted_member_exit",
@@ -5022,15 +5021,15 @@ export function createExtractedEngine(host) {
         pendingLeader === self &&
         survivors.some((row) => row.hKey === self)
       ) {
-        six7StageSyscon1Authority(
+        phantomStageSyscon1Authority(
           survivors,
           "syscon1_genesis_member_exit_restart",
         );
-        six7PublishCommittedAuthority(
+        phantomPublishCommittedAuthority(
           "syscon1_genesis_member_exit_restart_published",
         );
       } else if (committed) {
-        six7PublishCommittedAuthority("syscon1_admission_aborted_member_exit");
+        phantomPublishCommittedAuthority("syscon1_admission_aborted_member_exit");
       }
 
       emitSnapshot("uncommitted_member_exit_transaction_aborted");
@@ -5038,17 +5037,17 @@ export function createExtractedEngine(host) {
     }
 
     if (committed && !committedKeys.has(member)) {
-      const staleReplacement = six7SysReplacementWindows.get(member);
+      const staleReplacement = phantomSysReplacementWindows.get(member);
       try {
         if (staleReplacement?.timer) clearTimeout(staleReplacement.timer);
       } catch {}
-      six7PendingTerminalExits.delete(member);
-      six7SysReplacementWindows.delete(member);
+      phantomPendingTerminalExits.delete(member);
+      phantomSysReplacementWindows.delete(member);
       emitSnapshot("terminal_exit_member_already_absent_cleared");
       return true;
     }
 
-    const replacementOwner = six7SysReplacementWindows.get(member) || {};
+    const replacementOwner = phantomSysReplacementWindows.get(member) || {};
     try {
       if (replacementOwner.timer) clearTimeout(replacementOwner.timer);
     } catch {}
@@ -5060,7 +5059,7 @@ export function createExtractedEngine(host) {
     );
     replacementOwner.bootId =
       bootId || knownBootId || replacementOwner.bootId || null;
-    six7SysReplacementWindows.set(member, replacementOwner);
+    phantomSysReplacementWindows.set(member, replacementOwner);
 
     const command = {
       bootId: bootId || knownBootId || null,
@@ -5069,13 +5068,13 @@ export function createExtractedEngine(host) {
       via: String(via || "authority_exit"),
       reason: String(msg.reason || via || "authority_exit"),
     };
-    six7PendingTerminalExits.set(member, command);
-    six7RefreshSysCandidates([], "confirmed_terminal_exit");
+    phantomPendingTerminalExits.set(member, command);
+    phantomRefreshSysCandidates([], "confirmed_terminal_exit");
 
     const role = String(
       concierge.localRoleCandidate || concierge.role || "peer",
     );
-    const currentOne = six7ShortKey(concierge.syscon1);
+    const currentOne = phantomShortKey(concierge.syscon1);
 
     if (!self || role !== "syscon1" || currentOne !== self || !committed) {
       emitSnapshot("terminal_exit_recorded_waiting_for_syscon1");
@@ -5083,11 +5082,11 @@ export function createExtractedEngine(host) {
     }
 
     const committedTerminalExits = Array.from(
-      six7PendingTerminalExits.entries(),
+      phantomPendingTerminalExits.entries(),
     )
-      .filter(([key]) => committedKeys.has(six7ShortKey(key)))
+      .filter(([key]) => committedKeys.has(phantomShortKey(key)))
       .map(([key, rec]) => ({
-        member: six7ShortKey(key),
+        member: phantomShortKey(key),
         bootId: String(rec?.bootId || "") || null,
         epoch: Number(rec?.epoch || epoch || 0),
         at: Number(rec?.at || at),
@@ -5105,8 +5104,8 @@ export function createExtractedEngine(host) {
       return false;
     }
 
-    const committedOne = six7ShortKey(committed.syscon1);
-    const committedTwo = six7ShortKey(committed.syscon2);
+    const committedOne = phantomShortKey(committed.syscon1);
+    const committedTwo = phantomShortKey(committed.syscon2);
     const activeLeader = committedOne === self;
     const promotedMirror = !!(
       committedTwo === self && terminalMembers.has(committedOne)
@@ -5116,7 +5115,7 @@ export function createExtractedEngine(host) {
       (!committedTwo || terminalMembers.has(committedTwo))
     );
     const electedSuccessor = oldSpineTerminal
-      ? six7ElectAuthorityCandidate(nextRoster, "", true, true)
+      ? phantomElectAuthorityCandidate(nextRoster, "", true, true)
       : null;
     const promotedSuccessor = !!(
       !activeLeader &&
@@ -5138,7 +5137,7 @@ export function createExtractedEngine(host) {
       : promotedMirror
         ? "syscon1_promoted_terminal_exit"
         : "syscon1_terminal_exit";
-    const staged = six7StageSyscon1Authority(
+    const staged = phantomStageSyscon1Authority(
       nextRoster,
       stageVia,
       committed,
@@ -5147,29 +5146,29 @@ export function createExtractedEngine(host) {
     );
 
     if (!staged) {
-      if (promotion) six7ScheduleSysAdmission(stageVia + "_restore_mirror");
+      if (promotion) phantomScheduleSysAdmission(stageVia + "_restore_mirror");
       emitSnapshot(stageVia + "_waiting");
       return true;
     }
 
-    six7PublishCommittedAuthority(stageVia + "_published");
+    phantomPublishCommittedAuthority(stageVia + "_published");
     emitSnapshot(stageVia + "_staged");
     return true;
   }
 
-  function six7ResumeTerminalAuthority(reason = "authority_resume") {
-    if (!six7PendingTerminalExits.size) return false;
+  function phantomResumeTerminalAuthority(reason = "authority_resume") {
+    if (!phantomPendingTerminalExits.size) return false;
 
     let touched = false;
-    const entries = Array.from(six7PendingTerminalExits.entries()).sort(
+    const entries = Array.from(phantomPendingTerminalExits.entries()).sort(
       (a, b) =>
         Number(a[1]?.at || 0) - Number(b[1]?.at || 0) ||
         String(a[0]).localeCompare(String(b[0])),
     );
 
     for (const [member, command] of entries) {
-      const beforeSeq = Number(six7SysAuthority.rosterSeq || 0);
-      const accepted = six7TerminalExitCommand(
+      const beforeSeq = Number(phantomSysAuthority.rosterSeq || 0);
+      const accepted = phantomTerminalExitCommand(
         {
           type: "authority_exit",
           from: member,
@@ -5185,8 +5184,8 @@ export function createExtractedEngine(host) {
       );
       touched = touched || accepted;
 
-      if (six7SysAuthority.pending) break;
-      if (Number(six7SysAuthority.rosterSeq || 0) === beforeSeq) break;
+      if (phantomSysAuthority.pending) break;
+      if (Number(phantomSysAuthority.rosterSeq || 0) === beforeSeq) break;
     }
 
     if (touched)
@@ -5194,20 +5193,20 @@ export function createExtractedEngine(host) {
     return touched;
   }
 
-  function six7SendAuthorityDepartureCommand(
+  function phantomSendAuthorityDepartureCommand(
     reason = "session_kill",
     final = true,
   ) {
-    const self = six7ShortKey(selfHKey);
+    const self = phantomShortKey(selfHKey);
     const role = String(
       concierge.localRoleCandidate || concierge.role || "peer",
     );
-    const one = six7ShortKey(concierge.syscon1);
-    const two = six7ShortKey(concierge.syscon2);
+    const one = phantomShortKey(concierge.syscon1);
+    const two = phantomShortKey(concierge.syscon2);
     const target = role === "syscon1" ? two : one;
     const type = final ? "authority_exit" : "authority_detach";
 
-    if (!self || !target || target === self || !six7HasOpenSysPipe(target)) {
+    if (!self || !target || target === self || !phantomHasOpenSysPipe(target)) {
       emitSnapshot(type + "_command_no_sys_route");
       return false;
     }
@@ -5219,25 +5218,25 @@ export function createExtractedEngine(host) {
       to: target,
       room: videoId || null,
       videoId: videoId || null,
-      bootId: six7BootId,
+      bootId: phantomBootId,
       epoch: Number(concierge.sysconEpoch || 0),
       reason: String(reason || (final ? "session_kill" : "document_detach")),
       at: now(),
     };
 
-    const sent = six7SendSysControl(command, type);
+    const sent = phantomSendSysControl(command, type);
     emitSnapshot(sent ? type + "_command_sent" : type + "_command_failed");
     return sent;
   }
 
-  function six7SendTerminalExitCommand(reason = "session_kill") {
-    return six7SendAuthorityDepartureCommand(reason, true);
+  function phantomSendTerminalExitCommand(reason = "session_kill") {
+    return phantomSendAuthorityDepartureCommand(reason, true);
   }
 
-  function six7SendDocumentDetachCommand(reason = "document_detach") {
-    return six7SendAuthorityDepartureCommand(reason, false);
+  function phantomSendDocumentDetachCommand(reason = "document_detach") {
+    return phantomSendAuthorityDepartureCommand(reason, false);
   }
-  function six7ApplyCommittedAuthority(
+  function phantomApplyCommittedAuthority(
     snapshot,
     via = "sys_authority",
     previousRowsOverride = null,
@@ -5246,13 +5245,13 @@ export function createExtractedEngine(host) {
     if (!snapshot || typeof snapshot !== "object") return false;
 
     const room = String(snapshot.room || videoId || "");
-    const from = six7ShortKey(snapshot.from);
-    const one = six7ShortKey(snapshot.syscon1);
-    const two = six7ShortKey(snapshot.syscon2);
+    const from = phantomShortKey(snapshot.from);
+    const one = phantomShortKey(snapshot.syscon1);
+    const two = phantomShortKey(snapshot.syscon2);
     const epoch = Number(snapshot.epoch || 0);
     const rosterSeq = Number(snapshot.rosterSeq || 0);
-    const roster = six7AuthorityRosterRows(snapshot.roster);
-    const self = six7ShortKey(selfHKey);
+    const roster = phantomAuthorityRosterRows(snapshot.roster);
+    const self = phantomShortKey(selfHKey);
 
     if (!room || (videoId && room !== String(videoId))) return false;
     if (!from || !one || from !== one) return false;
@@ -5267,24 +5266,24 @@ export function createExtractedEngine(host) {
 
     if (
       transaction &&
-      (six7AuthoritySnapshotId(transaction.snapshot) !==
-        six7AuthoritySnapshotId(snapshot) ||
+      (phantomAuthoritySnapshotId(transaction.snapshot) !==
+        phantomAuthoritySnapshotId(snapshot) ||
         String(transaction.id || "") !==
-          six7AuthorityTransactionId(transaction))
+          phantomAuthorityTransactionId(transaction))
     ) {
-      six7MembershipAuditSet("apply_rejected", {
+      phantomMembershipAuditSet("apply_rejected", {
         id: transaction?.id,
         reason: "transaction_integrity_mismatch",
       });
       return false;
     }
 
-    const currentEpoch = Number(six7SysAuthority.epoch || 0);
-    const currentSeq = Number(six7SysAuthority.rosterSeq || 0);
-    const currentOne = six7ShortKey(six7SysAuthority.syscon1);
-    const currentTwo = six7ShortKey(six7SysAuthority.syscon2);
-    const incomingKey = six7AuthorityRosterKey(roster);
-    const currentKey = six7AuthorityRosterKey(six7SysAuthority.roster);
+    const currentEpoch = Number(phantomSysAuthority.epoch || 0);
+    const currentSeq = Number(phantomSysAuthority.rosterSeq || 0);
+    const currentOne = phantomShortKey(phantomSysAuthority.syscon1);
+    const currentTwo = phantomShortKey(phantomSysAuthority.syscon2);
+    const incomingKey = phantomAuthorityRosterKey(roster);
+    const currentKey = phantomAuthorityRosterKey(phantomSysAuthority.roster);
 
     if (currentEpoch && epoch < currentEpoch) {
       emitSnapshot("sys_authority_older_epoch_ignored");
@@ -5319,15 +5318,15 @@ export function createExtractedEngine(host) {
     }
 
     const previousRows = Array.isArray(previousRowsOverride)
-      ? six7AuthorityRosterRows(previousRowsOverride)
-      : six7AuthorityRosterRows(six7SysAuthority.roster);
+      ? phantomAuthorityRosterRows(previousRowsOverride)
+      : phantomAuthorityRosterRows(phantomSysAuthority.roster);
     const previousRoster = new Set(previousRows.map((row) => row.hKey));
     const nextRoster = new Set(roster.map((row) => row.hKey));
 
     if (transaction?.admission?.member) {
-      const member = six7ShortKey(transaction.admission.member);
+      const member = phantomShortKey(transaction.admission.member);
       const bootId = String(transaction.admission.bootId || "");
-      const knownBoot = String(six7RemoteBootIds.get(member) || "");
+      const knownBoot = String(phantomRemoteBootIds.get(member) || "");
 
       if (
         !member ||
@@ -5335,7 +5334,7 @@ export function createExtractedEngine(host) {
         !nextRoster.has(member) ||
         (bootId && knownBoot && bootId !== knownBoot)
       ) {
-        six7MembershipAuditSet("apply_rejected", {
+        phantomMembershipAuditSet("apply_rejected", {
           peer: member,
           id: transaction.id,
           reason: "admission_incarnation_mismatch",
@@ -5357,20 +5356,20 @@ export function createExtractedEngine(host) {
       roster,
     };
 
-    Object.assign(six7SysAuthority, accepted);
+    Object.assign(phantomSysAuthority, accepted);
     // Accepted SYS authority replaces provisional provider epoch metadata.
     concierge.sysconEpoch = epoch;
     concierge.syscon1 = one;
     concierge.syscon2 = two || null;
 
-    lastRoster = six7MarkRosterAudit(
+    lastRoster = phantomMarkRosterAudit(
       "committed_sys_authority_apply",
       roster.map((row) => row.hKey),
       "committed_sys_authority_projection",
     );
 
     for (const row of roster) {
-      six7RememberPresencePeer(row, "six7_sys_authority", {
+      phantomRememberPresencePeer(row, "phantom_sys_authority", {
         peerEvent: false,
         rosterEvent: false,
       });
@@ -5379,18 +5378,18 @@ export function createExtractedEngine(host) {
     for (const newKey of nextRoster) {
       if (newKey === self || previousRoster.has(newKey)) continue;
 
-      const replacement = six7SysReplacementWindows.get(newKey);
+      const replacement = phantomSysReplacementWindows.get(newKey);
       try {
         if (replacement?.timer) clearTimeout(replacement.timer);
       } catch {}
 
-      six7PendingTerminalExits.delete(newKey);
-      six7SysReplacementWindows.delete(newKey);
-      __six7GoneNotified.delete(newKey);
-      __six7MembershipExitApplied.delete(newKey);
-      six7RelationshipRevoked.delete(newKey);
+      phantomPendingTerminalExits.delete(newKey);
+      phantomSysReplacementWindows.delete(newKey);
+      __phantomGoneNotified.delete(newKey);
+      __phantomMembershipExitApplied.delete(newKey);
+      phantomRelationshipRevoked.delete(newKey);
 
-      six7MembershipAuditSet("member_admitted", {
+      phantomMembershipAuditSet("member_admitted", {
         peer: newKey,
         reason: String(
           transaction?.admission?.via || via || "authority_commit",
@@ -5404,7 +5403,7 @@ export function createExtractedEngine(host) {
     for (const oldKey of previousRoster) {
       if (oldKey === self || nextRoster.has(oldKey)) continue;
 
-      const replacementOwner = six7SysReplacementWindows.get(oldKey);
+      const replacementOwner = phantomSysReplacementWindows.get(oldKey);
       if (replacementOwner) {
         try {
           if (replacementOwner.timer) clearTimeout(replacementOwner.timer);
@@ -5412,42 +5411,42 @@ export function createExtractedEngine(host) {
         replacementOwner.timer = null;
         replacementOwner.state = "committed";
         replacementOwner.committedAt = now();
-        six7SysReplacementWindows.set(oldKey, replacementOwner);
+        phantomSysReplacementWindows.set(oldKey, replacementOwner);
       }
 
-      six7NotifyPeerGone(oldKey, "ROOM_EXITED", now());
-      six7PendingTerminalExits.delete(oldKey);
-      six7SysReplacementWindows.delete(oldKey);
+      phantomNotifyPeerGone(oldKey, "ROOM_EXITED", now());
+      phantomPendingTerminalExits.delete(oldKey);
+      phantomSysReplacementWindows.delete(oldKey);
     }
 
-    for (const terminalKey of Array.from(six7PendingTerminalExits.keys())) {
-      const key = six7ShortKey(terminalKey);
+    for (const terminalKey of Array.from(phantomPendingTerminalExits.keys())) {
+      const key = phantomShortKey(terminalKey);
       if (!key || nextRoster.has(key)) continue;
-      const replacementOwner = six7SysReplacementWindows.get(key);
+      const replacementOwner = phantomSysReplacementWindows.get(key);
       try {
         if (replacementOwner?.timer) clearTimeout(replacementOwner.timer);
       } catch {}
-      six7PendingTerminalExits.delete(key);
-      six7SysReplacementWindows.delete(key);
+      phantomPendingTerminalExits.delete(key);
+      phantomSysReplacementWindows.delete(key);
     }
 
-    six7EmitPresenceRoster("committed_sys_authority_apply");
+    phantomEmitPresenceRoster("committed_sys_authority_apply");
     return true;
   }
-  function six7AuthoritySnapshotId(snapshot) {
+  function phantomAuthoritySnapshotId(snapshot) {
     if (!snapshot || typeof snapshot !== "object") return "";
 
     return [
       String(snapshot.room || ""),
       Number(snapshot.epoch || 0),
       Number(snapshot.rosterSeq || 0),
-      six7ShortKey(snapshot.syscon1),
-      six7ShortKey(snapshot.syscon2),
-      six7AuthorityRosterKey(snapshot.roster),
+      phantomShortKey(snapshot.syscon1),
+      phantomShortKey(snapshot.syscon2),
+      phantomAuthorityRosterKey(snapshot.roster),
     ].join(":");
   }
 
-  function six7AuthorityTerminalExits(source) {
+  function phantomAuthorityTerminalExits(source) {
     const input = Array.isArray(source?.terminalExits)
       ? source.terminalExits
       : source?.terminalExit
@@ -5456,7 +5455,7 @@ export function createExtractedEngine(host) {
     const byMember = new Map();
 
     for (const rec of input) {
-      const member = six7ShortKey(rec?.member || rec?.from);
+      const member = phantomShortKey(rec?.member || rec?.from);
       if (!member) continue;
 
       const normalized = {
@@ -5477,11 +5476,11 @@ export function createExtractedEngine(host) {
     );
   }
 
-  function six7AuthorityTransactionId(pending) {
+  function phantomAuthorityTransactionId(pending) {
     if (!pending || typeof pending !== "object") return "";
 
     const base = pending.baseAuthority || null;
-    const terminalKey = six7AuthorityTerminalExits(pending)
+    const terminalKey = phantomAuthorityTerminalExits(pending)
       .map((rec) =>
         [rec.member, rec.bootId || "", rec.epoch, rec.at, rec.via].join("~"),
       )
@@ -5490,52 +5489,52 @@ export function createExtractedEngine(host) {
     const leadership = pending.leadership || null;
 
     return [
-      six7AuthoritySnapshotId(pending.snapshot),
+      phantomAuthoritySnapshotId(pending.snapshot),
       Number(pending.baseEpoch || 0),
       Number(pending.baseRosterSeq || 0),
-      six7AuthorityRosterKey(pending.baseRoster),
-      six7ShortKey(base?.syscon1),
-      six7ShortKey(base?.syscon2),
+      phantomAuthorityRosterKey(pending.baseRoster),
+      phantomShortKey(base?.syscon1),
+      phantomShortKey(base?.syscon2),
       terminalKey,
       String(admission?.member || ""),
       String(admission?.bootId || ""),
       String(leadership?.mode || ""),
-      six7ShortKey(leadership?.winner),
-      six7ShortKey(leadership?.baseOne),
-      six7ShortKey(leadership?.baseTwo),
+      phantomShortKey(leadership?.winner),
+      phantomShortKey(leadership?.baseOne),
+      phantomShortKey(leadership?.baseTwo),
     ].join(":");
   }
 
-  function six7ElectAuthorityCandidate(
+  function phantomElectAuthorityCandidate(
     rows,
     excludedMember = "",
     requireOpen = true,
     includeSelf = false,
   ) {
-    const excluded = six7ShortKey(excludedMember);
-    const self = six7ShortKey(selfHKey);
+    const excluded = phantomShortKey(excludedMember);
+    const self = phantomShortKey(selfHKey);
     const nowAt = now();
 
-    const candidates = six7AuthorityRosterRows(rows)
-      .map((row) => six7ShortKey(row?.hKey || row?.from || row))
+    const candidates = phantomAuthorityRosterRows(rows)
+      .map((row) => phantomShortKey(row?.hKey || row?.from || row))
       .filter(
         (key) =>
           key &&
           key !== excluded &&
-          !six7PendingTerminalExits.has(key) &&
+          !phantomPendingTerminalExits.has(key) &&
           (includeSelf || key !== self),
       )
       .map((key) => {
-        const presence = six7PresenceBook.get(key) || {};
-        const ent = six7SysPeers.get(key) || null;
+        const presence = phantomPresenceBook.get(key) || {};
+        const ent = phantomSysPeers.get(key) || null;
         const localCandidate = includeSelf && key === self;
-        const open = localCandidate ? true : six7HasOpenSysPipe(key);
+        const open = localCandidate ? true : phantomHasOpenSysPipe(key);
         const lastGood = localCandidate
           ? nowAt
-          : Number(six7SysLastGoodRx.get(key) || 0);
+          : Number(phantomSysLastGoodRx.get(key) || 0);
         const proofEpoch = localCandidate
           ? Math.max(
-              Number(six7SysAuthority.epoch || 0),
+              Number(phantomSysAuthority.epoch || 0),
               Number(concierge.sysconEpoch || 0),
             )
           : Number(ent?.lastProofEpoch || 0);
@@ -5565,35 +5564,40 @@ export function createExtractedEngine(host) {
     return candidates[0]?.key || null;
   }
   let sdkAdminDutySequence = 0;
-  function six7AuthorizeSyscon1Duty(key, resume) {
-    return host.authorizeSyscon1?.({roomId:videoId, peerId:six7ShortKey(selfHKey),
-      leader:six7ShortKey(concierge.syscon1), role:String(concierge.localRoleCandidate || concierge.role || 'peer')}, key, resume) !== false;
+  function phantomAuthorizeSyscon1Duty(key, resume) {
+    return host.authorizeSyscon1?.({roomId:videoId, peerId:phantomShortKey(selfHKey),
+      leader:phantomShortKey(concierge.syscon1), role:String(concierge.localRoleCandidate || concierge.role || 'peer')}, key, resume) !== false;
   }
-  function six7StageSyscon1Authority(
+  function phantomStageSyscon1Authority(
     nextRows,
     via = "syscon1_commit",
     transactionBase = null,
     topologyOverride = null,
     transactionMeta = null,
   ) {
-    if (!six7AuthorizeSyscon1Duty('stage:'+via+':'+String(transactionMeta?.admission?.member || ''), () => {
-      if (six7StageSyscon1Authority(nextRows, via, transactionBase, topologyOverride, transactionMeta))
-        six7PublishCommittedAuthority('admin_checked_'+via);
+    const existing = new Set(phantomAuthorityRosterRows(phantomSysAuthority.roster).map(row => row.hKey));
+    if (phantomAuthorityRosterRows(nextRows).some(row => row.hKey !== phantomShortKey(selfHKey) && !existing.has(row.hKey) && !host.canAdmitPeer(row.hKey))) {
+      emitSnapshot('peer_authorization_denied');
+      return false;
+    }
+    if (!phantomAuthorizeSyscon1Duty('stage:'+via+':'+String(transactionMeta?.admission?.member || ''), () => {
+      if (phantomStageSyscon1Authority(nextRows, via, transactionBase, topologyOverride, transactionMeta))
+        phantomPublishCommittedAuthority('admin_checked_'+via);
     })) return false;
-    const self = six7ShortKey(selfHKey);
+    const self = phantomShortKey(selfHKey);
     let committed =
       transactionBase ||
-      six7FreshSysAuthority() ||
-      six7LocalCommittedAuthority();
+      phantomFreshSysAuthority() ||
+      phantomLocalCommittedAuthority();
 
-    let requestedRoster = six7AuthorityRosterRows(nextRows);
+    let requestedRoster = phantomAuthorityRosterRows(nextRows);
     if (self && !requestedRoster.some((row) => row.hKey === self)) {
-      requestedRoster.unshift(six7LocalPresenceRow());
-      requestedRoster = six7AuthorityRosterRows(requestedRoster);
+      requestedRoster.unshift(phantomLocalPresenceRow());
+      requestedRoster = phantomAuthorityRosterRows(requestedRoster);
     }
 
     const requestedKeys = new Set(requestedRoster.map((row) => row.hKey));
-    const terminalExits = six7AuthorityTerminalExits(transactionMeta).map(
+    const terminalExits = phantomAuthorityTerminalExits(transactionMeta).map(
       (rec) => ({
         ...rec,
         at: Number(rec.at || now()),
@@ -5603,7 +5607,7 @@ export function createExtractedEngine(host) {
     const terminalMembers = new Set(terminalExits.map((rec) => rec.member));
     const admission = transactionMeta?.admission
       ? {
-          member: six7ShortKey(transactionMeta.admission.member),
+          member: phantomShortKey(transactionMeta.admission.member),
           bootId: String(transactionMeta.admission.bootId || "") || null,
           at: Number(transactionMeta.admission.at || now()),
           via: String(
@@ -5612,27 +5616,27 @@ export function createExtractedEngine(host) {
         }
       : null;
 
-    const replica = six7SysAuthority.pending;
-    if (replica && six7ShortKey(replica.acceptedBy) === self &&
-        terminalMembers.has(six7ShortKey(replica.snapshot?.from)) &&
+    const replica = phantomSysAuthority.pending;
+    if (replica && phantomShortKey(replica.acceptedBy) === self &&
+        terminalMembers.has(phantomShortKey(replica.snapshot?.from)) &&
         Number(replica.snapshot?.epoch || 0) === Number(committed?.epoch || 0) &&
         Number(replica.snapshot?.rosterSeq || 0) <= Number(committed?.rosterSeq || 0)) {
-      six7SysAuthority.pending = null;
-      six7MembershipAuditSet("committed_replica_retired", {peer: replica.snapshot?.from, id: replica.id});
+      phantomSysAuthority.pending = null;
+      phantomMembershipAuditSet("committed_replica_retired", {peer: replica.snapshot?.from, id: replica.id});
     }
-    if (six7SysAuthority.pending) {
-      const oldPending = six7SysAuthority.pending;
-      const oldMirror = six7ShortKey(
+    if (phantomSysAuthority.pending) {
+      const oldPending = phantomSysAuthority.pending;
+      const oldMirror = phantomShortKey(
         oldPending.mirror || oldPending.snapshot?.syscon2,
       );
       const preemptTerminalMirror = !!(
         oldMirror &&
-        six7PendingTerminalExits.has(oldMirror) &&
+        phantomPendingTerminalExits.has(oldMirror) &&
         !requestedKeys.has(oldMirror)
       );
 
       if (!preemptTerminalMirror) {
-        six7MembershipAuditSet("stage_blocked", {
+        phantomMembershipAuditSet("stage_blocked", {
           peer: oldMirror,
           id: oldPending.id,
           reason: "pending_already_exists",
@@ -5646,41 +5650,41 @@ export function createExtractedEngine(host) {
       committed = oldPending.baseAuthority || {
         at: Number(oldPending.at || now()),
         via: "pending_transaction_base",
-        from: six7ShortKey(oldPending.baseAuthority?.from),
-        syscon1: six7ShortKey(oldPending.baseAuthority?.syscon1),
-        syscon2: six7ShortKey(oldPending.baseAuthority?.syscon2) || null,
+        from: phantomShortKey(oldPending.baseAuthority?.from),
+        syscon1: phantomShortKey(oldPending.baseAuthority?.syscon1),
+        syscon2: phantomShortKey(oldPending.baseAuthority?.syscon2) || null,
         epoch: Number(oldPending.baseEpoch || 0),
         rosterSeq: Number(oldPending.baseRosterSeq || 0),
-        roster: six7AuthorityRosterRows(oldPending.baseRoster),
+        roster: phantomAuthorityRosterRows(oldPending.baseRoster),
       };
 
-      six7MembershipAuditSet("stage_preempted", {
+      phantomMembershipAuditSet("stage_preempted", {
         peer: oldMirror,
         id: oldPending.id,
         reason: "terminal_pending_mirror_replaced",
       });
-      six7SysAuthority.pending = null;
+      phantomSysAuthority.pending = null;
       emitSnapshot("sys_authority_terminal_pending_mirror_replaced");
     }
 
-    const baseRows = six7AuthorityRosterRows(committed?.roster);
+    const baseRows = phantomAuthorityRosterRows(committed?.roster);
     const baseKeys = new Set(baseRows.map((row) => row.hKey));
-    const baseOne = six7ShortKey(committed?.syscon1);
-    const baseTwo = six7ShortKey(committed?.syscon2);
+    const baseOne = phantomShortKey(committed?.syscon1);
+    const baseTwo = phantomShortKey(committed?.syscon2);
     const baseEpoch = Number(committed?.epoch || 0);
     const baseSeq = Number(committed?.rosterSeq || 0);
     const genesis = !baseEpoch && !baseSeq && !baseRows.length;
 
-    const overrideOne = six7ShortKey(topologyOverride?.syscon1);
+    const overrideOne = phantomShortKey(topologyOverride?.syscon1);
     const overrideTwoSpecified = Object.prototype.hasOwnProperty.call(
       topologyOverride || {},
       "syscon2",
     );
-    const overrideTwo = six7ShortKey(topologyOverride?.syscon2);
-    const one = six7ShortKey(overrideOne || baseOne || concierge.syscon1);
+    const overrideTwo = phantomShortKey(topologyOverride?.syscon2);
+    const one = phantomShortKey(overrideOne || baseOne || concierge.syscon1);
 
     if (!self || one !== self) {
-      six7MembershipAuditSet("stage_rejected", {
+      phantomMembershipAuditSet("stage_rejected", {
         peer: overrideTwo || baseTwo,
         reason: !self ? "missing_self" : "not_syscon1",
         baseOne: baseOne || "none",
@@ -5693,7 +5697,7 @@ export function createExtractedEngine(host) {
     const role = String(
       concierge.localRoleCandidate || concierge.role || "peer",
     );
-    const currentOne = six7ShortKey(concierge.syscon1);
+    const currentOne = phantomShortKey(concierge.syscon1);
     let leadershipMode = genesis
       ? "genesis"
       : leadershipChanged
@@ -5715,7 +5719,7 @@ export function createExtractedEngine(host) {
           (terminalMembers.has(baseTwo) && !requestedKeys.has(baseTwo)))
       );
       const electedSuccessor = oldSpineTerminal
-        ? six7ElectAuthorityCandidate(requestedRoster, "", true, true)
+        ? phantomElectAuthorityCandidate(requestedRoster, "", true, true)
         : null;
       const deterministicSurvivorPromotion = !!(
         role === "syscon1" &&
@@ -5727,7 +5731,7 @@ export function createExtractedEngine(host) {
       );
 
       if (!historicalMirrorPromotion && !deterministicSurvivorPromotion) {
-        six7MembershipAuditSet("stage_rejected", {
+        phantomMembershipAuditSet("stage_rejected", {
           peer: baseOne,
           reason: "unproven_leader_promotion",
           role,
@@ -5746,7 +5750,7 @@ export function createExtractedEngine(host) {
     }
 
     if (!requestedKeys.has(one)) {
-      six7MembershipAuditSet("stage_rejected", {
+      phantomMembershipAuditSet("stage_rejected", {
         peer: one,
         reason: "leader_missing_from_requested_roster",
       });
@@ -5764,7 +5768,7 @@ export function createExtractedEngine(host) {
       const removedKey = removed.slice().sort().join(",");
       const terminalKey = Array.from(terminalMembers).sort().join(",");
       if (removedKey !== terminalKey) {
-        six7MembershipAuditSet("stage_rejected", {
+        phantomMembershipAuditSet("stage_rejected", {
           peer: terminalKey || null,
           reason: "untagged_membership_removal",
           removed: removedKey || "none",
@@ -5777,7 +5781,7 @@ export function createExtractedEngine(host) {
         added.length !== (admission?.member ? 1 : 0) ||
         (admission?.member && added[0] !== admission.member)
       ) {
-        six7MembershipAuditSet("stage_rejected", {
+        phantomMembershipAuditSet("stage_rejected", {
           peer: admission?.member,
           reason: "untagged_membership_addition",
           added: added.join(",") || "none",
@@ -5786,7 +5790,7 @@ export function createExtractedEngine(host) {
       }
     }
 
-    const cfTwo = six7ShortKey(concierge.cfConciergeSyscon2);
+    const cfTwo = phantomShortKey(concierge.cfConciergeSyscon2);
     let two = null;
 
     if (requestedRoster.length > 1) {
@@ -5795,14 +5799,14 @@ export function createExtractedEngine(host) {
         overrideTwo &&
         overrideTwo !== one &&
         requestedKeys.has(overrideTwo) &&
-        !six7PendingTerminalExits.has(overrideTwo)
+        !phantomPendingTerminalExits.has(overrideTwo)
       ) {
         two = overrideTwo;
       } else if (
         baseTwo &&
         baseTwo !== one &&
         requestedKeys.has(baseTwo) &&
-        !six7PendingTerminalExits.has(baseTwo)
+        !phantomPendingTerminalExits.has(baseTwo)
       ) {
         two = baseTwo;
       } else if (
@@ -5813,11 +5817,11 @@ export function createExtractedEngine(host) {
       ) {
         two = cfTwo;
       } else {
-        two = six7ElectAuthorityCandidate(requestedRoster, one, true, false);
+        two = phantomElectAuthorityCandidate(requestedRoster, one, true, false);
       }
 
       if (!two) {
-        six7MembershipAuditSet("stage_blocked", {
+        phantomMembershipAuditSet("stage_blocked", {
           peer: null,
           reason: "waiting_for_healthy_mirror",
           count: requestedRoster.length,
@@ -5852,7 +5856,7 @@ export function createExtractedEngine(host) {
       ? null
       : {
           room: videoId || null,
-          from: six7ShortKey(committed?.from || baseOne),
+          from: phantomShortKey(committed?.from || baseOne),
           role: "syscon1",
           syscon1: baseOne,
           syscon2: baseTwo || null,
@@ -5881,12 +5885,12 @@ export function createExtractedEngine(host) {
       at: now(),
       snapshot: nextSnapshot,
     };
-    pending.id = six7AuthorityTransactionId(pending);
+    pending.id = phantomAuthorityTransactionId(pending);
 
     if (!pending.id) return false;
 
-    six7SysAuthority.pending = pending;
-    six7MembershipAuditSet("stage_created", {
+    phantomSysAuthority.pending = pending;
+    phantomMembershipAuditSet("stage_created", {
       peer: two,
       id: pending.id,
       via: pending.via,
@@ -5900,14 +5904,14 @@ export function createExtractedEngine(host) {
     });
 
     if (!two) {
-      const promoted = six7ApplyCommittedAuthority(
+      const promoted = phantomApplyCommittedAuthority(
         nextSnapshot,
         pending.via + "_solo_commit",
         pending.baseRoster,
         pending,
       );
-      six7SysAuthority.pending = null;
-      six7MembershipAuditSet(
+      phantomSysAuthority.pending = null;
+      phantomMembershipAuditSet(
         promoted ? "solo_committed" : "solo_commit_failed",
         {
           id: pending.id,
@@ -5918,9 +5922,9 @@ export function createExtractedEngine(host) {
       return promoted;
     }
 
-    const mirrorEnt = six7SysPeers.get(two);
+    const mirrorEnt = phantomSysPeers.get(two);
     const mirrorDc = mirrorEnt?.sysdc || null;
-    const pendingStatus = six7SysStatusPayload("SYS_STATUS");
+    const pendingStatus = phantomSysStatusPayload("SYS_STATUS");
     let payloadBytes = 0;
     let encodeErr = "none";
 
@@ -5933,10 +5937,10 @@ export function createExtractedEngine(host) {
     }
 
     const bufferedBefore = Number(mirrorDc?.bufferedAmount || 0);
-    const sent = six7SendSysDC(two, pendingStatus);
+    const sent = phantomSendSysDC(two, pendingStatus);
     const sendErr = String(concierge.sysLastErr || "none");
 
-    six7MembershipAuditSet(sent ? "stage_sent" : "stage_waiting_pipe", {
+    phantomMembershipAuditSet(sent ? "stage_sent" : "stage_waiting_pipe", {
       peer: two,
       id: pending.id,
       baseEpoch,
@@ -5965,21 +5969,21 @@ export function createExtractedEngine(host) {
     // Publication resumes from the existing pending slot when that pipe opens.
     return true;
   }
-  function six7AcceptPendingAuthority(msg, transportPeer) {
+  function phantomAcceptPendingAuthority(msg, transportPeer) {
     const pending = msg?.pendingAuthority;
-    const self = six7ShortKey(selfHKey);
-    const sender = six7ShortKey(msg?.from || transportPeer);
-    const transport = six7ShortKey(transportPeer);
+    const self = phantomShortKey(selfHKey);
+    const sender = phantomShortKey(msg?.from || transportPeer);
+    const transport = phantomShortKey(transportPeer);
 
     if (!pending || typeof pending !== "object") return false;
 
     const pendingId = String(pending.id || "");
     const snapshot = pending.snapshot || null;
-    const pendingLeader = six7ShortKey(snapshot?.syscon1);
-    const pendingMirror = six7ShortKey(snapshot?.syscon2);
+    const pendingLeader = phantomShortKey(snapshot?.syscon1);
+    const pendingMirror = phantomShortKey(snapshot?.syscon2);
 
     if (!self || !sender || sender !== transport) {
-      six7MembershipAuditSet("mirror_rejected", {
+      phantomMembershipAuditSet("mirror_rejected", {
         peer: sender || transport,
         id: pendingId,
         reason: !self ? "missing_self" : "sender_transport_mismatch",
@@ -5988,7 +5992,7 @@ export function createExtractedEngine(host) {
     }
 
     if (sender !== pendingLeader || self !== pendingMirror) {
-      six7MembershipAuditSet("mirror_rejected", {
+      phantomMembershipAuditSet("mirror_rejected", {
         peer: sender,
         id: pendingId,
         reason:
@@ -6001,8 +6005,8 @@ export function createExtractedEngine(host) {
       return false;
     }
 
-    if (pendingId !== six7AuthorityTransactionId(pending)) {
-      six7MembershipAuditSet("mirror_rejected", {
+    if (pendingId !== phantomAuthorityTransactionId(pending)) {
+      phantomMembershipAuditSet("mirror_rejected", {
         peer: sender,
         id: pendingId,
         reason: "pending_transaction_id_mismatch",
@@ -6012,19 +6016,19 @@ export function createExtractedEngine(host) {
 
     const baseEpoch = Number(pending.baseEpoch || 0);
     const baseSeq = Number(pending.baseRosterSeq || 0);
-    const baseRoster = six7AuthorityRosterRows(pending.baseRoster);
+    const baseRoster = phantomAuthorityRosterRows(pending.baseRoster);
     const baseAuthority = pending.baseAuthority || null;
     const baseKeys = new Set(baseRoster.map((row) => row.hKey));
-    const nextRoster = six7AuthorityRosterRows(snapshot?.roster);
+    const nextRoster = phantomAuthorityRosterRows(snapshot?.roster);
     const nextKeys = new Set(nextRoster.map((row) => row.hKey));
-    const terminalExits = six7AuthorityTerminalExits(pending);
+    const terminalExits = phantomAuthorityTerminalExits(pending);
     const terminalMembers = new Set(terminalExits.map((rec) => rec.member));
     const admission = pending.admission || null;
     const leadership = pending.leadership || null;
     const leadershipMode = String(leadership?.mode || "");
-    const leadershipWinner = six7ShortKey(leadership?.winner);
-    const leadershipBaseOne = six7ShortKey(leadership?.baseOne);
-    const leadershipBaseTwo = six7ShortKey(leadership?.baseTwo);
+    const leadershipWinner = phantomShortKey(leadership?.winner);
+    const leadershipBaseOne = phantomShortKey(leadership?.baseOne);
+    const leadershipBaseTwo = phantomShortKey(leadership?.baseTwo);
     const genesis = !baseEpoch && !baseSeq && !baseRoster.length;
 
     if (
@@ -6033,7 +6037,7 @@ export function createExtractedEngine(host) {
       !nextKeys.has(sender) ||
       !nextKeys.has(self)
     ) {
-      six7MembershipAuditSet("mirror_rejected", {
+      phantomMembershipAuditSet("mirror_rejected", {
         peer: sender,
         id: pendingId,
         reason: "invalid_pending_roster",
@@ -6048,7 +6052,7 @@ export function createExtractedEngine(host) {
         leadershipBaseOne ||
         leadershipBaseTwo)
     ) {
-      six7MembershipAuditSet("mirror_rejected", {
+      phantomMembershipAuditSet("mirror_rejected", {
         peer: sender,
         id: pendingId,
         reason: "invalid_genesis_leadership_witness",
@@ -6057,10 +6061,10 @@ export function createExtractedEngine(host) {
     }
 
     if (!genesis) {
-      const baseOne = six7ShortKey(baseAuthority?.syscon1);
-      const baseTwo = six7ShortKey(baseAuthority?.syscon2);
-      const baseFrom = six7ShortKey(baseAuthority?.from);
-      const baseAuthorityRows = six7AuthorityRosterRows(baseAuthority?.roster);
+      const baseOne = phantomShortKey(baseAuthority?.syscon1);
+      const baseTwo = phantomShortKey(baseAuthority?.syscon2);
+      const baseFrom = phantomShortKey(baseAuthority?.from);
+      const baseAuthorityRows = phantomAuthorityRosterRows(baseAuthority?.roster);
 
       if (
         !baseAuthority ||
@@ -6068,12 +6072,12 @@ export function createExtractedEngine(host) {
         !baseOne ||
         Number(baseAuthority.epoch || 0) !== baseEpoch ||
         Number(baseAuthority.rosterSeq || 0) !== baseSeq ||
-        six7AuthorityRosterKey(baseAuthorityRows) !==
-          six7AuthorityRosterKey(baseRoster) ||
+        phantomAuthorityRosterKey(baseAuthorityRows) !==
+          phantomAuthorityRosterKey(baseRoster) ||
         !baseKeys.has(baseOne) ||
         (baseTwo && !baseKeys.has(baseTwo))
       ) {
-        six7MembershipAuditSet("mirror_rejected", {
+        phantomMembershipAuditSet("mirror_rejected", {
           peer: sender,
           id: pendingId,
           reason: "invalid_transaction_base",
@@ -6085,14 +6089,14 @@ export function createExtractedEngine(host) {
       const added = Array.from(nextKeys).filter((key) => !baseKeys.has(key));
       const terminalKey = Array.from(terminalMembers).sort().join(",");
       const removedKey = removed.slice().sort().join(",");
-      const admissionMember = six7ShortKey(admission?.member);
+      const admissionMember = phantomShortKey(admission?.member);
 
       if (
         removedKey !== terminalKey ||
         added.length !== (admissionMember ? 1 : 0) ||
         (admissionMember && added[0] !== admissionMember)
       ) {
-        six7MembershipAuditSet("mirror_rejected", {
+        phantomMembershipAuditSet("mirror_rejected", {
           peer: sender,
           id: pendingId,
           reason: "membership_delta_not_owned",
@@ -6138,7 +6142,7 @@ export function createExtractedEngine(host) {
         !legalPromotedMirror &&
         !legalDeterministicSuccessor
       ) {
-        six7MembershipAuditSet("mirror_rejected", {
+        phantomMembershipAuditSet("mirror_rejected", {
           peer: sender,
           id: pendingId,
           reason: "unproven_authority_spine_transition",
@@ -6157,7 +6161,7 @@ export function createExtractedEngine(host) {
         nextKeys.has(baseTwo) &&
         pendingMirror !== baseTwo
       ) {
-        six7MembershipAuditSet("mirror_rejected", {
+        phantomMembershipAuditSet("mirror_rejected", {
           peer: sender,
           id: pendingId,
           reason: "healthy_committed_mirror_replaced",
@@ -6168,40 +6172,40 @@ export function createExtractedEngine(host) {
       }
     }
 
-    const local = six7LocalCommittedAuthority();
+    const local = phantomLocalCommittedAuthority();
     const localMatchesBase = !!(
       !genesis &&
       local &&
       Number(local.epoch || 0) === baseEpoch &&
       Number(local.rosterSeq || 0) === baseSeq &&
-      six7AuthorityRosterKey(local.roster) ===
-        six7AuthorityRosterKey(baseRoster)
+      phantomAuthorityRosterKey(local.roster) ===
+        phantomAuthorityRosterKey(baseRoster)
     );
     const localIsGenesis = !!(
       genesis &&
-      !Number(six7SysAuthority.epoch || 0) &&
-      !Number(six7SysAuthority.rosterSeq || 0)
+      !Number(phantomSysAuthority.epoch || 0) &&
+      !Number(phantomSysAuthority.rosterSeq || 0)
     );
     const freshMirrorAdmission = !!(
       !genesis &&
       !local &&
-      !Number(six7SysAuthority.epoch || 0) &&
-      !Number(six7SysAuthority.rosterSeq || 0) &&
-      six7ShortKey(admission?.member) === self &&
-      String(admission?.bootId || "") === String(six7BootId || "") &&
+      !Number(phantomSysAuthority.epoch || 0) &&
+      !Number(phantomSysAuthority.rosterSeq || 0) &&
+      phantomShortKey(admission?.member) === self &&
+      String(admission?.bootId || "") === String(phantomBootId || "") &&
       !baseKeys.has(self) &&
       nextKeys.has(self)
     );
 
     if (!localMatchesBase && !localIsGenesis && !freshMirrorAdmission) {
-      six7MembershipAuditSet("mirror_rejected", {
+      phantomMembershipAuditSet("mirror_rejected", {
         peer: sender,
         id: pendingId,
         reason: "base_mismatch",
         baseEpoch,
         baseSeq,
-        localEpoch: Number(six7SysAuthority.epoch || 0),
-        localSeq: Number(six7SysAuthority.rosterSeq || 0),
+        localEpoch: Number(phantomSysAuthority.epoch || 0),
+        localSeq: Number(phantomSysAuthority.rosterSeq || 0),
       });
       emitSnapshot("sys_authority_pending_base_mismatch");
       return false;
@@ -6209,7 +6213,7 @@ export function createExtractedEngine(host) {
 
     const snapshotEpoch = Number(snapshot.epoch || 0);
     if (!snapshotEpoch || snapshotEpoch < baseEpoch) {
-      six7MembershipAuditSet("mirror_rejected", {
+      phantomMembershipAuditSet("mirror_rejected", {
         peer: sender,
         id: pendingId,
         reason: "snapshot_epoch_older_than_base",
@@ -6221,10 +6225,10 @@ export function createExtractedEngine(host) {
 
     if (
       !genesis &&
-      pendingLeader !== six7ShortKey(baseAuthority?.syscon1) &&
+      pendingLeader !== phantomShortKey(baseAuthority?.syscon1) &&
       snapshotEpoch <= baseEpoch
     ) {
-      six7MembershipAuditSet("mirror_rejected", {
+      phantomMembershipAuditSet("mirror_rejected", {
         peer: sender,
         id: pendingId,
         reason: "leader_change_without_epoch_advance",
@@ -6234,7 +6238,7 @@ export function createExtractedEngine(host) {
       return false;
     }
 
-    six7SysAuthority.pending = {
+    phantomSysAuthority.pending = {
       id: pendingId,
       via: String(pending.via || "sys_authority_pending"),
       baseEpoch,
@@ -6250,7 +6254,7 @@ export function createExtractedEngine(host) {
       snapshot: { ...snapshot, roster: nextRoster },
     };
 
-    six7MembershipAuditSet("mirror_accepted", {
+    phantomMembershipAuditSet("mirror_accepted", {
       peer: sender,
       id: pendingId,
       baseEpoch,
@@ -6266,15 +6270,15 @@ export function createExtractedEngine(host) {
     emitSnapshot("sys_authority_pending_accepted_by_exact_mirror");
     return true;
   }
-  function six7PromotePendingAuthority(acceptedId, transportPeer) {
-    if (!six7AuthorizeSyscon1Duty('commit:'+String(acceptedId), () => six7PromotePendingAuthority(acceptedId, transportPeer))) return false;
-    const pending = six7SysAuthority.pending;
-    const sender = six7ShortKey(transportPeer);
+  function phantomPromotePendingAuthority(acceptedId, transportPeer) {
+    if (!phantomAuthorizeSyscon1Duty('commit:'+String(acceptedId), () => phantomPromotePendingAuthority(acceptedId, transportPeer))) return false;
+    const pending = phantomSysAuthority.pending;
+    const sender = phantomShortKey(transportPeer);
     const accepted = String(acceptedId || "");
 
     if (!pending && !accepted) return false;
     if (!pending) {
-      six7MembershipAuditSet("promote_rejected", {
+      phantomMembershipAuditSet("promote_rejected", {
         peer: sender,
         id: accepted,
         reason: "no_local_pending",
@@ -6283,8 +6287,8 @@ export function createExtractedEngine(host) {
     }
 
     if (!sender || !accepted || accepted !== String(pending.id || "")) {
-      if (sender === six7ShortKey(pending.mirror)) {
-        six7MembershipAuditSet("promote_rejected", {
+      if (sender === phantomShortKey(pending.mirror)) {
+        phantomMembershipAuditSet("promote_rejected", {
           peer: sender,
           id: pending.id,
           reason: !sender
@@ -6297,8 +6301,8 @@ export function createExtractedEngine(host) {
       return false;
     }
 
-    if (sender !== six7ShortKey(pending.mirror)) {
-      six7MembershipAuditSet("promote_rejected", {
+    if (sender !== phantomShortKey(pending.mirror)) {
+      phantomMembershipAuditSet("promote_rejected", {
         peer: sender,
         id: pending.id,
         reason: "ack_not_from_exact_mirror",
@@ -6306,8 +6310,8 @@ export function createExtractedEngine(host) {
       return false;
     }
 
-    if (six7ShortKey(pending.snapshot?.syscon1) !== six7ShortKey(selfHKey)) {
-      six7MembershipAuditSet("promote_rejected", {
+    if (phantomShortKey(pending.snapshot?.syscon1) !== phantomShortKey(selfHKey)) {
+      phantomMembershipAuditSet("promote_rejected", {
         peer: sender,
         id: pending.id,
         reason: "local_not_pending_leader",
@@ -6315,7 +6319,7 @@ export function createExtractedEngine(host) {
       return false;
     }
 
-    const promoted = six7ApplyCommittedAuthority(
+    const promoted = phantomApplyCommittedAuthority(
       pending.snapshot,
       pending.via + "_mirror_accepted_commit",
       pending.baseRoster,
@@ -6323,7 +6327,7 @@ export function createExtractedEngine(host) {
     );
 
     if (!promoted) {
-      six7MembershipAuditSet("promote_rejected", {
+      phantomMembershipAuditSet("promote_rejected", {
         peer: sender,
         id: pending.id,
         reason: "committed_apply_failed",
@@ -6333,15 +6337,15 @@ export function createExtractedEngine(host) {
 
     const promotedId = pending.id;
     const promotedSeq = Number(pending.snapshot?.rosterSeq || 0);
-    const promotedCount = six7AuthorityRosterRows(
+    const promotedCount = phantomAuthorityRosterRows(
       pending.snapshot?.roster,
     ).length;
 
-    six7SysAuthority.pending = null;
-    six7PublishCommittedAuthority(
+    phantomSysAuthority.pending = null;
+    phantomPublishCommittedAuthority(
       "sys_authority_committed_after_mirror_accept",
     );
-    six7MembershipAuditSet("promoted", {
+    phantomMembershipAuditSet("promoted", {
       peer: sender,
       id: promotedId,
       seq: promotedSeq,
@@ -6349,35 +6353,40 @@ export function createExtractedEngine(host) {
     });
     emitSnapshot("sys_authority_pending_promoted_to_committed");
     queueMicrotask(sdkResumeAdmissions);
-    six7ResumeTerminalAuthority("post_authority_commit");
+    phantomResumeTerminalAuthority("post_authority_commit");
     return true;
   }
   const sdkDeferredAdmissions=new Map();
   function sdkApplySysAdmission(key,inner) {
     if(String(concierge.localRoleCandidate || concierge.role || "peer")!=="syscon1")return;
-    const fromKey=six7ShortKey(inner.from),selfKey=six7ShortKey(selfHKey);
-            const committedRoster = six7AuthorityRosterRows(
-              six7SysAuthority.roster,
+    const fromKey=phantomShortKey(inner.from),selfKey=phantomShortKey(selfHKey);
+    if (fromKey !== selfKey && !host.canAdmitPeer(fromKey)) {
+      sdkDeferredAdmissions.delete(fromKey);
+      emitSnapshot('peer_authorization_denied');
+      return;
+    }
+            const committedRoster = phantomAuthorityRosterRows(
+              phantomSysAuthority.roster,
             );
             const alreadyCommitted = committedRoster.some(
               (row) => row.hKey === fromKey,
             );
             const doorwayAdmitted = !!(
-              fromKey && six7DoorwayAdmittedPeers.has(fromKey)
+              fromKey && phantomDoorwayAdmittedPeers.has(fromKey)
             );
             const sourcePipeProven = !!(
               key &&
-              six7HasOpenSysPipe(key) &&
-              (key === fromKey || six7ShortKey(inner?.forwardedBy) === key)
+              phantomHasOpenSysPipe(key) &&
+              (key === fromKey || phantomShortKey(inner?.forwardedBy) === key)
             );
             const directTransport = !!(key && key === fromKey);
             const explicitAdmission = inner?.admit === true;
-            const blocked = six7IsBlocked(fromKey);
-            const blockedBy = six7IsBlockedBy(fromKey);
-            const goneLatched = __six7GoneNotified.has(fromKey);
+            const blocked = phantomIsBlocked(fromKey);
+            const blockedBy = phantomIsBlockedBy(fromKey);
+            const goneLatched = __phantomGoneNotified.has(fromKey);
 
             if (!alreadyCommitted && fromKey && fromKey !== selfKey) {
-              six7MembershipAuditSet("admit_received", {
+              phantomMembershipAuditSet("admit_received", {
                 peer: fromKey,
                 doorway: doorwayAdmitted,
                 pipe: sourcePipeProven,
@@ -6391,10 +6400,10 @@ export function createExtractedEngine(host) {
             }
 
             const incomingBootId = String(
-              inner?.bootId || six7PresenceBook.get(fromKey)?.bootId || "",
+              inner?.bootId || phantomPresenceBook.get(fromKey)?.bootId || "",
             );
-            const knownBootId = String(six7RemoteBootIds.get(fromKey) || "");
-            const exitedIncarnation = __six7MembershipExitApplied.get(fromKey);
+            const knownBootId = String(phantomRemoteBootIds.get(fromKey) || "");
+            const exitedIncarnation = __phantomMembershipExitApplied.get(fromKey);
             const freshIncarnation = !!(
               !exitedIncarnation ||
               (incomingBootId &&
@@ -6424,14 +6433,14 @@ export function createExtractedEngine(host) {
               transportIncarnationBound
             );
 
-            if (freshDirectAdmission && six7SysAuthority.pending) {
-              sdkDeferredAdmissions.set(fromKey,{key,inner:structuredClone(inner),entry:six7SysPeers.get(key)});
+            if (freshDirectAdmission && phantomSysAuthority.pending) {
+              sdkDeferredAdmissions.set(fromKey,{key,inner:structuredClone(inner),entry:phantomSysPeers.get(key)});
               emitSnapshot("sys_admission_deferred_pending_commit");
               return;
             }
             if (freshDirectAdmission) {
               sdkDeferredAdmissions.delete(fromKey);
-              const presence = six7PresenceBook.get(fromKey) || inner || {};
+              const presence = phantomPresenceBook.get(fromKey) || inner || {};
               const nextRoster = committedRoster.concat({
                 hKey: fromKey,
                 from: fromKey,
@@ -6444,12 +6453,12 @@ export function createExtractedEngine(host) {
                 hex: presence.hex || inner.hex || null,
                 avatar: presence.avatar || inner.avatar || undefined,
                 videoId: presence.videoId || inner.videoId || videoId || null,
-                seenVia: "six7_sys_authority",
+                seenVia: "phantom_sys_authority",
                 t: now(),
               });
 
               if (
-                six7CommitSyscon1Roster(
+                phantomCommitSyscon1Roster(
                   nextRoster,
                   "syscon1_member_admission",
                   {
@@ -6462,11 +6471,11 @@ export function createExtractedEngine(host) {
                   },
                 )
               ) {
-                six7RefreshSysCandidates(
-                  six7LatchedSysRosterList(),
+                phantomRefreshSysCandidates(
+                  phantomLatchedSysRosterList(),
                   "syscon1_member_admission",
                 );
-                six7PublishCommittedAuthority(
+                phantomPublishCommittedAuthority(
                   "syscon1_member_admission_published",
                 );
                 emitSnapshot(
@@ -6476,7 +6485,7 @@ export function createExtractedEngine(host) {
             } else if (alreadyCommitted) {
               // Presence decorates committed identity only. It never rewrites
               // the immutable authority value or advances rosterSeq.
-              six7EmitPresenceRoster("syscon1_presence_metadata");
+              phantomEmitPresenceRoster("syscon1_presence_metadata");
             } else {
               const rejection = !fromKey
                 ? "missing_from"
@@ -6497,14 +6506,14 @@ export function createExtractedEngine(host) {
                               : "unknown_gate";
 
               if (fromKey && fromKey !== selfKey) {
-                six7MembershipAuditSet("admit_rejected", {
+                phantomMembershipAuditSet("admit_rejected", {
                   peer: fromKey,
                   reason: rejection,
                   doorway: doorwayAdmitted,
                   pipe: sourcePipeProven,
                   direct: directTransport,
                   admit: explicitAdmission,
-                  gone: __six7GoneNotified.has(fromKey),
+                  gone: __phantomGoneNotified.has(fromKey),
                   blocked,
                   blockedBy,
                 });
@@ -6513,23 +6522,23 @@ export function createExtractedEngine(host) {
               emitSnapshot("syscon1_presence_not_committed");
             }
 
-            six7ResumeTerminalAuthority("syscon1_presence_rx");
+            phantomResumeTerminalAuthority("syscon1_presence_rx");
   }
   function sdkResumeAdmissions() {
     resumeDeferredAdmissions(sdkDeferredAdmissions,{
-      hasPending:()=>!!six7SysAuthority.pending,
-      currentEntry:key=>six7SysPeers.get(key),
-      pipeOpen:six7HasOpenSysPipe,
+      hasPending:()=>!!phantomSysAuthority.pending,
+      currentEntry:key=>phantomSysPeers.get(key),
+      pipeOpen:phantomHasOpenSysPipe,
       apply:sdkApplySysAdmission,
       onRetired:()=>emitSnapshot("sys_deferred_admission_transport_retired")
     });
   }
-  function six7CommitSyscon1Roster(
+  function phantomCommitSyscon1Roster(
     nextRows,
     via = "syscon1_commit",
     transactionMeta = null,
   ) {
-    return six7StageSyscon1Authority(
+    return phantomStageSyscon1Authority(
       nextRows,
       via,
       null,
@@ -6538,12 +6547,12 @@ export function createExtractedEngine(host) {
     );
   }
 
-  function six7PublishCommittedAuthority(reason = "syscon1_publish") {
-    if (!six7AuthorizeSyscon1Duty('publish:'+reason, () => six7PublishCommittedAuthority(reason))) return 0;
-    const self = six7ShortKey(selfHKey);
-    const pending = six7SysAuthority.pending;
-    const pendingLeader = six7ShortKey(pending?.snapshot?.syscon1);
-    const committedLeader = six7ShortKey(six7SysAuthority.syscon1);
+  function phantomPublishCommittedAuthority(reason = "syscon1_publish") {
+    if (!phantomAuthorizeSyscon1Duty('publish:'+reason, () => phantomPublishCommittedAuthority(reason))) return 0;
+    const self = phantomShortKey(selfHKey);
+    const pending = phantomSysAuthority.pending;
+    const pendingLeader = phantomShortKey(pending?.snapshot?.syscon1);
+    const committedLeader = phantomShortKey(phantomSysAuthority.syscon1);
 
     // A successor may publish a staged transaction whose base was imported
     // from the mirror without first projecting that historical base into live
@@ -6551,11 +6560,11 @@ export function createExtractedEngine(host) {
     // current committed leader or the exact staged snapshot leader.
     if (!self || (committedLeader !== self && pendingLeader !== self)) return 0;
 
-    const status = six7SysStatusPayload("SYS_STATUS");
+    const status = phantomSysStatusPayload("SYS_STATUS");
     const pendingId = String(status?.pendingAuthority?.id || "");
     const publishRows = pendingId
-      ? six7AuthorityRosterRows(status.pendingAuthority?.snapshot?.roster)
-      : six7AuthorityRosterRows(status.roster);
+      ? phantomAuthorityRosterRows(status.pendingAuthority?.snapshot?.roster)
+      : phantomAuthorityRosterRows(status.roster);
 
     if (!publishRows.length || (!pendingId && !status.rosterSeq)) {
       emitSnapshot("syscon1_publish_blocked_no_authority_payload");
@@ -6580,12 +6589,12 @@ export function createExtractedEngine(host) {
     for (const target of committedKeys) {
       if (!target || target === self) continue;
 
-      const targetEnt = six7SysPeers.get(target);
+      const targetEnt = phantomSysPeers.get(target);
       const targetDc = targetEnt?.sysdc || null;
 
-      if (!six7HasOpenSysPipe(target)) {
+      if (!phantomHasOpenSysPipe(target)) {
         if (pendingId) {
-          six7MembershipAuditSet("publish_skipped_pipe", {
+          phantomMembershipAuditSet("publish_skipped_pipe", {
             peer: target,
             id: pendingId,
             pipe: String(targetDc?.readyState || "missing"),
@@ -6602,11 +6611,11 @@ export function createExtractedEngine(host) {
       }
 
       const bufferedBefore = Number(targetDc?.bufferedAmount || 0);
-      const sent = six7SendSysDC(target, status);
+      const sent = phantomSendSysDC(target, status);
       const sendErr = String(concierge.sysLastErr || "none");
 
       if (pendingId) {
-        six7MembershipAuditSet(sent ? "publish_sent" : "publish_send_failed", {
+        phantomMembershipAuditSet(sent ? "publish_sent" : "publish_send_failed", {
           peer: target,
           id: pendingId,
           pipe: String(targetDc?.readyState || "missing"),
@@ -6626,7 +6635,7 @@ export function createExtractedEngine(host) {
     }
 
     if (!pendingId && ws?.readyState === WebSocket.OPEN && typeof ws.publishAuthority === "function") {
-      const publicationId = six7AuthoritySnapshotId(status);
+      const publicationId = phantomAuthoritySnapshotId(status);
       if (ws.lastAuthorityPublication !== publicationId) {
         try { ws.publishAuthority(status); ws.lastAuthorityPublication = publicationId; }
         catch (error) { concierge.sysLastErr = "doorway_authority_publish_failed:" + String(error?.message || error); }
@@ -6635,21 +6644,21 @@ export function createExtractedEngine(host) {
     emitSnapshot(String(reason || "syscon1_publish") + "_" + published);
     return published;
   }
-  function six7RememberSysAuthority(msg, via = "sys_status") {
-    const applied = six7ApplyCommittedAuthority(msg, via);
+  function phantomRememberSysAuthority(msg, via = "sys_status") {
+    const applied = phantomApplyCommittedAuthority(msg, via);
 
     if (
       applied &&
-      six7SysAuthority.pending?.acceptedBy === six7ShortKey(selfHKey) &&
-      six7AuthoritySnapshotId(msg) ===
-        six7AuthoritySnapshotId(six7SysAuthority.pending?.snapshot)
+      phantomSysAuthority.pending?.acceptedBy === phantomShortKey(selfHKey) &&
+      phantomAuthoritySnapshotId(msg) ===
+        phantomAuthoritySnapshotId(phantomSysAuthority.pending?.snapshot)
     ) {
-      six7SysAuthority.pending = null;
+      phantomSysAuthority.pending = null;
       emitSnapshot("sys_authority_mirror_pending_cleared_on_commit");
     }
 
     if (applied) {
-      six7GossipRecovery = {
+      phantomGossipRecovery = {
         source: null,
         targets: [],
         index: 0,
@@ -6657,18 +6666,18 @@ export function createExtractedEngine(host) {
         rosterSeq: 0,
         at: 0,
       };
-      six7ResumeTerminalAuthority("committed_authority_received");
+      phantomResumeTerminalAuthority("committed_authority_received");
       emitSnapshot("authority_gossip_recovery_completed_by_committed_sys");
     }
     return applied;
   }
-  function six7AdoptMirrorAuthority(msg, transportPeer) {
+  function phantomAdoptMirrorAuthority(msg, transportPeer) {
     if (!msg || typeof msg !== "object") return false;
 
-    const self = six7ShortKey(selfHKey);
-    const sender = six7ShortKey(msg.from || transportPeer);
-    const currentOne = six7ShortKey(concierge.syscon1);
-    const currentTwo = six7ShortKey(concierge.syscon2);
+    const self = phantomShortKey(selfHKey);
+    const sender = phantomShortKey(msg.from || transportPeer);
+    const currentOne = phantomShortKey(concierge.syscon1);
+    const currentTwo = phantomShortKey(concierge.syscon2);
     const role = String(
       concierge.localRoleCandidate || concierge.role || "peer",
     );
@@ -6677,19 +6686,19 @@ export function createExtractedEngine(host) {
     if (!self || role !== "syscon1" || currentOne !== self) return false;
     if (
       !sender ||
-      sender !== six7ShortKey(transportPeer) ||
+      sender !== phantomShortKey(transportPeer) ||
       sender !== currentTwo
     ) {
       return false;
     }
     if (!mirror || typeof mirror !== "object") return false;
 
-    const historicalFrom = six7ShortKey(mirror.from || mirror.syscon1);
-    const historicalOne = six7ShortKey(mirror.syscon1);
-    const historicalTwo = six7ShortKey(mirror.syscon2);
+    const historicalFrom = phantomShortKey(mirror.from || mirror.syscon1);
+    const historicalOne = phantomShortKey(mirror.syscon1);
+    const historicalTwo = phantomShortKey(mirror.syscon2);
     const historicalEpoch = Number(mirror.epoch || 0);
     const historicalSeq = Number(mirror.rosterSeq || 0);
-    const inherited = six7AuthorityRosterRows(mirror.roster);
+    const inherited = phantomAuthorityRosterRows(mirror.roster);
     const inheritedKeys = new Set(inherited.map((row) => row.hKey));
 
     // This path is state recovery only. A promoted historical mirror must use
@@ -6708,7 +6717,7 @@ export function createExtractedEngine(host) {
       return false;
     }
 
-    const local = six7LocalCommittedAuthority();
+    const local = phantomLocalCommittedAuthority();
     if (
       local &&
       (Number(local.epoch || 0) > historicalEpoch ||
@@ -6718,7 +6727,7 @@ export function createExtractedEngine(host) {
       return false;
     }
 
-    const recovered = six7ApplyCommittedAuthority(
+    const recovered = phantomApplyCommittedAuthority(
       {
         room: videoId || null,
         from: self,
@@ -6740,7 +6749,7 @@ export function createExtractedEngine(host) {
     for (const command of Array.isArray(mirror.terminalExits)
       ? mirror.terminalExits
       : []) {
-      const member = six7ShortKey(command?.member);
+      const member = phantomShortKey(command?.member);
       if (!member || !inheritedKeys.has(member)) continue;
 
       const incoming = {
@@ -6750,9 +6759,9 @@ export function createExtractedEngine(host) {
         via: "mirror_authority_recovery",
         reason: String(command?.via || "mirror_authority_recovery"),
       };
-      const current = six7PendingTerminalExits.get(member);
+      const current = phantomPendingTerminalExits.get(member);
       if (!current || Number(incoming.at || 0) >= Number(current.at || 0)) {
-        six7PendingTerminalExits.set(member, incoming);
+        phantomPendingTerminalExits.set(member, incoming);
       }
     }
 
@@ -6760,10 +6769,10 @@ export function createExtractedEngine(host) {
     const acceptedEpoch = Number(concierge.sysconEpoch || 0);
 
     if (acceptedEpoch > historicalEpoch) {
-      const staged = six7StageSyscon1Authority(
+      const staged = phantomStageSyscon1Authority(
         inherited,
         "syscon1_exact_mirror_epoch_recovery",
-        six7LocalCommittedAuthority(),
+        phantomLocalCommittedAuthority(),
         { syscon1: self, syscon2: sender },
       );
 
@@ -6772,29 +6781,29 @@ export function createExtractedEngine(host) {
         return false;
       }
 
-      six7PublishCommittedAuthority(
+      phantomPublishCommittedAuthority(
         "syscon1_exact_mirror_epoch_recovery_published",
       );
     } else {
-      six7PublishCommittedAuthority("syscon1_exact_mirror_base_recovered");
+      phantomPublishCommittedAuthority("syscon1_exact_mirror_base_recovered");
     }
 
-    six7ResumeTerminalAuthority("mirror_base_recovery");
+    phantomResumeTerminalAuthority("mirror_base_recovery");
     emitSnapshot("syscon1_exact_mirror_base_recovered");
     return true;
   }
 
-  function six7LocalCommittedAuthority() {
-    const roster = six7AuthorityRosterRows(six7SysAuthority.roster);
-    const from = six7ShortKey(six7SysAuthority.from);
-    const one = six7ShortKey(six7SysAuthority.syscon1);
-    const two = six7ShortKey(six7SysAuthority.syscon2);
-    const epoch = Number(six7SysAuthority.epoch || 0);
-    const rosterSeq = Number(six7SysAuthority.rosterSeq || 0);
+  function phantomLocalCommittedAuthority() {
+    const roster = phantomAuthorityRosterRows(phantomSysAuthority.roster);
+    const from = phantomShortKey(phantomSysAuthority.from);
+    const one = phantomShortKey(phantomSysAuthority.syscon1);
+    const two = phantomShortKey(phantomSysAuthority.syscon2);
+    const epoch = Number(phantomSysAuthority.epoch || 0);
+    const rosterSeq = Number(phantomSysAuthority.rosterSeq || 0);
     const keys = new Set(roster.map((row) => row.hKey));
 
     if (
-      !six7SysAuthority.at ||
+      !phantomSysAuthority.at ||
       !from ||
       !one ||
       from !== one ||
@@ -6808,8 +6817,8 @@ export function createExtractedEngine(host) {
     }
 
     return {
-      at: Number(six7SysAuthority.at || 0),
-      via: String(six7SysAuthority.via || "none"),
+      at: Number(phantomSysAuthority.at || 0),
+      via: String(phantomSysAuthority.via || "none"),
       from,
       syscon1: one,
       syscon2: two || null,
@@ -6819,10 +6828,10 @@ export function createExtractedEngine(host) {
     };
   }
 
-  function six7FreshSysAuthority() {
-    if (!six7SysAuthority.at) return null;
+  function phantomFreshSysAuthority() {
+    if (!phantomSysAuthority.at) return null;
 
-    const authorityEpoch = Number(six7SysAuthority.epoch || 0);
+    const authorityEpoch = Number(phantomSysAuthority.epoch || 0);
     // Provider revision counters cannot invalidate committed SYS authority.
     const acceptedEpoch = Number(concierge.sysconEpoch || 0);
 
@@ -6830,25 +6839,25 @@ export function createExtractedEngine(host) {
       return null;
     }
 
-    const one = six7ShortKey(six7SysAuthority.syscon1);
-    const two = six7ShortKey(six7SysAuthority.syscon2);
+    const one = phantomShortKey(phantomSysAuthority.syscon1);
+    const two = phantomShortKey(phantomSysAuthority.syscon2);
 
     if (!one && !two) return null;
 
     return {
       syscon1: one || null,
       syscon2: two || null,
-      epoch: Number(six7SysAuthority.epoch || 0),
-      rosterSeq: Number(six7SysAuthority.rosterSeq || 0),
-      roster: Array.isArray(six7SysAuthority.roster)
-        ? six7SysAuthority.roster
+      epoch: Number(phantomSysAuthority.epoch || 0),
+      rosterSeq: Number(phantomSysAuthority.rosterSeq || 0),
+      roster: Array.isArray(phantomSysAuthority.roster)
+        ? phantomSysAuthority.roster
         : [],
-      via: six7SysAuthority.via || "unknown",
-      at: Number(six7SysAuthority.at || 0),
+      via: phantomSysAuthority.via || "unknown",
+      at: Number(phantomSysAuthority.at || 0),
     };
   }
 
-  function six7ApplyLocalRoleCandidate(reason = "candidate") {
+  function phantomApplyLocalRoleCandidate(reason = "candidate") {
     const wantedRole = String(concierge.localRoleCandidate || "peer");
     const demotedBy = String(concierge.roleDemotedBy || "");
     const currentEpoch = Number(concierge.sysconEpoch || 0);
@@ -6891,7 +6900,7 @@ export function createExtractedEngine(host) {
     concierge.localRoleReason = `role_candidate_${concierge.role}_${reason}`;
   }
 
-  function six7CompareSysconClaims(localClaim, remoteClaim) {
+  function phantomCompareSysconClaims(localClaim, remoteClaim) {
     const le = Number(localClaim?.epoch || 0);
     const re = Number(remoteClaim?.epoch || 0);
 
@@ -6904,18 +6913,18 @@ export function createExtractedEngine(host) {
     if (rj < lj) return { winner: "remote", why: "older" };
     if (lj < rj) return { winner: "local", why: "older" };
 
-    const lh = six7ShortKey(localClaim?.hKey);
-    const rh = six7ShortKey(remoteClaim?.hKey);
+    const lh = phantomShortKey(localClaim?.hKey);
+    const rh = phantomShortKey(remoteClaim?.hKey);
 
     if (rh && lh && rh < lh) return { winner: "remote", why: "tie_hkey" };
     return { winner: "local", why: "tie_hkey" };
   }
 
-  function six7ReconcileRoleFromSysStatus(msg, via = "sys_status") {
+  function phantomReconcileRoleFromSysStatus(msg, via = "sys_status") {
     if (!msg || typeof msg !== "object") return false;
 
-    const self = six7ShortKey(selfHKey);
-    const remote = six7ShortKey(msg.from);
+    const self = phantomShortKey(selfHKey);
+    const remote = phantomShortKey(msg.from);
     if (!self || !remote || remote === self) return false;
 
     const localRole = String(
@@ -6923,11 +6932,11 @@ export function createExtractedEngine(host) {
     );
     const remoteRole = String(msg.role || msg.candidateRole || "peer");
 
-    if (!six7IsSysconRole(localRole)) return false;
-    if (!six7IsSysconRole(remoteRole)) return false;
+    if (!phantomIsSysconRole(localRole)) return false;
+    if (!phantomIsSysconRole(remoteRole)) return false;
     if (localRole !== remoteRole) return false;
 
-    const result = six7CompareSysconClaims(
+    const result = phantomCompareSysconClaims(
       {
         hKey: self,
         role: localRole,
@@ -6943,8 +6952,8 @@ export function createExtractedEngine(host) {
     );
 
     if (result.winner === "remote") {
-      const one = six7ShortKey(msg.syscon1 || remote);
-      const two = six7ShortKey(msg.syscon2);
+      const one = phantomShortKey(msg.syscon1 || remote);
+      const two = phantomShortKey(msg.syscon2);
 
       concierge.role = "peer";
       concierge.localRoleCandidate = "peer";
@@ -6963,14 +6972,14 @@ export function createExtractedEngine(host) {
         Number(msg.epoch || 0),
       );
 
-      six7RememberSysAuthority(msg, `demotion_${via}`);
+      phantomRememberSysAuthority(msg, `demotion_${via}`);
 
       concierge.candidateReason = `demoted_resynced_${concierge.roleDemotedBy}`;
       concierge.localRoleReason = `role_demoted_resynced_${concierge.roleDemotedBy}`;
       concierge.lastErr = null;
 
-      six7RefreshSysReadiness(`role_demoted_${via}`);
-      six7ScheduleSysAdmission(`role_demoted_${via}`);
+      phantomRefreshSysReadiness(`role_demoted_${via}`);
+      phantomScheduleSysAdmission(`role_demoted_${via}`);
       emitSnapshot(`role_demoted_resynced_${localRole}_${result.why}`);
       return true;
     }
@@ -6981,12 +6990,12 @@ export function createExtractedEngine(host) {
     return false;
   }
 
-  function six7CanUseSys(hKey) {
-    const key = six7ShortKey(hKey);
+  function phantomCanUseSys(hKey) {
+    const key = phantomShortKey(hKey);
     if (!key) return false;
 
-    if (six7RelationshipRevoked.has(key)) return false;
-    if (six7IsBlocked(key) || six7IsBlockedBy(key)) return false;
+    if (phantomRelationshipRevoked.has(key)) return false;
+    if (phantomIsBlocked(key) || phantomIsBlockedBy(key)) return false;
 
     const st = getState(key);
     return (
@@ -6997,44 +7006,44 @@ export function createExtractedEngine(host) {
     );
   }
 
-  function six7CanUseChat(hKey) {
-    const key = six7ShortKey(hKey);
+  function phantomCanUseChat(hKey) {
+    const key = phantomShortKey(hKey);
     if (!key) return false;
-    if (six7RelationshipRevoked.has(key)) return false;
+    if (phantomRelationshipRevoked.has(key)) return false;
     return getState(key) === VEIL.INSIDE;
   }
 
-  function six7IsSysMessage(sys) {
+  function phantomIsSysMessage(sys) {
     return !!sys;
   }
 
-  function six7IsEstablishedLike(hKey) {
+  function phantomIsEstablishedLike(hKey) {
     const st = getState(hKey);
     return st === VEIL.ESTABLISHED || st === VEIL.INSIDE;
   }
 
-  function six7IsReconnectPrimary(remoteHKey) {
-    const local = six7ShortKey(selfHKey);
-    const remote = six7ShortKey(remoteHKey);
+  function phantomIsReconnectPrimary(remoteHKey) {
+    const local = phantomShortKey(selfHKey);
+    const remote = phantomShortKey(remoteHKey);
     return !!local && !!remote && local < remote;
   }
 
-  function six7PresentReconnect(
+  function phantomPresentReconnect(
     remoteHKey,
     proof = "nonterminal_reconnect",
     observedBootId = "",
   ) {
-    const key = six7ShortKey(remoteHKey);
+    const key = phantomShortKey(remoteHKey);
     if (!key) return false;
 
     const reconnect = reconnectingPeers.get(key);
     if (!reconnect || reconnect.presented === true) return false;
 
-    const relationship = six7RelationshipGet(key);
+    const relationship = phantomRelationshipGet(key);
     if (
-      six7PendingTerminalExits.has(key) ||
-      __six7GoneNotified.has(key) ||
-      !six7RelationshipIsAccepted(relationship) ||
+      phantomPendingTerminalExits.has(key) ||
+      __phantomGoneNotified.has(key) ||
+      !phantomRelationshipIsAccepted(relationship) ||
       !lastRoster.has(key)
     ) {
       emitSnapshot("chat_reconnect_presentation_blocked_terminal_relationship");
@@ -7073,27 +7082,27 @@ export function createExtractedEngine(host) {
     return true;
   }
 
-  function six7EndFailedChat(remoteHKey, reason = "reconnect_failed") {
-    const key = six7ShortKey(remoteHKey);
+  function phantomEndFailedChat(remoteHKey, reason = "reconnect_failed") {
+    const key = phantomShortKey(remoteHKey);
     if (!key) return false;
 
-    const relationship = six7RelationshipGet(key);
+    const relationship = phantomRelationshipGet(key);
     if (
-      six7PendingTerminalExits.has(key) ||
-      __six7GoneNotified.has(key) ||
-      !six7RelationshipIsAccepted(relationship) ||
+      phantomPendingTerminalExits.has(key) ||
+      __phantomGoneNotified.has(key) ||
+      !phantomRelationshipIsAccepted(relationship) ||
       !lastRoster.has(key)
     ) {
       emitSnapshot("chat_attempt_expiry_observed_terminal_relationship");
       return false;
     }
 
-    const ent = six7ChatPeers.get(key);
+    const ent = phantomChatPeers.get(key);
     if (ent && ent.chatState !== "ready") {
       ent.chatFault = String(reason || "reconnect_failed");
     }
 
-    six7PresentReconnect(key, "nonterminal_deadline");
+    phantomPresentReconnect(key, "nonterminal_deadline");
 
     concierge.lastErr =
       "chat_attempt_expired_observation:" +
@@ -7102,11 +7111,11 @@ export function createExtractedEngine(host) {
     return true;
   }
 
-  function six7CancelReconnect(remoteHKey, restored = false) {
-    const key = six7ShortKey(remoteHKey);
+  function phantomCancelReconnect(remoteHKey, restored = false) {
+    const key = phantomShortKey(remoteHKey);
     if (!key) return;
 
-    six7CancelChatAttemptDeadline(key);
+    phantomCancelChatAttemptDeadline(key);
 
     const reconnect = reconnectingPeers.get(key) || null;
     const wasReconnecting = !!reconnect;
@@ -7114,7 +7123,7 @@ export function createExtractedEngine(host) {
     reconnectingPeers.delete(key);
 
     if (restored) {
-      const ent = six7ChatPeers.get(key);
+      const ent = phantomChatPeers.get(key);
       const chatReady = !!(
         ent?.dc?.readyState === "open" &&
         ent?.chatState === "ready" &&
@@ -7147,16 +7156,16 @@ export function createExtractedEngine(host) {
     }
   }
 
-  function six7CanReconnect(remoteHKey) {
-    const key = six7ShortKey(remoteHKey);
+  function phantomCanReconnect(remoteHKey) {
+    const key = phantomShortKey(remoteHKey);
     if (!key) return false;
-    if (__six7ExitSent) return false;
-    if (__six7GoneNotified.has(key)) return false;
-    return six7IsEstablishedLike(key);
+    if (__phantomExitSent) return false;
+    if (__phantomGoneNotified.has(key)) return false;
+    return phantomIsEstablishedLike(key);
   }
 
-  function six7ScheduleReconnect(remoteHKey, reason = "transport_lost") {
-    const key = six7ShortKey(remoteHKey);
+  function phantomScheduleReconnect(remoteHKey, reason = "transport_lost") {
+    const key = phantomShortKey(remoteHKey);
     if (!key) return false;
 
     const why = String(reason || "transport_lost").toLowerCase();
@@ -7170,8 +7179,8 @@ export function createExtractedEngine(host) {
       return false;
     }
 
-    if (!six7CanReconnect(key)) {
-      six7CancelReconnect(key);
+    if (!phantomCanReconnect(key)) {
+      phantomCancelReconnect(key);
       emitSnapshot("carrier_reconnect_blocked_relationship_invalid");
       return false;
     }
@@ -7184,8 +7193,8 @@ export function createExtractedEngine(host) {
       return false;
     }
 
-    const relationship = six7RelationshipGet(key);
-    const livenessProbe = six7PrepareRelationshipControl(
+    const relationship = phantomRelationshipGet(key);
+    const livenessProbe = phantomPrepareRelationshipControl(
       {
         type: "veil_status",
         from: selfHKey,
@@ -7194,7 +7203,7 @@ export function createExtractedEngine(host) {
         state: getState(key),
         cycleId: relationship?.cycleId || null,
         reconnectProbe: true,
-        bootId: six7BootId,
+        bootId: phantomBootId,
       },
       "veil_status",
     );
@@ -7208,29 +7217,29 @@ export function createExtractedEngine(host) {
       probeCid: String(livenessProbe?.cid || ""),
       probeSent: false,
       remoteBootId: String(
-        relationship?.remoteBootId || six7RemoteBootIds.get(key) || "",
+        relationship?.remoteBootId || phantomRemoteBootIds.get(key) || "",
       ),
     };
     reconnectingPeers.set(key, reconnect);
 
-    if (!six7ChatReconnectDeadlines.has(key)) {
+    if (!phantomChatReconnectDeadlines.has(key)) {
       const deadline = setTimeout(() => {
-        six7ChatReconnectDeadlines.delete(key);
+        phantomChatReconnectDeadlines.delete(key);
 
         if (!reconnectingPeers.has(key)) return;
-        if (!six7CanReconnect(key)) return;
+        if (!phantomCanReconnect(key)) return;
 
-        six7EndFailedChat(key, "reconnect_deadline_observed");
-      }, SIX7_CHAT_RECONNECT_MS);
+        phantomEndFailedChat(key, "reconnect_deadline_observed");
+      }, PHANTOM_CHAT_RECONNECT_MS);
 
-      six7ChatReconnectDeadlines.set(key, deadline);
+      phantomChatReconnectDeadlines.set(key, deadline);
     }
 
     // Transport repair starts immediately, but a shell-visible failure is not
     // projected yet. A directed relationship proof from the same incarnation
     // distinguishes a real chat-only interruption from a peer that is already
     // exiting and awaiting committed authority removal.
-    reconnect.probeSent = six7SendControl(
+    reconnect.probeSent = phantomSendControl(
       livenessProbe,
       "veil_status_reconnect_probe",
     );
@@ -7241,7 +7250,7 @@ export function createExtractedEngine(host) {
         : "chat_reconnect_waiting_for_authority_or_deadline",
     );
 
-    if (!six7IsReconnectPrimary(key)) {
+    if (!phantomIsReconnectPrimary(key)) {
       /*
        * Deterministic non-owner path:
        * teardown is already complete; wait for the pair owner’s offer.
@@ -7252,7 +7261,7 @@ export function createExtractedEngine(host) {
 
     emitSnapshot("carrier_reconnect_owner_birth_" + why);
 
-    void six7RequestChatPipe(
+    void phantomRequestChatPipe(
       key,
       "carrier_reconnect_owner_" + String(why || "transport_lost"),
     );
@@ -7260,8 +7269,8 @@ export function createExtractedEngine(host) {
     return true;
   }
 
-  function six7HandleTransportLoss(remoteHKey, reason = "transport_lost") {
-    const key = six7ShortKey(remoteHKey);
+  function phantomHandleTransportLoss(remoteHKey, reason = "transport_lost") {
+    const key = phantomShortKey(remoteHKey);
     if (!key) return;
 
     const why = String(reason || "transport_lost").toLowerCase();
@@ -7269,96 +7278,96 @@ export function createExtractedEngine(host) {
     const chatFault = /^(dc|chat|chat_pipe|pc|ice)_/.test(why);
 
     if (sysFault) {
-      if (six7TemporarySysTransactions.has(key)) {
-        six7CloseTemporarySysTransaction(key, "transport_fault_" + why);
+      if (phantomTemporarySysTransactions.has(key)) {
+        phantomCloseTemporarySysTransaction(key, "transport_fault_" + why);
         emitSnapshot("temporary_sys_transport_fault_ignored_by_room_sys");
         return;
       }
 
-      const gossipTarget = six7ShortKey(
-        six7GossipRecovery.targets[six7GossipRecovery.index],
+      const gossipTarget = phantomShortKey(
+        phantomGossipRecovery.targets[phantomGossipRecovery.index],
       );
 
       if (gossipTarget && gossipTarget === key) {
-        six7TeardownSysPeer(key, "authority_gossip_target_failed_" + why);
+        phantomTeardownSysPeer(key, "authority_gossip_target_failed_" + why);
 
-        if (six7ShortKey(concierge.sysReadyPeer) === key) {
+        if (phantomShortKey(concierge.sysReadyPeer) === key) {
           concierge.sysReadyPeer = null;
           concierge.sysReadyAt = 0;
           concierge.sysReadyProof = "none";
           concierge.sysReadyEpoch = 0;
         }
 
-        if (six7ShortKey(concierge.sysPeer) === key) {
+        if (phantomShortKey(concierge.sysPeer) === key) {
           concierge.sysPeer = null;
           concierge.sysPipeState = "faulted";
           concierge.sysLastErr = why;
         }
 
-        six7GossipRecovery.index += 1;
-        if (six7GossipRecovery.kind === 'committed_mirror') {
-          const failures = Number(six7GossipRecovery.retryCount || 0) + 1;
-          six7GossipRecovery.retryCount = failures;
-          six7GossipRecovery.nextRetryAt = now() + Math.min(15000, 1000 * 2 ** Math.min(failures - 1, 4));
+        phantomGossipRecovery.index += 1;
+        if (phantomGossipRecovery.kind === 'committed_mirror') {
+          const failures = Number(phantomGossipRecovery.retryCount || 0) + 1;
+          phantomGossipRecovery.retryCount = failures;
+          phantomGossipRecovery.nextRetryAt = now() + Math.min(15000, 1000 * 2 ** Math.min(failures - 1, 4));
         }
-        six7RefreshSysReadiness("authority_gossip_target_failed");
+        phantomRefreshSysReadiness("authority_gossip_target_failed");
 
-        const nextTarget = six7ShortKey(
-          six7GossipRecovery.targets[six7GossipRecovery.index],
+        const nextTarget = phantomShortKey(
+          phantomGossipRecovery.targets[phantomGossipRecovery.index],
         );
 
         if (nextTarget) {
-          six7ScheduleSysAdmission("authority_gossip_next_syscon");
+          phantomScheduleSysAdmission("authority_gossip_next_syscon");
           emitSnapshot("authority_gossip_next_syscon_requested");
         } else {
           emitSnapshot("authority_gossip_syscons_unreachable");
-          six7BeginGossipSuccessorRecovery(
+          phantomBeginGossipSuccessorRecovery(
             "authority_gossip_syscons_unreachable",
           );
         }
         return;
       }
 
-      if (__six7GoneNotified.has(key)) {
-        six7TeardownSysPeer(key, "sys_loss_peer_gone");
+      if (__phantomGoneNotified.has(key)) {
+        phantomTeardownSysPeer(key, "sys_loss_peer_gone");
         emitSnapshot("sys_pipe_loss_ignored_peer_gone");
         return;
       }
 
-      if (six7SysReplacementTerminal(key)) {
-        six7TeardownSysPeer(key, "sys_loss_terminal_exit_pending");
-        six7SysDialing.delete(key);
-        six7SysPreflightUnstableRetries.delete(key);
-        six7PendingRtcIce.delete(key);
+      if (phantomSysReplacementTerminal(key)) {
+        phantomTeardownSysPeer(key, "sys_loss_terminal_exit_pending");
+        phantomSysDialing.delete(key);
+        phantomSysPreflightUnstableRetries.delete(key);
+        phantomPendingRtcIce.delete(key);
         emitSnapshot("sys_pipe_loss_held_terminal_exit_pending");
         return;
       }
 
-      six7TeardownSysPeer(key, "sys_transport_retired_" + why);
+      phantomTeardownSysPeer(key, "sys_transport_retired_" + why);
 
-      if (six7ShortKey(concierge.sysReadyPeer) === key) {
+      if (phantomShortKey(concierge.sysReadyPeer) === key) {
         concierge.sysReadyPeer = null;
         concierge.sysReadyAt = 0;
         concierge.sysReadyProof = "none";
         concierge.sysReadyEpoch = 0;
       }
 
-      if (six7ShortKey(concierge.sysPeer) === key) {
+      if (phantomShortKey(concierge.sysPeer) === key) {
         concierge.sysPipeState = "faulted";
         concierge.sysLastErr = why;
       }
 
-      six7RefreshSysReadiness("sys_transport_fault_" + why);
+      phantomRefreshSysReadiness("sys_transport_fault_" + why);
 
       const role = String(
         concierge.localRoleCandidate || concierge.role || "peer",
       );
 
-      if (role === "peer" || !six7CommittedMember(selfHKey)) {
-        six7ScheduleSysAdmission("sys_transport_fault_" + why);
+      if (role === "peer" || !phantomCommittedMember(selfHKey)) {
+        phantomScheduleSysAdmission("sys_transport_fault_" + why);
       } else {
-        six7ArmSysReplacement(key, why);
-        six7MaybeRelinkSysconPair("sys_transport_fault_" + why);
+        phantomArmSysReplacement(key, why);
+        phantomMaybeRelinkSysconPair("sys_transport_fault_" + why);
       }
 
       emitSnapshot("sys_transport_fault_" + why);
@@ -7371,7 +7380,7 @@ export function createExtractedEngine(host) {
       rtcTeardown(key, "chat_transport_retired_" + why);
 
       if (
-        __six7GoneNotified.has(key) ||
+        __phantomGoneNotified.has(key) ||
         st === VEIL.OUTSIDE ||
         st === VEIL.REMOVED
       ) {
@@ -7383,7 +7392,7 @@ export function createExtractedEngine(host) {
       concierge.chatLastDropAt = now();
       concierge.chatLastDropPeer = key;
 
-      six7ScheduleReconnect(key, why);
+      phantomScheduleReconnect(key, why);
       emitSnapshot("chat_transport_reconnect_scheduled_" + why);
       return;
     }
@@ -7418,23 +7427,23 @@ export function createExtractedEngine(host) {
       from: fromKey,
       to: toKey,
       pipe,
-      bootId: six7BootId,
+      bootId: phantomBootId,
     };
 
     if (pipe === "sys") {
-      const base = six7LocalCommittedAuthority();
-      if (kind === "offer" && base && six7ShortKey(base.syscon2) === fromKey &&
-          six7PendingTerminalExits.has(six7ShortKey(base.syscon1))) {
-        payload.successorProof = {room: videoId, from: fromKey, to: toKey, bootId: six7BootId,
+      const base = phantomLocalCommittedAuthority();
+      if (kind === "offer" && base && phantomShortKey(base.syscon2) === fromKey &&
+          phantomPendingTerminalExits.has(phantomShortKey(base.syscon1))) {
+        payload.successorProof = {room: videoId, from: fromKey, to: toKey, bootId: phantomBootId,
           baseOne: base.syscon1, baseTwo: base.syscon2, baseEpoch: base.epoch,
-          baseSeq: base.rosterSeq, baseRoster: six7AuthorityRosterRows(base.roster), terminalLeader: base.syscon1};
+          baseSeq: base.rosterSeq, baseRoster: phantomAuthorityRosterRows(base.roster), terminalLeader: base.syscon1};
       }
-      const ent = six7SysPeers.get(toKey);
+      const ent = phantomSysPeers.get(toKey);
       const attemptId = String(ent?.attempt?.id || ent?.sysAttemptId || "");
 
       if (attemptId) payload.sysAttemptId = attemptId;
 
-      const transaction = six7TemporarySysTransactions.get(toKey);
+      const transaction = phantomTemporarySysTransactions.get(toKey);
       if (transaction && transaction.state !== "closed") {
         payload.sysTemporary = true;
         payload.sysPurpose = String(transaction.purpose || "");
@@ -7458,17 +7467,17 @@ export function createExtractedEngine(host) {
     }
 
     if (pipe === "chat") {
-      const relationship = six7RelationshipGet(toKey);
+      const relationship = phantomRelationshipGet(toKey);
       if (
-        !six7RelationshipIsAccepted(relationship) ||
-        six7PendingTerminalExits.has(toKey) ||
-        __six7GoneNotified.has(toKey)
+        !phantomRelationshipIsAccepted(relationship) ||
+        phantomPendingTerminalExits.has(toKey) ||
+        __phantomGoneNotified.has(toKey)
       ) {
         emitSnapshot("chat_rtc_tx_blocked_relationship_cycle");
         return false;
       }
       msg.relationshipCycleId = relationship.cycleId;
-      const ent = six7ChatPeers.get(toKey);
+      const ent = phantomChatPeers.get(toKey);
       const chatAttemptId = String(ent?.chatAttemptId || "");
       if (chatAttemptId) msg.chatAttemptId = chatAttemptId;
     }
@@ -7477,17 +7486,17 @@ export function createExtractedEngine(host) {
 
     // A surviving accepted peer pipe can introduce a replacement SYS edge
     // even when its two endpoints now use different bootstrap providers.
-    const recoveryChat=six7ChatPeers.get(toKey);
-    if(!six7HasOpenSysPipe(toKey)&&canCarrySysRecovery({packet:msg,room:videoId,self:fromKey,remote:toKey,
-      member:!!six7CommittedMember(toKey),terminal:six7PendingTerminalExits.has(toKey),
-      accepted:six7RelationshipIsAccepted(six7RelationshipGet(toKey)),ready:recoveryChat?.dc?.readyState==='open'&&recoveryChat?.chatState==='ready'})){
+    const recoveryChat=phantomChatPeers.get(toKey);
+    if(!phantomHasOpenSysPipe(toKey)&&canCarrySysRecovery({packet:msg,room:videoId,self:fromKey,remote:toKey,
+      member:!!phantomCommittedMember(toKey),terminal:phantomPendingTerminalExits.has(toKey),
+      accepted:phantomRelationshipIsAccepted(phantomRelationshipGet(toKey)),ready:recoveryChat?.dc?.readyState==='open'&&recoveryChat?.chatState==='ready'})){
       try{recoveryChat.dc.send(JSON.stringify({t:'SYS_RECOVERY_RTC',packet:msg}));emitSnapshot('sys_recovery_signal_existing_peer_pipe');return true;}catch{}
     }
-    const sent = six7SendControl(msg, msg.type);
+    const sent = phantomSendControl(msg, msg.type);
 
     if (pipe === "chat") {
-      const ent = six7ChatPeers.get(toKey);
-      six7ChatSignalAudit("tx", {
+      const ent = phantomChatPeers.get(toKey);
+      phantomChatSignalAudit("tx", {
         peer: toKey,
         kind: msg.type,
         route: concierge.lastRouteMode || "none",
@@ -7521,12 +7530,12 @@ export function createExtractedEngine(host) {
     return true;
   }
 
-  function six7IsArrayBuffer(x) {
+  function phantomIsArrayBuffer(x) {
     return x && Object.prototype.toString.call(x) === "[object ArrayBuffer]";
   }
 
   function rtcSendDC(remoteHKey, obj) {
-    const ent = six7ChatPeers.get(
+    const ent = phantomChatPeers.get(
       String(remoteHKey || "")
         .slice(0, 16)
         .toLowerCase(),
@@ -7560,7 +7569,7 @@ export function createExtractedEngine(host) {
   }
 
   async function rtcSendRawDC(remoteHKey, buf) {
-    const ent = six7ChatPeers.get(
+    const ent = phantomChatPeers.get(
       String(remoteHKey || "")
         .slice(0, 16)
         .toLowerCase(),
@@ -7619,14 +7628,14 @@ export function createExtractedEngine(host) {
 
   function rtcSendHello(remoteHKey) {
     const payload = rtcHelloPayload();
-    CORE_DEBUG && console.log("[six7][RTC] TX HELLO →", remoteHKey, payload);
+    CORE_DEBUG && console.log("[phantom][RTC] TX HELLO →", remoteHKey, payload);
     rtcSendDC(remoteHKey, payload);
   }
 
-  function six7MarkSysTx(type, remoteHKey = "") {
-    const key = six7ShortKey(remoteHKey);
+  function phantomMarkSysTx(type, remoteHKey = "") {
+    const key = phantomShortKey(remoteHKey);
 
-    if (six7OwnsPrimarySysState(key)) {
+    if (phantomOwnsPrimarySysState(key)) {
       concierge.sysPipeState = concierge.sysPipeState || "missing";
       concierge.sysPeer = key;
     }
@@ -7635,11 +7644,11 @@ export function createExtractedEngine(host) {
     concierge.sysLastTxType = String(type || "unknown");
   }
 
-  function six7MarkSysRx(type, remoteHKey = "") {
-    const key = six7ShortKey(remoteHKey);
+  function phantomMarkSysRx(type, remoteHKey = "") {
+    const key = phantomShortKey(remoteHKey);
     const t = String(type || "unknown");
 
-    const ownsPrimarySysState = six7OwnsPrimarySysState(key);
+    const ownsPrimarySysState = phantomOwnsPrimarySysState(key);
 
     if (ownsPrimarySysState) {
       concierge.sysPeer = key;
@@ -7648,7 +7657,7 @@ export function createExtractedEngine(host) {
     concierge.sysLastRxAt = now();
     concierge.sysLastRxType = t;
 
-    const temporary = six7TemporarySysTransactions.get(key);
+    const temporary = phantomTemporarySysTransactions.get(key);
     if (temporary && temporary.state !== "closed") {
       emitSnapshot("temporary_sys_rx_" + t);
       return;
@@ -7664,7 +7673,7 @@ export function createExtractedEngine(host) {
         t === "SYS_CONTROL" ||
         t === "SYS_CONTROL_ACK")
     ) {
-      six7SysLastGoodRx.set(key, now());
+      phantomSysLastGoodRx.set(key, now());
 
       if (
         ownsPrimarySysState &&
@@ -7677,7 +7686,7 @@ export function createExtractedEngine(host) {
     }
   }
 
-  function six7SendSysDC(remoteHKey, obj) {
+  function phantomSendSysDC(remoteHKey, obj) {
     const t = String(obj?.t || '');
     const inner = obj?.msg;
     // Setup and departure packets must flow even while leadership duties are blocked.
@@ -7685,17 +7694,17 @@ export function createExtractedEngine(host) {
       ((inner?.pipe === 'sys' && ['rtc_offer','rtc_answer','rtc_ice'].includes(inner?.type)) ||
        ['authority_exit','authority_detach'].includes(inner?.type));
     if ((t === 'SYS_STATUS' || t === 'SYS_STATUS_ACK' || (t === 'SYS_CONTROL' && !transportControl)) &&
-        !six7AuthorizeSyscon1Duty(t+':'+String(remoteHKey)+':'+(++sdkAdminDutySequence), () => six7SendSysDC(remoteHKey,obj))) return false;
+        !phantomAuthorizeSyscon1Duty(t+':'+String(remoteHKey)+':'+(++sdkAdminDutySequence), () => phantomSendSysDC(remoteHKey,obj))) return false;
 
-    const key = six7ShortKey(remoteHKey);
+    const key = phantomShortKey(remoteHKey);
     if (!key || !obj || typeof obj !== "object") return false;
 
-    const ent = six7SysPeers.get(key);
+    const ent = phantomSysPeers.get(key);
     const dc = ent?.sysdc;
 
     const type = String(obj.t || obj.type || "SYS_UNKNOWN");
 
-    if (!six7TemporarySysAllowsEnvelope(key, obj)) {
+    if (!phantomTemporarySysAllowsEnvelope(key, obj)) {
       concierge.sysLastErr = "temporary_sys_envelope_rejected:" + type;
       emitSnapshot("temporary_sys_envelope_rejected_" + type);
       return false;
@@ -7708,7 +7717,7 @@ export function createExtractedEngine(host) {
       return false;
     }
 
-    six7MarkSysTx(type, key);
+    phantomMarkSysTx(type, key);
 
     try {
       dc.send(JSON.stringify(obj));
@@ -7723,28 +7732,28 @@ export function createExtractedEngine(host) {
     }
   }
 
-  function six7SysHelloPayload() {
+  function phantomSysHelloPayload() {
     return {
       t: "SYS_HELLO",
       at: now(),
       room: videoId || null,
-      from: six7ShortKey(selfHKey) || null,
-      bootId: six7BootId,
+      from: phantomShortKey(selfHKey) || null,
+      bootId: phantomBootId,
       role: concierge.role || "peer",
       candidateRole: concierge.localRoleCandidate || "peer",
       epoch: Number(concierge.sysconEpoch || 0),
       roomJoinedAt: Number(concierge.roomJoinedAt || 0),
     };
   }
-  function six7SysStatusPayload(type = "SYS_STATUS") {
-    const self = six7ShortKey(selfHKey);
+  function phantomSysStatusPayload(type = "SYS_STATUS") {
+    const self = phantomShortKey(selfHKey);
     const authority = {
-      from: six7ShortKey(six7SysAuthority.from),
-      syscon1: six7ShortKey(six7SysAuthority.syscon1),
-      syscon2: six7ShortKey(six7SysAuthority.syscon2),
-      epoch: Number(six7SysAuthority.epoch || 0),
-      rosterSeq: Number(six7SysAuthority.rosterSeq || 0),
-      roster: six7AuthorityRosterRows(six7SysAuthority.roster),
+      from: phantomShortKey(phantomSysAuthority.from),
+      syscon1: phantomShortKey(phantomSysAuthority.syscon1),
+      syscon2: phantomShortKey(phantomSysAuthority.syscon2),
+      epoch: Number(phantomSysAuthority.epoch || 0),
+      rosterSeq: Number(phantomSysAuthority.rosterSeq || 0),
+      roster: phantomAuthorityRosterRows(phantomSysAuthority.roster),
     };
 
     const publishesAuthority = !!(
@@ -7756,24 +7765,24 @@ export function createExtractedEngine(host) {
       authority.roster.length > 0
     );
 
-    const localPending = six7SysAuthority.pending;
+    const localPending = phantomSysAuthority.pending;
     const pendingAuthority =
-      localPending && six7ShortKey(localPending?.snapshot?.syscon1) === self
+      localPending && phantomShortKey(localPending?.snapshot?.syscon1) === self
         ? {
             id: String(localPending.id || ""),
             via: String(localPending.via || "syscon1_commit"),
             baseEpoch: Number(localPending.baseEpoch || 0),
             baseRosterSeq: Number(localPending.baseRosterSeq || 0),
-            baseRoster: six7AuthorityRosterRows(localPending.baseRoster),
+            baseRoster: phantomAuthorityRosterRows(localPending.baseRoster),
             baseAuthority: localPending.baseAuthority
               ? {
                   ...localPending.baseAuthority,
-                  roster: six7AuthorityRosterRows(
+                  roster: phantomAuthorityRosterRows(
                     localPending.baseAuthority?.roster,
                   ),
                 }
               : null,
-            terminalExits: six7AuthorityTerminalExits(localPending),
+            terminalExits: phantomAuthorityTerminalExits(localPending),
             admission: localPending.admission
               ? { ...localPending.admission }
               : null,
@@ -7782,7 +7791,7 @@ export function createExtractedEngine(host) {
               : null,
             snapshot: {
               ...localPending.snapshot,
-              roster: six7AuthorityRosterRows(localPending.snapshot?.roster),
+              roster: phantomAuthorityRosterRows(localPending.snapshot?.roster),
             },
           }
         : null;
@@ -7799,9 +7808,9 @@ export function createExtractedEngine(host) {
             epoch: authority.epoch,
             rosterSeq: authority.rosterSeq,
             roster: authority.roster,
-            terminalExits: Array.from(six7PendingTerminalExits.entries()).map(
+            terminalExits: Array.from(phantomPendingTerminalExits.entries()).map(
               ([member, command]) => ({
-                member: six7ShortKey(member),
+                member: phantomShortKey(member),
                 bootId: String(command?.bootId || "") || null,
                 epoch: Number(command?.epoch || 0),
                 at: Number(command?.at || 0),
@@ -7816,7 +7825,7 @@ export function createExtractedEngine(host) {
       at: now(),
       room: videoId || null,
       from: self || null,
-      bootId: six7BootId,
+      bootId: phantomBootId,
       role: publishesAuthority
         ? "syscon1"
         : String(concierge.localRoleCandidate || concierge.role || "peer"),
@@ -7828,10 +7837,10 @@ export function createExtractedEngine(host) {
       roomJoinedAt: Number(concierge.roomJoinedAt || 0),
       syscon1: publishesAuthority
         ? authority.syscon1
-        : six7ShortKey(concierge.syscon1) || null,
+        : phantomShortKey(concierge.syscon1) || null,
       syscon2: publishesAuthority
         ? authority.syscon2
-        : six7ShortKey(concierge.syscon2) || null,
+        : phantomShortKey(concierge.syscon2) || null,
       rosterSeq: publishesAuthority ? authority.rosterSeq : 0,
       roster: publishesAuthority ? authority.roster : [],
       pendingAuthority,
@@ -7842,28 +7851,28 @@ export function createExtractedEngine(host) {
       mirrorAuthority,
     };
   }
-  function six7PresencePayload() {
+  function phantomPresencePayload() {
     return {
       type: "presence",
       t: now(),
       videoId,
       from: selfHKey,
       handle: selfHandle,
-      bootId: six7BootId,
+      bootId: phantomBootId,
       epoch: Number(concierge.sysconEpoch || 0),
       roomJoinedAt: Number(concierge.roomJoinedAt || 0),
       hex: selfHex,
       avatar: selfAvatar || undefined,
     };
   }
-  function six7LocalPresenceRow() {
-    const self = six7ShortKey(selfHKey);
+  function phantomLocalPresenceRow() {
+    const self = phantomShortKey(selfHKey);
 
     return {
       hKey: self,
       from: self,
       handle: selfHandle || null,
-      bootId: six7BootId,
+      bootId: phantomBootId,
       epoch: Number(concierge.sysconEpoch || 0),
       roomJoinedAt: Number(concierge.roomJoinedAt || 0),
       hex: selfHex || null,
@@ -7874,10 +7883,10 @@ export function createExtractedEngine(host) {
     };
   }
 
-  function six7PresenceRowFromPeer(peer, via = "unknown") {
+  function phantomPresenceRowFromPeer(peer, via = "unknown") {
     if (!peer || typeof peer !== "object") return null;
 
-    const hKey = six7ShortKey(peer.hKey || peer.from || peer.hash);
+    const hKey = phantomShortKey(peer.hKey || peer.from || peer.hash);
     if (!hKey) return null;
 
     return {
@@ -7893,8 +7902,7 @@ export function createExtractedEngine(host) {
     };
   }
 
-  // SIX7 PATCH START: presence-merge-preserve-identity
-  function six7MergePresenceRow(oldRow, nextRow, via = "unknown") {
+  function phantomMergePresenceRow(oldRow, nextRow, via = "unknown") {
     if (!nextRow) return oldRow || null;
     if (!oldRow) {
       const joinedAt = Number(
@@ -7935,23 +7943,22 @@ export function createExtractedEngine(host) {
 
     return merged;
   }
-  // SIX7 PATCH END: presence-merge-preserve-identity
 
-  function six7EmitPresenceRoster(reason = "presence_roster") {
-    const self = six7ShortKey(selfHKey);
+  function phantomEmitPresenceRoster(reason = "presence_roster") {
+    const self = phantomShortKey(selfHKey);
     if (!self) return false;
 
     const rows = new Map();
 
-    rows.set(self, six7LocalPresenceRow());
+    rows.set(self, phantomLocalPresenceRow());
 
     for (const hKey of Array.from(lastRoster || [])) {
-      const key = six7ShortKey(hKey);
+      const key = phantomShortKey(hKey);
       if (!key || key === self) continue;
 
       rows.set(
         key,
-        six7PresenceBook.get(key) || {
+        phantomPresenceBook.get(key) || {
           hKey: key,
           from: key,
           videoId: videoId || null,
@@ -7962,7 +7969,7 @@ export function createExtractedEngine(host) {
     }
 
     const list = Array.from(rows.values()).filter((p) =>
-      six7ShortKey(p.hKey || p.from),
+      phantomShortKey(p.hKey || p.from),
     );
 
     if (!list.length) return false;
@@ -7973,25 +7980,25 @@ export function createExtractedEngine(host) {
       via: reason,
     });
 
-    six7RefreshSysReadiness(reason);
-    six7RefreshSysCandidates(list, reason);
+    phantomRefreshSysReadiness(reason);
+    phantomRefreshSysCandidates(list, reason);
 
     emitSnapshot(reason);
     return true;
   }
 
-  function six7RememberPresencePeer(peer, via = "unknown", opts = {}) {
-    const row = six7PresenceRowFromPeer(peer, via);
+  function phantomRememberPresencePeer(peer, via = "unknown", opts = {}) {
+    const row = phantomPresenceRowFromPeer(peer, via);
     if (!row) return false;
 
-    const hKey = six7ShortKey(row.hKey || row.from);
+    const hKey = phantomShortKey(row.hKey || row.from);
     if (!hKey) return false;
 
     // Presence is identity/metadata evidence only.
     // It cannot add room membership or clear a committed terminal removal.
-    const oldRow = six7PresenceBook.get(hKey) || null;
-    const mergedRow = six7MergePresenceRow(oldRow, row, via);
-    six7PresenceBook.set(hKey, mergedRow);
+    const oldRow = phantomPresenceBook.get(hKey) || null;
+    const mergedRow = phantomMergePresenceRow(oldRow, row, via);
+    phantomPresenceBook.set(hKey, mergedRow);
 
     if (lastRoster.has(hKey)) {
       dialReady = true;
@@ -8005,42 +8012,42 @@ export function createExtractedEngine(host) {
     }
 
     if (opts.rosterEvent !== false) {
-      six7EmitPresenceRoster("presence_" + via);
+      phantomEmitPresenceRoster("presence_" + via);
     }
 
     return true;
   }
 
-  function six7OwnsDirectedSysRelay() {
-    const self = six7ShortKey(selfHKey);
+  function phantomOwnsDirectedSysRelay() {
+    const self = phantomShortKey(selfHKey);
     if (!self) return false;
 
-    const committedOne = six7ShortKey(
-      six7FreshSysAuthority()?.syscon1 || six7SysAuthority.syscon1,
+    const committedOne = phantomShortKey(
+      phantomFreshSysAuthority()?.syscon1 || phantomSysAuthority.syscon1,
     );
-    const effectiveOne = six7ShortKey(
+    const effectiveOne = phantomShortKey(
       committedOne || concierge.syscon1 || concierge.cfConciergeSyscon1,
     );
 
     return !!(effectiveOne && self === effectiveOne);
   }
 
-  function six7QueueDirectedSysControl(
+  function phantomQueueDirectedSysControl(
     destinationHKey,
     envelope,
     detail = "queued",
   ) {
-    const destination = six7ShortKey(destinationHKey);
-    const self = six7ShortKey(selfHKey);
+    const destination = phantomShortKey(destinationHKey);
+    const self = phantomShortKey(selfHKey);
 
     if (!destination || destination === self || !envelope) return false;
-    if (__six7GoneNotified.has(destination)) return false;
+    if (__phantomGoneNotified.has(destination)) return false;
 
-    let pending = six7PendingSysRelay.get(destination);
+    let pending = phantomPendingSysRelay.get(destination);
 
     if (!pending) {
       pending = [];
-      six7PendingSysRelay.set(destination, pending);
+      phantomPendingSysRelay.set(destination, pending);
     }
 
     pending.push({
@@ -8052,11 +8059,11 @@ export function createExtractedEngine(host) {
       at: now(),
     });
 
-    if (pending.length > SIX7_SYS_RELAY_PENDING_MAX) {
-      pending.splice(0, pending.length - SIX7_SYS_RELAY_PENDING_MAX);
+    if (pending.length > PHANTOM_SYS_RELAY_PENDING_MAX) {
+      pending.splice(0, pending.length - PHANTOM_SYS_RELAY_PENDING_MAX);
     }
 
-    six7ChatSignalAudit("relay_held", {
+    phantomChatSignalAudit("relay_held", {
       peer: destination,
       kind: envelope?.kind || envelope?.msg?.type || "unknown",
       route: "directed_sys_pending",
@@ -8072,17 +8079,17 @@ export function createExtractedEngine(host) {
     return true;
   }
 
-  function six7HoldDirectedSysRelay(destinationHKey, envelope) {
-    const destination = six7ShortKey(destinationHKey);
-    const self = six7ShortKey(selfHKey);
+  function phantomHoldDirectedSysRelay(destinationHKey, envelope) {
+    const destination = phantomShortKey(destinationHKey);
+    const self = phantomShortKey(selfHKey);
 
     if (!destination || destination === self) return false;
 
-    if (!six7OwnsDirectedSysRelay()) return false;
+    if (!phantomOwnsDirectedSysRelay()) return false;
     if (!lastRoster.has(destination)) return false;
-    if (__six7GoneNotified.has(destination)) return false;
+    if (__phantomGoneNotified.has(destination)) return false;
 
-    const held = six7QueueDirectedSysControl(
+    const held = phantomQueueDirectedSysControl(
       destination,
       envelope,
       "authoritative_syscon1_handoff",
@@ -8095,30 +8102,30 @@ export function createExtractedEngine(host) {
     return held;
   }
 
-  function six7FlushDirectedSysRelay(destinationHKey) {
-    const destination = six7ShortKey(destinationHKey);
+  function phantomFlushDirectedSysRelay(destinationHKey) {
+    const destination = phantomShortKey(destinationHKey);
     if (!destination) return false;
-    if (!six7HasOpenSysPipe(destination)) return false;
+    if (!phantomHasOpenSysPipe(destination)) return false;
 
-    const pending = six7PendingSysRelay.get(destination);
+    const pending = phantomPendingSysRelay.get(destination);
     if (!pending?.length) return false;
 
-    six7PendingSysRelay.delete(destination);
+    phantomPendingSysRelay.delete(destination);
 
     const held = [];
 
     for (const item of pending) {
       const envelope = item?.envelope;
 
-      if (!envelope || !six7SendSysDC(destination, envelope)) {
+      if (!envelope || !phantomSendSysDC(destination, envelope)) {
         held.push(item);
       }
     }
 
     if (held.length) {
-      six7PendingSysRelay.set(
+      phantomPendingSysRelay.set(
         destination,
-        held.slice(-SIX7_SYS_RELAY_PENDING_MAX),
+        held.slice(-PHANTOM_SYS_RELAY_PENDING_MAX),
       );
 
       concierge.lastErr = "sys_control_relay_flush_failed:" + destination;
@@ -8129,7 +8136,7 @@ export function createExtractedEngine(host) {
 
     concierge.lastErr = null;
 
-    six7ChatSignalAudit("relay_flushed", {
+    phantomChatSignalAudit("relay_flushed", {
       peer: destination,
       kind: "queued_control",
       route: "directed_sys",
@@ -8145,34 +8152,34 @@ export function createExtractedEngine(host) {
     return true;
   }
 
-  function six7SendSysControl(msg, type = "") {
+  function phantomSendSysControl(msg, type = "") {
     if (!msg || typeof msg !== "object") return false;
 
     const kind = String(msg.type || type || "unknown");
-    const cls = six7ControlClassFor(kind);
+    const cls = phantomControlClassFor(kind);
 
-    if (cls === "relationship_control" && !six7ShortKey(msg.to)) {
+    if (cls === "relationship_control" && !phantomShortKey(msg.to)) {
       concierge.lastErr = "sys_control_missing_to:" + kind;
       emitSnapshot("sys_control_missing_to_" + kind);
       return false;
     }
 
-    const destination = six7ShortKey(msg.to || concierge.sysPeer);
+    const destination = phantomShortKey(msg.to || concierge.sysPeer);
 
     const role = String(
       concierge.localRoleCandidate || concierge.role || "peer",
     );
-    const ownsDirectedRelay = six7OwnsDirectedSysRelay();
+    const ownsDirectedRelay = phantomOwnsDirectedSysRelay();
 
-    const self = six7ShortKey(selfHKey);
-    const boss = six7ShortKey(concierge.syscon1);
-    const secondary = six7ShortKey(concierge.syscon2);
-    const currentNeighbor = six7ShortKey(concierge.sysPeer);
+    const self = phantomShortKey(selfHKey);
+    const boss = phantomShortKey(concierge.syscon1);
+    const secondary = phantomShortKey(concierge.syscon2);
+    const currentNeighbor = phantomShortKey(concierge.sysPeer);
 
     const directDestinationOpen = !!(
       destination &&
       destination !== self &&
-      six7HasOpenSysPipe(destination)
+      phantomHasOpenSysPipe(destination)
     );
 
     const envelope = {
@@ -8192,12 +8199,12 @@ export function createExtractedEngine(host) {
       ownsDirectedRelay &&
       !directDestinationOpen
     ) {
-      return six7HoldDirectedSysRelay(destination, envelope);
+      return phantomHoldDirectedSysRelay(destination, envelope);
     }
 
     const key =
       cls === "presence"
-        ? six7ShortKey(msg.to || concierge.sysPeer)
+        ? phantomShortKey(msg.to || concierge.sysPeer)
         : directDestinationOpen
           ? destination
           : currentNeighbor || boss;
@@ -8214,12 +8221,12 @@ export function createExtractedEngine(host) {
     if (
       destination &&
       destination === key &&
-      six7PendingSysRelay.get(destination)?.length
+      phantomPendingSysRelay.get(destination)?.length
     ) {
-      const flushed = six7FlushDirectedSysRelay(destination);
+      const flushed = phantomFlushDirectedSysRelay(destination);
 
       if (!flushed) {
-        return six7QueueDirectedSysControl(
+        return phantomQueueDirectedSysControl(
           destination,
           envelope,
           "ordered_behind_unflushed_directed_control",
@@ -8227,7 +8234,7 @@ export function createExtractedEngine(host) {
       }
     }
 
-    const sent = six7SendSysDC(key, envelope);
+    const sent = phantomSendSysDC(key, envelope);
     if (sent) return true;
 
     // A physically open SYS edge can still reject one send while its SCTP
@@ -8239,7 +8246,7 @@ export function createExtractedEngine(host) {
       cls === "rtc_signal" &&
       (kind === "rtc_offer" || kind === "rtc_answer")
     ) {
-      const held = six7QueueDirectedSysControl(
+      const held = phantomQueueDirectedSysControl(
         destination,
         envelope,
         "endpoint_sys_send_failure",
@@ -8256,15 +8263,15 @@ export function createExtractedEngine(host) {
     return false;
   }
 
-  function six7WireSysDC(remoteHKey, dc) {
-    const key = six7ShortKey(remoteHKey);
+  function phantomWireSysDC(remoteHKey, dc) {
+    const key = phantomShortKey(remoteHKey);
     if (!key || !dc) return;
 
     try {
       dc.binaryType = "arraybuffer";
     } catch {}
 
-    const ownsPrimarySysState = six7OwnsPrimarySysState(key);
+    const ownsPrimarySysState = phantomOwnsPrimarySysState(key);
 
     if (ownsPrimarySysState) {
       concierge.sysPeer = key;
@@ -8276,13 +8283,13 @@ export function createExtractedEngine(host) {
     );
 
     dc.onopen = () => {
-      const ent = six7SysPeers.get(key);
+      const ent = phantomSysPeers.get(key);
       if (!ent || ent.sysdc !== dc) return;
       completeSysBirth(ent);
       sdkSysBirthFailures.delete(key);
       if (ent) {
         ent.sysCarrier = false;
-        const edgeAttempt = six7SysEdgeAttempt(key, false);
+        const edgeAttempt = phantomSysEdgeAttempt(key, false);
         if (edgeAttempt) {
           edgeAttempt.state = "open";
           edgeAttempt.lastEvent = "datachannel_open";
@@ -8290,10 +8297,10 @@ export function createExtractedEngine(host) {
         }
       }
 
-      if (six7SysPeers.get(key)?.sysdc !== dc) return;
+      if (phantomSysPeers.get(key)?.sysdc !== dc) return;
 
       post('PHANTOM_ADMIN_LINK_READY', {from:key});
-      const temporary = six7TemporarySysTransactions.get(key) || null;
+      const temporary = phantomTemporarySysTransactions.get(key) || null;
       if (temporary && ent) {
         ent.temporary = true;
         ent.tempSysPurpose = String(temporary.purpose || "");
@@ -8309,20 +8316,20 @@ export function createExtractedEngine(host) {
       }
 
       if (!temporary) {
-        six7SysLastGoodRx.set(key, now());
+        phantomSysLastGoodRx.set(key, now());
 
-        if (six7CancelSysReplacement(key, "replacement_restored")) {
+        if (phantomCancelSysReplacement(key, "replacement_restored")) {
           emitSnapshot("sys_peer_replacement_restored");
         }
 
-        six7RefreshSysReadiness("sysdc_open");
-        six7FlushQueuedRtcIce(key, "rtc_ice_queue_flush_sysdc_open");
-        six7FlushDirectedSysRelay(key);
+        phantomRefreshSysReadiness("sysdc_open");
+        phantomFlushQueuedRtcIce(key, "rtc_ice_queue_flush_sysdc_open");
+        phantomFlushDirectedSysRelay(key);
       }
 
-      const relPending = six7PendingRelationship.get(key);
+      const relPending = phantomPendingRelationship.get(key);
       if (relPending?.length) {
-        six7PendingRelationship.delete(key);
+        phantomPendingRelationship.delete(key);
 
         for (const item of relPending) {
           const relType = String(item?.type || item?.msg?.type || "unknown");
@@ -8330,7 +8337,7 @@ export function createExtractedEngine(host) {
 
           if (
             !relMsg ||
-            six7ControlClassFor(relType) !== "relationship_control"
+            phantomControlClassFor(relType) !== "relationship_control"
           ) {
             continue;
           }
@@ -8340,16 +8347,16 @@ export function createExtractedEngine(host) {
             (relType !== "sys_unblock" ||
               String(relMsg.sysTxId || "") !== String(temporary.id || ""))
           ) {
-            let held = six7PendingRelationship.get(key);
+            let held = phantomPendingRelationship.get(key);
             if (!held) {
               held = [];
-              six7PendingRelationship.set(key, held);
+              phantomPendingRelationship.set(key, held);
             }
             held.push(item);
             continue;
           }
 
-          six7MarkControlTx(relType, "six7_sys");
+          phantomMarkControlTx(relType, "phantom_sys");
 
           concierge.routeReason = "sys_route_relationship_control_pending_open";
           concierge.lastRouteAt = now();
@@ -8358,17 +8365,17 @@ export function createExtractedEngine(host) {
           concierge.lastRouteClass = "relationship_control";
           concierge.routeMode = "sys_primary";
           concierge.lastRouteMode = "sys_primary";
-          concierge.wouldRoute = "six7_sys";
+          concierge.wouldRoute = "phantom_sys";
           concierge.wouldRouteReason =
             "sys_ready_route_relationship_pending_open";
 
           concierge.lastRelationshipTxAt = now();
           concierge.lastRelationshipTxType = relType;
-          concierge.lastRelationshipRoute = "six7_sys";
+          concierge.lastRelationshipRoute = "phantom_sys";
           concierge.lastRelationshipReason =
             "sys_route_relationship_control_pending_open";
 
-          const ok = six7SendSysControl(relMsg, relType);
+          const ok = phantomSendSysControl(relMsg, relType);
 
           if (ok) {
             concierge.lastErr = null;
@@ -8390,35 +8397,35 @@ export function createExtractedEngine(host) {
         return;
       }
 
-      six7ResumeTerminalAuthority("sysdc_open");
-      if (six7SysAuthority.pending) {
-        six7PublishCommittedAuthority("sysdc_open_pending_authority");
+      phantomResumeTerminalAuthority("sysdc_open");
+      if (phantomSysAuthority.pending) {
+        phantomPublishCommittedAuthority("sysdc_open_pending_authority");
       }
 
-      six7SendSysDC(key, six7SysHelloPayload());
-      six7SendSysDC(key, {
+      phantomSendSysDC(key, phantomSysHelloPayload());
+      phantomSendSysDC(key, {
         t: "SYS_PING",
         at: now(),
-        from: six7ShortKey(selfHKey),
+        from: phantomShortKey(selfHKey),
         room: videoId || null,
       });
-      six7SendSysDC(key, six7SysStatusPayload("SYS_STATUS"));
+      phantomSendSysDC(key, phantomSysStatusPayload("SYS_STATUS"));
 
-      const localAuthority = six7LocalCommittedAuthority();
-      const selfKey = six7ShortKey(selfHKey);
-      const selfCommitted = six7AuthorityRosterRows(
+      const localAuthority = phantomLocalCommittedAuthority();
+      const selfKey = phantomShortKey(selfHKey);
+      const selfCommitted = phantomAuthorityRosterRows(
         localAuthority?.roster,
       ).some((row) => row.hKey === selfKey);
-      const presence = six7PresencePayload();
+      const presence = phantomPresencePayload();
 
       if (!selfCommitted) {
         presence.to = key;
         presence.admit = true;
         presence.admitReason = "sysdc_open_uncommitted_incarnation";
 
-        const ok = six7SendSysControl(presence, "presence");
+        const ok = phantomSendSysControl(presence, "presence");
 
-        six7MembershipAuditSet(ok ? "admit_sent" : "admit_send_failed", {
+        phantomMembershipAuditSet(ok ? "admit_sent" : "admit_send_failed", {
           peer: key,
           reason: "sysdc_open_uncommitted_incarnation",
           pipe: String(dc.readyState || "missing"),
@@ -8426,16 +8433,16 @@ export function createExtractedEngine(host) {
         });
 
         if (ok) {
-          six7SysAdmissionLastSent.set(key, now());
+          phantomSysAdmissionLastSent.set(key, now());
           emitSnapshot("sys_admission_presence_sent_open");
         }
       } else {
-        six7SendControl(presence, "presence");
+        phantomSendControl(presence, "presence");
       }
     };
 
     dc.onclose = () => {
-      const ent = six7SysPeers.get(key);
+      const ent = phantomSysPeers.get(key);
 
       // A retired SYS channel cannot mutate its successor attempt.
       if (!ent || ent.sysdc !== dc) {
@@ -8444,7 +8451,7 @@ export function createExtractedEngine(host) {
       }
 
       ent.sysCarrier = false;
-      const edgeAttempt = six7SysEdgeAttempt(key, false);
+      const edgeAttempt = phantomSysEdgeAttempt(key, false);
       if (edgeAttempt) {
         edgeAttempt.state = "closed";
         edgeAttempt.lastEvent = "datachannel_closed";
@@ -8453,29 +8460,29 @@ export function createExtractedEngine(host) {
 
       ent.sysdc = null;
 
-      if (ent.temporary === true || six7TemporarySysTransactions.has(key)) {
-        six7CloseTemporarySysTransaction(key, "remote_closed");
+      if (ent.temporary === true || phantomTemporarySysTransactions.has(key)) {
+        phantomCloseTemporarySysTransaction(key, "remote_closed");
         return;
       }
 
-      if (__six7GoneNotified.has(key)) {
+      if (__phantomGoneNotified.has(key)) {
         emitSnapshot("sysdc_close_ignored_peer_gone");
         return;
       }
 
-      const relPending = six7PendingRelationship.get(key);
+      const relPending = phantomPendingRelationship.get(key);
       if (relPending?.length) {
-        concierge.lastRelationshipRoute = "six7_sys_pending";
+        concierge.lastRelationshipRoute = "phantom_sys_pending";
         concierge.lastRelationshipReason = "sysdc_closed_pending_held";
         concierge.lastErr = "relationship_pending_held_sysdc_close";
         emitSnapshot("relationship_pending_held_sysdc_close");
       }
 
-      six7HandleTransportLoss(key, "sysdc_closed");
+      phantomHandleTransportLoss(key, "sysdc_closed");
     };
 
     dc.onerror = () => {
-      const ent = six7SysPeers.get(key);
+      const ent = phantomSysPeers.get(key);
 
       // A retired SYS channel cannot mutate its successor attempt.
       if (!ent || ent.sysdc !== dc) {
@@ -8484,7 +8491,7 @@ export function createExtractedEngine(host) {
       }
 
       ent.sysCarrier = false;
-      const edgeAttempt = six7SysEdgeAttempt(key, false);
+      const edgeAttempt = phantomSysEdgeAttempt(key, false);
       if (edgeAttempt) {
         edgeAttempt.state = "closed";
         edgeAttempt.lastEvent = "datachannel_closed";
@@ -8493,12 +8500,12 @@ export function createExtractedEngine(host) {
 
       ent.sysdc = null;
 
-      if (ent.temporary === true || six7TemporarySysTransactions.has(key)) {
-        six7CloseTemporarySysTransaction(key, "error");
+      if (ent.temporary === true || phantomTemporarySysTransactions.has(key)) {
+        phantomCloseTemporarySysTransaction(key, "error");
         return;
       }
 
-      six7HandleTransportLoss(key, "sysdc_error");
+      phantomHandleTransportLoss(key, "sysdc_error");
     };
 
     dc.onmessage = (ev) => {
@@ -8510,31 +8517,31 @@ export function createExtractedEngine(host) {
       }
 
       if (msg?.t === 'PHANTOM_DIST') {
-        if (six7SysPeers.get(key)?.sysdc === dc && !six7TemporarySysTransactions.has(key) && JSON.stringify(msg).length <= 32768)
+        if (phantomSysPeers.get(key)?.sysdc === dc && !phantomTemporarySysTransactions.has(key) && JSON.stringify(msg).length <= 32768)
           post('PHANTOM_DIST', {from:key, frame:msg.frame});
         return;
       }
       if (msg?.t === 'PHANTOM_ADMIN') {
-        if (six7SysPeers.get(key)?.sysdc === dc && !six7TemporarySysTransactions.has(key) && JSON.stringify(msg).length <= 4096)
+        if (phantomSysPeers.get(key)?.sysdc === dc && !phantomTemporarySysTransactions.has(key) && JSON.stringify(msg).length <= 4096)
           post('PHANTOM_ADMIN', {from:key, record:msg.record});
         return;
       }
       const type = String(msg?.t || msg?.type || "SYS_UNKNOWN");
-      const temporaryRx = six7TemporarySysTransactions.get(key) || null;
+      const temporaryRx = phantomTemporarySysTransactions.get(key) || null;
 
       if (temporaryRx && type !== "SYS_CONTROL" && type !== "SYS_CONTROL_ACK") {
         emitSnapshot("temporary_sys_nontransaction_packet_rejected_" + type);
         return;
       }
 
-      six7MarkSysRx(type, key);
+      phantomMarkSysRx(type, key);
 
       if (
         type === "SYS_HELLO" ||
         type === "SYS_STATUS" ||
         type === "SYS_STATUS_ACK"
       ) {
-        six7RememberPresencePeer(
+        phantomRememberPresencePeer(
           {
             hKey: key,
             from: key,
@@ -8544,7 +8551,7 @@ export function createExtractedEngine(host) {
             videoId: msg?.room || videoId || null,
             t: Number(msg?.at || now()),
           },
-          "six7_sys_claim",
+          "phantom_sys_claim",
           { peerEvent: false, rosterEvent: false },
         );
       }
@@ -8559,9 +8566,9 @@ export function createExtractedEngine(host) {
         type === "SYS_STATUS" || type === "SYS_STATUS_ACK";
 
       if (type === "SYS_HELLO" && msg?.bootId) {
-        six7ObserveRemoteIncarnation(key, {
+        phantomObserveRemoteIncarnation(key, {
           bootId: String(msg.bootId || ""),
-          attemptId: String(six7SysPeers.get(key)?.attempt?.id || ""),
+          attemptId: String(phantomSysPeers.get(key)?.attempt?.id || ""),
           bindCurrent: true,
           via: "sys_hello",
         });
@@ -8575,16 +8582,16 @@ export function createExtractedEngine(host) {
           type === "SYS_CONTROL" ||
           type === "SYS_CONTROL_ACK")
       ) {
-        six7MarkGoodSysRx(key, type);
-        six7RefreshSysReadiness("sys_rx_" + type);
+        phantomMarkGoodSysRx(key, type);
+        phantomRefreshSysReadiness("sys_rx_" + type);
         emitSnapshot("sys_rx_" + type);
       }
 
       if (type === "SYS_PING") {
-        six7SendSysDC(key, {
+        phantomSendSysDC(key, {
           t: "SYS_PONG",
           at: now(),
-          from: six7ShortKey(selfHKey),
+          from: phantomShortKey(selfHKey),
           room: videoId || null,
         });
       } else if (type === "SYS_STATUS") {
@@ -8594,19 +8601,19 @@ export function createExtractedEngine(host) {
 
         const remoteRole = String(msg?.role || msg?.candidateRole || "peer");
 
-        const sender = six7ShortKey(msg?.from || key);
-        const boss = six7ShortKey(concierge.syscon1);
+        const sender = phantomShortKey(msg?.from || key);
+        const boss = phantomShortKey(concierge.syscon1);
 
-        const acceptedPending = six7SysAuthority.pending;
+        const acceptedPending = phantomSysAuthority.pending;
         const acceptedCommit = !!(acceptedPending &&
-          acceptedPending.acceptedBy === six7ShortKey(selfHKey) &&
-          sender === key && sender === six7ShortKey(acceptedPending.snapshot?.syscon1) &&
-          six7AuthoritySnapshotId(msg) === six7AuthoritySnapshotId(acceptedPending.snapshot) &&
-          String(acceptedPending.id || "") === six7AuthorityTransactionId(acceptedPending));
+          acceptedPending.acceptedBy === phantomShortKey(selfHKey) &&
+          sender === key && sender === phantomShortKey(acceptedPending.snapshot?.syscon1) &&
+          phantomAuthoritySnapshotId(msg) === phantomAuthoritySnapshotId(acceptedPending.snapshot) &&
+          String(acceptedPending.id || "") === phantomAuthorityTransactionId(acceptedPending));
         const recoveryCommit = localRole === 'peer' && acceptsSuccessorStatus({
-          base:{...six7LocalCommittedAuthority(),room:videoId},message:msg,sender:key,self:six7ShortKey(selfHKey),
-          recoveryTarget:six7GossipRecovery.targets[six7GossipRecovery.index],
-          leaderPipeOpen:six7HasOpenSysPipe(boss)});
+          base:{...phantomLocalCommittedAuthority(),room:videoId},message:msg,sender:key,self:phantomShortKey(selfHKey),
+          recoveryTarget:phantomGossipRecovery.targets[phantomGossipRecovery.index],
+          leaderPipeOpen:phantomHasOpenSysPipe(boss)});
         const authorityStatusAllowed = acceptedCommit || recoveryCommit || !!(
           sender &&
           sender === key &&
@@ -8615,35 +8622,35 @@ export function createExtractedEngine(host) {
         );
 
         const duplicateSysconClaim = !!(
-          six7IsSysconRole(localRole) &&
-          six7IsSysconRole(remoteRole) &&
+          phantomIsSysconRole(localRole) &&
+          phantomIsSysconRole(remoteRole) &&
           localRole === remoteRole
         );
 
-        const pendingAuthorityAccepted = six7AcceptPendingAuthority(msg, key);
+        const pendingAuthorityAccepted = phantomAcceptPendingAuthority(msg, key);
         const mirrorHandoffAccepted = pendingAuthorityAccepted
           ? false
-          : six7AdoptMirrorAuthority(msg, key);
+          : phantomAdoptMirrorAuthority(msg, key);
 
         if (pendingAuthorityAccepted) {
           emitSnapshot("sys_status_pending_authority_accepted");
         } else if (mirrorHandoffAccepted) {
           emitSnapshot("sys_status_mirror_handoff_accepted");
         } else if (duplicateSysconClaim) {
-          six7ReconcileRoleFromSysStatus(msg, "SYS_STATUS");
+          phantomReconcileRoleFromSysStatus(msg, "SYS_STATUS");
         } else if (
           authorityStatusAllowed &&
-          six7RememberSysAuthority(msg, "SYS_STATUS")
+          phantomRememberSysAuthority(msg, "SYS_STATUS")
         ) {
-          six7RefreshSysCandidates(six7LatchedSysRosterList(), "SYS_STATUS");
+          phantomRefreshSysCandidates(phantomLatchedSysRosterList(), "SYS_STATUS");
         }
 
-        six7MarkGoodSysRx(key, "SYS_STATUS");
-        six7RefreshSysReadiness("sys_rx_SYS_STATUS");
+        phantomMarkGoodSysRx(key, "SYS_STATUS");
+        phantomRefreshSysReadiness("sys_rx_SYS_STATUS");
         emitSnapshot("sys_rx_SYS_STATUS");
 
-        six7SendSysDC(key, {
-          ...six7SysStatusPayload("SYS_STATUS_ACK"),
+        phantomSendSysDC(key, {
+          ...phantomSysStatusPayload("SYS_STATUS_ACK"),
           ackFor: msg?.from || null,
           ackAt: msg?.at || null,
         });
@@ -8651,21 +8658,21 @@ export function createExtractedEngine(host) {
         concierge.sysLastRxAt = now();
         concierge.sysLastRxType = "SYS_STATUS_ACK";
 
-        const sender = six7ShortKey(msg?.from || key);
-        const boss = six7ShortKey(concierge.syscon1);
-        const stampedBoss = six7ShortKey(msg?.syscon1);
-        const self = six7ShortKey(selfHKey);
+        const sender = phantomShortKey(msg?.from || key);
+        const boss = phantomShortKey(concierge.syscon1);
+        const stampedBoss = phantomShortKey(msg?.syscon1);
+        const self = phantomShortKey(selfHKey);
 
         const incomingEpoch = Number(msg?.epoch || 0);
         const currentEpoch = Number(concierge.sysconEpoch || 0);
 
         const incomingSeq = Number(msg?.rosterSeq || 0);
-        const currentSeq = Number(six7SysAuthority.rosterSeq || 0);
+        const currentSeq = Number(phantomSysAuthority.rosterSeq || 0);
 
         const roomOk =
           !msg?.room || !videoId || String(msg.room) === String(videoId);
 
-        const pendingAuthorityPromoted = six7PromotePendingAuthority(
+        const pendingAuthorityPromoted = phantomPromotePendingAuthority(
           msg?.pendingAcceptedId,
           key,
         );
@@ -8677,7 +8684,7 @@ export function createExtractedEngine(host) {
           sender === boss &&
           stampedBoss === boss &&
           String(msg?.role || "") === "syscon1" &&
-          six7ShortKey(msg?.ackFor) === self &&
+          phantomShortKey(msg?.ackFor) === self &&
           incomingEpoch &&
           incomingEpoch === currentEpoch &&
           incomingSeq >= currentSeq &&
@@ -8690,51 +8697,51 @@ export function createExtractedEngine(host) {
         } else if (authoritativeRosterAck) {
           // Compatibility only for a committed leader snapshot. The ACK is
           // no longer an independent authority decision path.
-          six7RememberSysAuthority(msg, "SYS_STATUS_ACK_ROSTER");
+          phantomRememberSysAuthority(msg, "SYS_STATUS_ACK_ROSTER");
           emitSnapshot("sys_status_ack_authoritative_roster_rx");
         } else {
           emitSnapshot("sys_status_ack_pipe_proof_only");
         }
 
         if (pendingAuthorityPromoted || authoritativeRosterAck) {
-          six7RefreshSysCandidates(
-            six7LatchedSysRosterList(),
+          phantomRefreshSysCandidates(
+            phantomLatchedSysRosterList(),
             "SYS_STATUS_ACK",
           );
         }
 
-        six7MarkGoodSysRx(key, "SYS_STATUS_ACK");
-        six7RefreshSysReadiness("sys_rx_SYS_STATUS_ACK");
+        phantomMarkGoodSysRx(key, "SYS_STATUS_ACK");
+        phantomRefreshSysReadiness("sys_rx_SYS_STATUS_ACK");
         emitSnapshot("sys_rx_SYS_STATUS_ACK");
       } else if (type === "SYS_CONTROL") {
         const inner = msg?.msg || null;
         const kind = String(msg?.kind || inner?.type || "unknown");
 
-        const selfKey = six7ShortKey(selfHKey);
-        const destination = six7ShortKey(inner?.to);
+        const selfKey = phantomShortKey(selfHKey);
+        const destination = phantomShortKey(inner?.to);
 
         const role = String(
           concierge.localRoleCandidate || concierge.role || "peer",
         );
 
-        const temporary = six7TemporarySysTransactions.get(key) || null;
+        const temporary = phantomTemporarySysTransactions.get(key) || null;
         if (temporary) {
           const allowed = !!(
             inner &&
             destination === selfKey &&
-            six7TemporarySysAllowsEnvelope(key, msg)
+            phantomTemporarySysAllowsEnvelope(key, msg)
           );
 
           if (allowed) {
-            six7HandleInboundRelationshipControl(inner, "six7_sys_temporary");
+            phantomHandleInboundRelationshipControl(inner, "phantom_sys_temporary");
           } else {
             emitSnapshot("temporary_sys_control_rejected");
           }
 
-          six7SendSysDC(key, {
+          phantomSendSysDC(key, {
             t: "SYS_CONTROL_ACK",
             at: now(),
-            from: six7ShortKey(selfHKey),
+            from: phantomShortKey(selfHKey),
             room: videoId || null,
             kind,
             cid: msg?.cid || inner?.cid || null,
@@ -8747,27 +8754,27 @@ export function createExtractedEngine(host) {
         }
 
         if (inner && destination && destination !== selfKey) {
-          const boss = six7ShortKey(concierge.syscon1);
+          const boss = phantomShortKey(concierge.syscon1);
 
           let forwarded = false;
           let held = false;
 
-          if (six7HasOpenSysPipe(destination)) {
-            forwarded = six7SendSysDC(destination, {
+          if (phantomHasOpenSysPipe(destination)) {
+            forwarded = phantomSendSysDC(destination, {
               ...msg,
               relayedBy: selfKey,
               relayedAt: now(),
             });
           } else if (role === "syscon1") {
-            held = six7HoldDirectedSysRelay(destination, msg);
+            held = phantomHoldDirectedSysRelay(destination, msg);
           } else if (
             role === "syscon2" &&
             boss &&
             boss !== selfKey &&
             boss !== key &&
-            six7HasOpenSysPipe(boss)
+            phantomHasOpenSysPipe(boss)
           ) {
-            forwarded = six7SendSysDC(boss, {
+            forwarded = phantomSendSysDC(boss, {
               ...msg,
               relayedBy: selfKey,
               relayedAt: now(),
@@ -8790,11 +8797,11 @@ export function createExtractedEngine(host) {
           (kind === "authority_exit" || kind === "authority_detach") &&
           inner?.from
         ) {
-          const commandFrom = six7ShortKey(inner.from);
+          const commandFrom = phantomShortKey(inner.from);
 
           // Departure evidence is accepted only from the exact member's owned
           // SYS edge. It is never relayable or forgeable by a third peer.
-          const envelopeFrom = six7ShortKey(msg?.from);
+          const envelopeFrom = phantomShortKey(msg?.from);
           const senderBound = !!(
             commandFrom &&
             envelopeFrom === commandFrom &&
@@ -8804,11 +8811,11 @@ export function createExtractedEngine(host) {
           if (!senderBound) {
             emitSnapshot(kind + "_sender_mismatch_ignored");
           } else if (kind === "authority_exit") {
-            six7TerminalExitCommand(inner, "six7_sys_authority_exit");
+            phantomTerminalExitCommand(inner, "phantom_sys_authority_exit");
           } else {
             const incomingBootId = String(inner?.bootId || "");
             const knownBootId = String(
-              six7RemoteBootIds.get(commandFrom) || "",
+              phantomRemoteBootIds.get(commandFrom) || "",
             );
 
             if (
@@ -8818,12 +8825,12 @@ export function createExtractedEngine(host) {
             ) {
               emitSnapshot("stale_authority_detach_boot_ignored");
             } else {
-              const armed = six7ArmSysReplacement(
+              const armed = phantomArmSysReplacement(
                 commandFrom,
                 "explicit_document_detach",
               );
               const accepted =
-                armed || six7SysReplacementWindows.has(commandFrom);
+                armed || phantomSysReplacementWindows.has(commandFrom);
               emitSnapshot(
                 accepted
                   ? "authority_detach_replacement_window_owned"
@@ -8832,13 +8839,13 @@ export function createExtractedEngine(host) {
             }
           }
         } else if (kind === "presence" && inner?.from) {
-          const fromKey = six7ShortKey(inner.from);
-          const selfKey = six7ShortKey(selfHKey);
+          const fromKey = phantomShortKey(inner.from);
+          const selfKey = phantomShortKey(selfHKey);
           const role = String(
             concierge.localRoleCandidate || concierge.role || "peer",
           );
 
-          six7RememberPresencePeer(inner, "six7_sys", {
+          phantomRememberPresencePeer(inner, "phantom_sys", {
             peerEvent: false,
             rosterEvent: false,
           });
@@ -8851,14 +8858,14 @@ export function createExtractedEngine(host) {
             concierge.sysReady &&
             (relState === VEIL.INSIDE || relState === VEIL.ESTABLISHED)
           ) {
-            six7SendControl(
+            phantomSendControl(
               {
                 type: "veil_status",
                 from: selfHKey,
                 to: fromKey,
                 videoId,
                 state: relState,
-                cycleId: six7RelationshipGet(fromKey)?.cycleId || null,
+                cycleId: phantomRelationshipGet(fromKey)?.cycleId || null,
               },
               "veil_status_presence_rx",
             );
@@ -8867,10 +8874,10 @@ export function createExtractedEngine(host) {
           }
 
           if (role === "syscon2") {
-            const boss = six7ShortKey(concierge.syscon1);
+            const boss = phantomShortKey(concierge.syscon1);
 
             if (boss && boss !== selfKey && fromKey && fromKey !== boss) {
-              six7SendSysControl(
+              phantomSendSysControl(
                 {
                   ...inner,
                   type: "presence",
@@ -8894,17 +8901,17 @@ export function createExtractedEngine(host) {
 
           concierge.lastRtcRxAt = now();
           concierge.lastRtcRxType = "rtc_offer";
-          concierge.lastRtcRxVia = "six7_sys";
+          concierge.lastRtcRxVia = "phantom_sys";
 
           if (!isDirectMsgForMe(inner)) {
             // ignore safely, but still ACK wrapper below
           } else {
             if (inner?.pipe !== "sys" && inner?.sysCarrier !== true) {
-              const ent = six7ChatPeers.get(six7ShortKey(inner.from));
-              six7ChatSignalAudit("rx_offer", {
+              const ent = phantomChatPeers.get(phantomShortKey(inner.from));
+              phantomChatSignalAudit("rx_offer", {
                 peer: inner.from,
                 kind: "rtc_offer",
-                route: "six7_sys",
+                route: "phantom_sys",
                 signal: ent?.pc?.signalingState || "missing",
                 pc: ent?.pc?.connectionState || "missing",
                 dc: ent?.dc?.readyState || "missing",
@@ -8935,17 +8942,17 @@ export function createExtractedEngine(host) {
 
           concierge.lastRtcRxAt = now();
           concierge.lastRtcRxType = "rtc_answer";
-          concierge.lastRtcRxVia = "six7_sys";
+          concierge.lastRtcRxVia = "phantom_sys";
 
           if (!isDirectMsgForMe(inner)) {
             // ignore safely, but still ACK wrapper below
           } else {
             if (inner?.pipe !== "sys" && inner?.sysCarrier !== true) {
-              const ent = six7ChatPeers.get(six7ShortKey(inner.from));
-              six7ChatSignalAudit("rx_answer", {
+              const ent = phantomChatPeers.get(phantomShortKey(inner.from));
+              phantomChatSignalAudit("rx_answer", {
                 peer: inner.from,
                 kind: "rtc_answer",
-                route: "six7_sys",
+                route: "phantom_sys",
                 signal: ent?.pc?.signalingState || "missing",
                 pc: ent?.pc?.connectionState || "missing",
                 dc: ent?.dc?.readyState || "missing",
@@ -8975,14 +8982,14 @@ export function createExtractedEngine(host) {
 
           concierge.lastRtcRxAt = now();
           concierge.lastRtcRxType = "rtc_ice";
-          concierge.lastRtcRxVia = "six7_sys";
+          concierge.lastRtcRxVia = "phantom_sys";
 
           concierge.lastRtcIceRxAt = now();
-          concierge.lastRtcIceRxVia = "six7_sys";
+          concierge.lastRtcIceRxVia = "phantom_sys";
 
           if (!isDirectMsgForMe(inner)) {
             // ignore safely, but still ACK wrapper below
-          } else if (!six7RememberRtcSignal(inner, "six7_sys")) {
+          } else if (!phantomRememberRtcSignal(inner, "phantom_sys")) {
             rtcOnIce(inner.from, inner.cand, {
               pipe:
                 inner?.pipe === "sys" || inner?.sysCarrier === true
@@ -9000,13 +9007,13 @@ export function createExtractedEngine(host) {
           }
         } else {
           concierge.sysPeer = key;
-          six7HandleInboundRelationshipControl(inner, "six7_sys");
+          phantomHandleInboundRelationshipControl(inner, "phantom_sys");
         }
 
-        six7SendSysDC(key, {
+        phantomSendSysDC(key, {
           t: "SYS_CONTROL_ACK",
           at: now(),
-          from: six7ShortKey(selfHKey),
+          from: phantomShortKey(selfHKey),
           room: videoId || null,
           kind,
           cid: msg?.cid || inner?.cid || null,
@@ -9019,11 +9026,11 @@ export function createExtractedEngine(host) {
     };
   }
 
-  function six7GetOrCreateChatPeer(remoteHKey) {
-    const k = six7ShortKey(remoteHKey);
+  function phantomGetOrCreateChatPeer(remoteHKey) {
+    const k = phantomShortKey(remoteHKey);
     if (!k) return null;
 
-    let ent = six7ChatPeers.get(k);
+    let ent = phantomChatPeers.get(k);
     if (ent?.pc) return ent;
 
     const pc = new RTCPeerConnection(RTC_CFG);
@@ -9044,7 +9051,7 @@ export function createExtractedEngine(host) {
       chatAttemptStartedAt: 0,
       chatAttemptRecoveryCount: 0,
     };
-    six7ChatPeers.set(k, ent);
+    phantomChatPeers.set(k, ent);
 
     pc.onicecandidate = (ev) => {
       const c = ev?.candidate;
@@ -9066,20 +9073,20 @@ export function createExtractedEngine(host) {
 
     pc.ondatachannel = (ev) => {
       const ch = ev?.channel || null;
-      if (!ch || String(ch.label || "") !== "six7") return;
+      if (!ch || String(ch.label || "") !== COMPATIBILITY_WIRE.chatChannel) return;
 
       ent.dc = ch;
       rtcWireDC(k, ent.dc);
     };
 
     pc.onsignalingstatechange = () => {
-      const current = six7ChatPeers.get(k);
+      const current = phantomChatPeers.get(k);
       if (!current || current.pc !== pc || rtcClosing.has(k)) {
         emitSnapshot("stale_chat_signaling_state_ignored");
         return;
       }
 
-      six7ChatSignalAudit("signal_state", {
+      phantomChatSignalAudit("signal_state", {
         peer: k,
         kind: "state",
         route: concierge.lastRouteMode || "none",
@@ -9094,16 +9101,16 @@ export function createExtractedEngine(host) {
       if (
         pc.signalingState === "stable" &&
         ent.chatState === "waiting_carrier_stable" &&
-        six7OwnsChatPipeOffer(k) &&
+        phantomOwnsChatPipeOffer(k) &&
         (getState(k) === VEIL.INSIDE || getState(k) === VEIL.ESTABLISHED)
       ) {
         emitSnapshot("chat_carrier_stable_resuming_owner_offer");
-        void six7RequestChatPipe(k, "chat_carrier_signaling_stable");
+        void phantomRequestChatPipe(k, "chat_carrier_signaling_stable");
       }
     };
 
     pc.onconnectionstatechange = () => {
-      const current = six7ChatPeers.get(k);
+      const current = phantomChatPeers.get(k);
       if (!current || current.pc !== pc || rtcClosing.has(k)) {
         emitSnapshot("stale_chat_pc_state_ignored");
         return;
@@ -9117,7 +9124,7 @@ export function createExtractedEngine(host) {
         pc.signalingState === "stable" &&
         (getState(k) === VEIL.INSIDE || getState(k) === VEIL.ESTABLISHED)
       ) {
-        six7RequestChatPipe(k, "chat_carrier_connected_after_accept");
+        phantomRequestChatPipe(k, "chat_carrier_connected_after_accept");
       }
 
       if (st === "failed" || st === "closed") {
@@ -9125,12 +9132,12 @@ export function createExtractedEngine(host) {
         ent.chatReadyAt = 0;
         ent.chatProof = "none";
         ent.chatFault = "pc_" + st;
-        six7HandleTransportLoss(k, "pc_" + st);
+        phantomHandleTransportLoss(k, "pc_" + st);
       }
     };
 
     pc.oniceconnectionstatechange = () => {
-      const current = six7ChatPeers.get(k);
+      const current = phantomChatPeers.get(k);
       if (!current || current.pc !== pc || rtcClosing.has(k)) {
         emitSnapshot("stale_chat_ice_state_ignored");
         return;
@@ -9144,7 +9151,7 @@ export function createExtractedEngine(host) {
         pc.signalingState === "stable" &&
         (getState(k) === VEIL.INSIDE || getState(k) === VEIL.ESTABLISHED)
       ) {
-        six7RequestChatPipe(k, "chat_carrier_ice_connected_after_accept");
+        phantomRequestChatPipe(k, "chat_carrier_ice_connected_after_accept");
       }
 
       if (st === "failed" || st === "closed") {
@@ -9152,19 +9159,19 @@ export function createExtractedEngine(host) {
         ent.chatReadyAt = 0;
         ent.chatProof = "none";
         ent.chatFault = "ice_" + st;
-        six7HandleTransportLoss(k, "ice_" + st);
+        phantomHandleTransportLoss(k, "ice_" + st);
       }
     };
 
     return ent;
   }
 
-  function six7GetOrCreateSysPeer(remoteHKey) {
-    const k = six7ShortKey(remoteHKey);
+  function phantomGetOrCreateSysPeer(remoteHKey) {
+    const k = phantomShortKey(remoteHKey);
     if (!k) return null;
 
-    const transaction = six7TemporarySysTransactions.get(k) || null;
-    let ent = six7SysPeers.get(k);
+    const transaction = phantomTemporarySysTransactions.get(k) || null;
+    let ent = phantomSysPeers.get(k);
     if (ent?.pc) {
       if (transaction && transaction.state !== "closed") {
         ent.temporary = true;
@@ -9179,10 +9186,10 @@ export function createExtractedEngine(host) {
       pc,
       sysdc: null,
       sysAttemptId: null,
-      ownerAttemptId: six7OwnsPrimarySysState(k)
+      ownerAttemptId: phantomOwnsPrimarySysState(k)
         ? String(concierge.sysAttempt?.id || "") || null
         : null,
-      remoteBootId: String(six7RemoteBootIds.get(k) || "") || null,
+      remoteBootId: String(phantomRemoteBootIds.get(k) || "") || null,
       sysCarrier: false,
       temporary: !!transaction,
       tempSysPurpose: String(transaction?.purpose || ""),
@@ -9191,7 +9198,7 @@ export function createExtractedEngine(host) {
       rtcInboundChain: Promise.resolve(),
       pendingRemoteIce: [],
       attempt: {
-        id: six7NewSysTransportAttemptId(k),
+        id: phantomNewSysTransportAttemptId(k),
         role: "unknown",
         state: "missing",
         startedAt: 0,
@@ -9199,7 +9206,7 @@ export function createExtractedEngine(host) {
         faultReason: "none",
       },
     };
-    six7SysPeers.set(k, ent);
+    phantomSysPeers.set(k, ent);
 
     pc.onicecandidate = (ev) => {
       const c = ev?.candidate;
@@ -9224,10 +9231,10 @@ export function createExtractedEngine(host) {
 
     pc.ondatachannel = (ev) => {
       const ch = ev?.channel || null;
-      if (!ch || String(ch.label || "") !== "six7-sys") return;
+      if (!ch || String(ch.label || "") !== COMPATIBILITY_WIRE.systemChannel) return;
 
       ent.sysdc = ch;
-      const attempt = six7SysEdgeAttempt(k);
+      const attempt = phantomSysEdgeAttempt(k);
       if (attempt) {
         attempt.role = "acceptor";
         attempt.state = "connecting";
@@ -9236,15 +9243,15 @@ export function createExtractedEngine(host) {
         attempt.faultReason = "none";
         ent.sysAttemptId = attempt.id;
       }
-      if (six7OwnsPrimarySysState(k)) {
+      if (phantomOwnsPrimarySysState(k)) {
         ent.ownerAttemptId = String(concierge.sysAttempt?.id || "") || null;
       }
       ent.sysCarrier = true;
-      six7WireSysDC(k, ent.sysdc);
+      phantomWireSysDC(k, ent.sysdc);
     };
 
     pc.onconnectionstatechange = () => {
-      const current = six7SysPeers.get(k);
+      const current = phantomSysPeers.get(k);
       if (!current || current.pc !== pc) {
         emitSnapshot("stale_sys_pc_state_ignored");
         return;
@@ -9252,16 +9259,16 @@ export function createExtractedEngine(host) {
 
       const st = pc.connectionState;
       if (st === "failed" || st === "closed") {
-        if (current.temporary === true || six7TemporarySysTransactions.has(k)) {
-          six7CloseTemporarySysTransaction(k, "pc_" + st);
+        if (current.temporary === true || phantomTemporarySysTransactions.has(k)) {
+          phantomCloseTemporarySysTransaction(k, "pc_" + st);
           return;
         }
-        six7HandleTransportLoss(k, "sys_transport_pc_" + st);
+        phantomHandleTransportLoss(k, "sys_transport_pc_" + st);
       }
     };
 
     pc.oniceconnectionstatechange = () => {
-      const current = six7SysPeers.get(k);
+      const current = phantomSysPeers.get(k);
       if (!current || current.pc !== pc) {
         emitSnapshot("stale_sys_ice_state_ignored");
         return;
@@ -9269,32 +9276,30 @@ export function createExtractedEngine(host) {
 
       const st = pc.iceConnectionState;
       if (st === "failed" || st === "closed") {
-        if (current.temporary === true || six7TemporarySysTransactions.has(k)) {
-          six7CloseTemporarySysTransaction(k, "ice_" + st);
+        if (current.temporary === true || phantomTemporarySysTransactions.has(k)) {
+          phantomCloseTemporarySysTransaction(k, "ice_" + st);
           return;
         }
-        six7HandleTransportLoss(k, "sys_transport_ice_" + st);
+        phantomHandleTransportLoss(k, "sys_transport_ice_" + st);
       }
     };
 
     return ent;
   }
 
-  // Temporary compatibility alias while SYS creation is moved to six7SysPeers.
-
   function rtcTeardown(hKey, reason = "unspecified") {
-    const key = six7ShortKey(hKey);
+    const key = phantomShortKey(hKey);
     if (!key || rtcClosing.has(key)) return;
 
     // Teardown is an edge lifecycle transition. Expected retirement reasons
     // must not overwrite current concierge/SYS readiness with stale history.
     rtcClosing.add(key);
 
-    const ent = six7ChatPeers.get(key);
+    const ent = phantomChatPeers.get(key);
 
     loungeWaiters.delete(key);
-    six7CancelChatAttemptDeadline(key);
-    six7ChatPeers.delete(key);
+    phantomCancelChatAttemptDeadline(key);
+    phantomChatPeers.delete(key);
     rtcDialing.delete(key);
 
     try {
@@ -9307,19 +9312,19 @@ export function createExtractedEngine(host) {
     rtcClosing.delete(key);
   }
 
-  function six7TeardownSysPeer(hKey, reason = "sys_teardown") {
-    const key = six7ShortKey(hKey);
+  function phantomTeardownSysPeer(hKey, reason = "sys_teardown") {
+    const key = phantomShortKey(hKey);
     if (!key) return;
 
-    const ent = six7SysPeers.get(key);
-    const temporary = six7TemporarySysTransactions.get(key);
+    const ent = phantomSysPeers.get(key);
+    const temporary = phantomTemporarySysTransactions.get(key);
     try {
       if (temporary?.deadlineTimer) clearTimeout(temporary.deadlineTimer);
     } catch {}
-    six7SysPeers.delete(key);
-    six7TemporarySysTransactions.delete(key);
-    six7SysDialing.delete(key);
-    six7SysPreflightUnstableRetries.delete(key);
+    phantomSysPeers.delete(key);
+    phantomTemporarySysTransactions.delete(key);
+    phantomSysDialing.delete(key);
+    phantomSysPreflightUnstableRetries.delete(key);
 
     const dc = ent?.sysdc || null;
     const pc = ent?.pc || null;
@@ -9342,17 +9347,17 @@ export function createExtractedEngine(host) {
   }
 
   function rtcTeardownAll(reason = "session_teardown") {
-    for (const key of Array.from(six7ChatPeers.keys())) {
+    for (const key of Array.from(phantomChatPeers.keys())) {
       rtcTeardown(key, reason);
     }
 
-    for (const key of Array.from(six7SysPeers.keys())) {
-      six7TeardownSysPeer(key, "sys_" + String(reason || "session_teardown"));
+    for (const key of Array.from(phantomSysPeers.keys())) {
+      phantomTeardownSysPeer(key, "sys_" + String(reason || "session_teardown"));
     }
 
     loungeWaiters.clear();
     rtcDialing.clear();
-    six7SysDialing.clear();
+    phantomSysDialing.clear();
     rtcClosing.clear();
   }
 
@@ -9362,8 +9367,8 @@ export function createExtractedEngine(host) {
       dc.binaryType = "arraybuffer";
     } catch {}
     dc.onopen = () => {
-      const key = six7ShortKey(remoteHKey);
-      const ent = key ? six7ChatPeers.get(key) : null;
+      const key = phantomShortKey(remoteHKey);
+      const ent = key ? phantomChatPeers.get(key) : null;
 
       if (ent) {
         ent.chatState = "open";
@@ -9388,7 +9393,7 @@ export function createExtractedEngine(host) {
       emitSnapshot("rtc_dc_open");
       rtcSendHello(remoteHKey);
       rtcSendDC(remoteHKey, { t: "PING", at: now() });
-      CORE_DEBUG && console.log("[six7][RTC] TX PING →", remoteHKey);
+      CORE_DEBUG && console.log("[phantom][RTC] TX PING →", remoteHKey);
 
       post("P2P_DIRECT_OPEN", {
         from: selfHKey,
@@ -9398,10 +9403,10 @@ export function createExtractedEngine(host) {
     };
 
     dc.onclose = () => {
-      const key = six7ShortKey(remoteHKey);
+      const key = phantomShortKey(remoteHKey);
       if (!key) return;
 
-      const ent = six7ChatPeers.get(key);
+      const ent = phantomChatPeers.get(key);
 
       // Ignore closure from an old/replaced chat channel.
       if (!ent || ent.dc !== dc) {
@@ -9415,7 +9420,7 @@ export function createExtractedEngine(host) {
       ent.chatProof = "none";
       ent.chatFault = "dc_close";
 
-      if (__six7GoneNotified.has(key)) {
+      if (__phantomGoneNotified.has(key)) {
         emitSnapshot("chat_pipe_close_ignored_peer_gone");
         return;
       }
@@ -9426,13 +9431,13 @@ export function createExtractedEngine(host) {
       concierge.chatLastDropAt = now();
       concierge.chatLastDropPeer = key;
 
-      six7ScheduleReconnect(key, "chat_dc_closed");
+      phantomScheduleReconnect(key, "chat_dc_closed");
       emitSnapshot("chat_pipe_closed");
     };
 
     dc.onerror = () => {
-      const key = six7ShortKey(remoteHKey);
-      const ent = key ? six7ChatPeers.get(key) : null;
+      const key = phantomShortKey(remoteHKey);
+      const ent = key ? phantomChatPeers.get(key) : null;
 
       if (ent) {
         ent.chatState = "lost";
@@ -9441,7 +9446,7 @@ export function createExtractedEngine(host) {
         ent.chatFault = "dc_error";
       }
 
-      six7ScheduleReconnect(key, "chat_dc_error");
+      phantomScheduleReconnect(key, "chat_dc_error");
       emitSnapshot("chat_pipe_lost_dc_error");
     };
 
@@ -9456,9 +9461,9 @@ export function createExtractedEngine(host) {
         }
       }
 
-      if (six7IsArrayBuffer(raw) && !six7CanUseChat(remoteHKey)) return;
-      if (six7IsArrayBuffer(raw)) {
-        const ent = six7ChatPeers.get(
+      if (phantomIsArrayBuffer(raw) && !phantomCanUseChat(remoteHKey)) return;
+      if (phantomIsArrayBuffer(raw)) {
+        const ent = phantomChatPeers.get(
           String(remoteHKey || "")
             .slice(0, 16)
             .toLowerCase(),
@@ -9488,22 +9493,22 @@ export function createExtractedEngine(host) {
       } catch {
         msg = { t: "RAW", raw: String(raw || "") };
       }
-      CORE_DEBUG && console.log("[six7][RTC] RX", remoteHKey, msg);
+      CORE_DEBUG && console.log("[phantom][RTC] RX", remoteHKey, msg);
 
       if(msg?.t==='SYS_RECOVERY_RTC'){
-        const key=six7ShortKey(remoteHKey),entry=six7ChatPeers.get(key),packet=msg.packet;
-        if(!canCarrySysRecovery({packet,room:videoId,self:key,remote:six7ShortKey(selfHKey),
-          member:!!six7CommittedMember(key),terminal:six7PendingTerminalExits.has(key),
-          accepted:six7RelationshipIsAccepted(six7RelationshipGet(key)),ready:entry?.dc?.readyState==='open'&&entry?.chatState==='ready',current:entry?.dc===dc}))return;
+        const key=phantomShortKey(remoteHKey),entry=phantomChatPeers.get(key),packet=msg.packet;
+        if(!canCarrySysRecovery({packet,room:videoId,self:key,remote:phantomShortKey(selfHKey),
+          member:!!phantomCommittedMember(key),terminal:phantomPendingTerminalExits.has(key),
+          accepted:phantomRelationshipIsAccepted(phantomRelationshipGet(key)),ready:entry?.dc?.readyState==='open'&&entry?.chatState==='ready',current:entry?.dc===dc}))return;
         const meta={...packet,room:videoId,pipe:'sys',recoveryPeerPipe:true};
         if(packet.type==='rtc_offer')rtcOnOffer(key,packet.sdp,meta);
         else if(packet.type==='rtc_answer')rtcOnAnswer(key,packet.sdp,meta);
         else rtcOnIce(key,packet.cand,meta);
         emitSnapshot('sys_recovery_signal_received_existing_peer_pipe');return;
       }
-      if (msg?.t === "FILE_BIN_META" && !six7CanUseChat(remoteHKey)) return;
+      if (msg?.t === "FILE_BIN_META" && !phantomCanUseChat(remoteHKey)) return;
       if (msg?.t === "FILE_BIN_META" && msg.file?.id) {
-        const ent = six7ChatPeers.get(
+        const ent = phantomChatPeers.get(
           String(remoteHKey || "")
             .slice(0, 16)
             .toLowerCase(),
@@ -9513,7 +9518,7 @@ export function createExtractedEngine(host) {
       }
 
       if (msg?.t === 'PHANTOM_ADMIN') {
-        if (six7ChatPeers.get(six7ShortKey(remoteHKey))?.dc === dc && six7CanUseChat(remoteHKey) && JSON.stringify(msg).length <= 4096)
+        if (phantomChatPeers.get(phantomShortKey(remoteHKey))?.dc === dc && phantomCanUseChat(remoteHKey) && JSON.stringify(msg).length <= 4096)
           post('PHANTOM_ADMIN', {from:remoteHKey, record:msg.record});
         return;
       }
@@ -9530,13 +9535,13 @@ export function createExtractedEngine(host) {
 
       if (msg?.t === "MSG") {
         if (msg.sys === "BLOCKED_BY") {
-          const blockedByKey = six7ShortKey(remoteHKey);
+          const blockedByKey = phantomShortKey(remoteHKey);
           if (blockedByKey) {
-            six7BlockedByPeers.add(blockedByKey);
-            six7BlockedPeers.delete(blockedByKey);
+            phantomBlockedByPeers.add(blockedByKey);
+            phantomBlockedPeers.delete(blockedByKey);
           }
 
-          six7CancelReconnect(remoteHKey);
+          phantomCancelReconnect(remoteHKey);
           setState(remoteHKey, VEIL.OUTSIDE);
           rtcTeardown(remoteHKey, "blocked_by_peer");
 
@@ -9544,8 +9549,8 @@ export function createExtractedEngine(host) {
           return;
         }
 
-        const isSys = six7IsSysMessage(msg.sys);
-        if (!isSys && !six7CanUseChat(remoteHKey)) return;
+        const isSys = phantomIsSysMessage(msg.sys);
+        if (!isSys && !phantomCanUseChat(remoteHKey)) return;
 
         if (msg.sys === "ROOM_EXITED") {
           emitSnapshot("legacy_chat_room_exit_ignored");
@@ -9553,25 +9558,25 @@ export function createExtractedEngine(host) {
         }
 
         if (msg.sys === "CHAT_ENDED") {
-          const key = six7ShortKey(remoteHKey);
-          const currentEnt = key ? six7ChatPeers.get(key) : null;
+          const key = phantomShortKey(remoteHKey);
+          const currentEnt = key ? phantomChatPeers.get(key) : null;
 
           if (!currentEnt || currentEnt.dc !== dc) {
             emitSnapshot("stale_chat_end_ignored");
             return;
           }
 
-          six7NotifyPeerGone(key, "CHAT_ENDED", msg.at || Date.now());
+          phantomNotifyPeerGone(key, "CHAT_ENDED", msg.at || Date.now());
           return;
         }
 
         if (msg.sys === "FILE_OFFER" && msg.file?.id) {
-          const key = six7ShortKey(remoteHKey);
+          const key = phantomShortKey(remoteHKey);
           if (key) {
-            let offers = six7PendingIncomingFileOffers.get(key);
+            let offers = phantomPendingIncomingFileOffers.get(key);
             if (!offers) {
               offers = new Map();
-              six7PendingIncomingFileOffers.set(key, offers);
+              phantomPendingIncomingFileOffers.set(key, offers);
             }
 
             offers.set(String(msg.file.id), {
@@ -9587,12 +9592,12 @@ export function createExtractedEngine(host) {
           (msg.sys === "FILE_ACCEPT" || msg.sys === "FILE_DECLINE") &&
           msg.file?.id
         ) {
-          const key = six7ShortKey(remoteHKey);
-          const offers = key ? six7PendingIncomingFileOffers.get(key) : null;
+          const key = phantomShortKey(remoteHKey);
+          const offers = key ? phantomPendingIncomingFileOffers.get(key) : null;
 
           if (offers) {
             offers.delete(String(msg.file.id));
-            if (!offers.size) six7PendingIncomingFileOffers.delete(key);
+            if (!offers.size) phantomPendingIncomingFileOffers.delete(key);
           }
         }
 
@@ -9626,7 +9631,7 @@ export function createExtractedEngine(host) {
             ksSave();
           } catch {}
 
-          // tell TOP so peers_core can mark seenVia.direct + set handle
+          // Publish the direct peer identity and display name.
           post("P2P_IDENTITY", {
             from: pf,
             handle: ph,
@@ -9636,46 +9641,46 @@ export function createExtractedEngine(host) {
             at: now(),
           });
 
-          CORE_DEBUG && console.log("[six7][RTC] HELLO RX", { remoteHKey });
+          CORE_DEBUG && console.log("[phantom][RTC] HELLO RX", { remoteHKey });
 
-          const key = six7ShortKey(remoteHKey);
-          const ent = key ? six7ChatPeers.get(key) : null;
+          const key = phantomShortKey(remoteHKey);
+          const ent = key ? phantomChatPeers.get(key) : null;
 
           if (ent && ent.chatProof !== "chat_hello") {
             ent.chatState = "open";
             ent.chatReadyAt = 0;
             ent.chatProof = "hello_identity_only";
-            ent.chatFault = six7CanUseChat(key)
+            ent.chatFault = phantomCanUseChat(key)
               ? "none"
               : "relationship_not_inside";
           }
 
-          if (!six7IsEstablishedLike(key)) {
+          if (!phantomIsEstablishedLike(key)) {
             emitSnapshot("rtc_hello_identity_only_chat_not_allowed");
             return;
           }
 
-          six7EnsureChatPipe(key, "rtc_hello_rx");
+          phantomEnsureChatPipe(key, "rtc_hello_rx");
           return;
         }
       }
     };
   }
 
-  function six7HasOpenSysPipe(remoteHKey = "") {
-    const key = six7ShortKey(remoteHKey || concierge.sysPeer);
+  function phantomHasOpenSysPipe(remoteHKey = "") {
+    const key = phantomShortKey(remoteHKey || concierge.sysPeer);
     if (!key) return concierge.sysPipeState === "open";
 
-    const ent = six7SysPeers.get(key);
+    const ent = phantomSysPeers.get(key);
     return !!(ent?.sysdc && ent.sysdc.readyState === "open");
   }
 
-  function six7SysTargetFromCandidates() {
-    const self = six7ShortKey(selfHKey);
+  function phantomSysTargetFromCandidates() {
+    const self = phantomShortKey(selfHKey);
     if (!self) return "";
 
-    const one = six7ShortKey(concierge.syscon1);
-    const two = six7ShortKey(concierge.syscon2);
+    const one = phantomShortKey(concierge.syscon1);
+    const two = phantomShortKey(concierge.syscon2);
     const role = String(concierge.localRoleCandidate || "peer");
     const epoch = Number(concierge.sysconEpoch || 0);
 
@@ -9688,30 +9693,30 @@ export function createExtractedEngine(host) {
     }
 
     if (role === "peer") {
-      if (six7PeerSysCarrier.epoch !== epoch) {
-        six7PeerSysCarrier.epoch = epoch;
-        six7PeerSysCarrier.target = null;
-        six7PeerSysCarrier.primaryRecoveryUsed = false;
-        six7PeerSysCarrier.authorityRefreshPending = false;
+      if (phantomPeerSysCarrier.epoch !== epoch) {
+        phantomPeerSysCarrier.epoch = epoch;
+        phantomPeerSysCarrier.target = null;
+        phantomPeerSysCarrier.primaryRecoveryUsed = false;
+        phantomPeerSysCarrier.authorityRefreshPending = false;
       }
 
-      if (six7PeerSysCarrier.authorityRefreshPending) {
+      if (phantomPeerSysCarrier.authorityRefreshPending) {
         return "";
       }
 
-      const recoveryTarget = six7ShortKey(
-        six7GossipRecovery.targets[six7GossipRecovery.index],
+      const recoveryTarget = phantomShortKey(
+        phantomGossipRecovery.targets[phantomGossipRecovery.index],
       );
 
       if (recoveryTarget && recoveryTarget !== self) {
         return recoveryTarget;
       }
 
-      if (six7GossipRecovery.targets.length) {
+      if (phantomGossipRecovery.targets.length) {
         return "";
       }
 
-      const latched = six7ShortKey(six7PeerSysCarrier.target);
+      const latched = phantomShortKey(phantomPeerSysCarrier.target);
 
       if (latched && latched !== self && (latched === one || latched === two)) {
         return latched;
@@ -9724,22 +9729,22 @@ export function createExtractedEngine(host) {
     return "";
   }
 
-  function six7MarkGoodSysRx(remoteHKey, type = "SYS_RX") {
-    const key = six7ShortKey(remoteHKey);
+  function phantomMarkGoodSysRx(remoteHKey, type = "SYS_RX") {
+    const key = phantomShortKey(remoteHKey);
     if (!key) return false;
 
     const t = String(type || "SYS_RX");
     const isProof = t === "SYS_STATUS" || t === "SYS_STATUS_ACK";
     const epoch = Number(concierge.sysconEpoch || 0);
 
-    six7SysLastGoodRx.set(key, now());
-    const proofEnt = six7SysPeers.get(key);
+    phantomSysLastGoodRx.set(key, now());
+    const proofEnt = phantomSysPeers.get(key);
     if (proofEnt) {
       proofEnt.lastProofEpoch = Number(concierge.sysconEpoch || 0);
       proofEnt.lastProofAt = now();
     }
 
-    const shouldOwnSysPeer = six7OwnsPrimarySysState(key);
+    const shouldOwnSysPeer = phantomOwnsPrimarySysState(key);
 
     if (shouldOwnSysPeer) {
       concierge.sysPeer = key;
@@ -9755,9 +9760,9 @@ export function createExtractedEngine(host) {
       concierge.sysReadyEpoch = epoch;
     }
 
-    six7SysPreflightUnstableRetries.delete(key);
+    phantomSysPreflightUnstableRetries.delete(key);
 
-    six7RefreshSysReadiness("sys_good_rx_" + String(type || "SYS_RX"));
+    phantomRefreshSysReadiness("sys_good_rx_" + String(type || "SYS_RX"));
     emitSnapshot("sys_good_rx_" + String(type || "SYS_RX"));
 
     const rxKind = String(type || "SYS_RX");
@@ -9769,7 +9774,7 @@ export function createExtractedEngine(host) {
       rxKind === "SYS_STATUS" ||
       rxKind === "SYS_STATUS_ACK";
 
-    const selfCommitted = six7CommittedMember(selfHKey);
+    const selfCommitted = phantomCommittedMember(selfHKey);
     const role = String(
       concierge.localRoleCandidate || concierge.role || "peer",
     );
@@ -9779,38 +9784,38 @@ export function createExtractedEngine(host) {
       !concierge.sysReady &&
       (role === "syscon1" || role === "syscon2")
     ) {
-      six7ScheduleSysPreflight("sys_good_rx_" + rxKind);
-      six7MaybeRelinkSysconPair("sys_good_rx_" + rxKind);
+      phantomScheduleSysPreflight("sys_good_rx_" + rxKind);
+      phantomMaybeRelinkSysconPair("sys_good_rx_" + rxKind);
     }
 
     if (
       proofOrHandshake &&
       (!selfCommitted || (!concierge.sysReady && role === "peer"))
     ) {
-      six7ScheduleSysAdmission("sys_good_rx_" + rxKind);
+      phantomScheduleSysAdmission("sys_good_rx_" + rxKind);
     }
 
     return true;
   }
 
-  function six7SysAdmissionTargets() {
-    const self = six7ShortKey(selfHKey);
+  function phantomSysAdmissionTargets() {
+    const self = phantomShortKey(selfHKey);
     if (!self) return [];
 
-    const target = six7ShortKey(six7SysTargetFromCandidates());
+    const target = phantomShortKey(phantomSysTargetFromCandidates());
 
     if (!target || target === self) return [];
 
     return [target];
   }
 
-  function six7SendSysAdmissionPresence(
+  function phantomSendSysAdmissionPresence(
     reason = "sys_admission",
     targetOnly = "",
   ) {
     const targets = targetOnly
-      ? [six7ShortKey(targetOnly)].filter(Boolean)
-      : six7SysAdmissionTargets();
+      ? [phantomShortKey(targetOnly)].filter(Boolean)
+      : phantomSysAdmissionTargets();
 
     if (!targets.length) {
       concierge.sysLastErr = "sys_admission_no_target";
@@ -9821,7 +9826,7 @@ export function createExtractedEngine(host) {
     let sent = false;
 
     for (const target of targets) {
-      if (six7SendSysAdmissionPresenceTo(target, reason)) {
+      if (phantomSendSysAdmissionPresenceTo(target, reason)) {
         sent = true;
       }
     }
@@ -9829,58 +9834,58 @@ export function createExtractedEngine(host) {
     return sent;
   }
 
-  function six7SendSysAdmissionPresenceTo(target, reason = "sys_admission") {
-    const self = six7ShortKey(selfHKey);
-    target = six7ShortKey(target);
+  function phantomSendSysAdmissionPresenceTo(target, reason = "sys_admission") {
+    const self = phantomShortKey(selfHKey);
+    target = phantomShortKey(target);
 
     if (!self || !target || target === self) return false;
 
     const nowMs = now();
-    const last = Number(six7SysAdmissionLastSent.get(target) || 0);
+    const last = Number(phantomSysAdmissionLastSent.get(target) || 0);
 
     if (nowMs - last < 2500) {
       emitSnapshot("sys_admission_throttled");
       return false;
     }
 
-    if (!six7HasOpenSysPipe(target)) {
+    if (!phantomHasOpenSysPipe(target)) {
       concierge.sysPeer = target;
       concierge.sysPipeState = "missing";
       concierge.sysLastErr = "sys_admission_waiting_for_pipe_owner";
 
-      six7RefreshSysReadiness("sys_admission_waiting_for_pipe_owner");
+      phantomRefreshSysReadiness("sys_admission_waiting_for_pipe_owner");
       emitSnapshot("sys_admission_waiting_for_pipe_owner");
 
-      six7EnsureSysPipe(
+      phantomEnsureSysPipe(
         target,
         "peer_sys_admission_" + String(reason || "sys_admission"),
       );
       return false;
     }
 
-    const msg = six7PresencePayload();
+    const msg = phantomPresencePayload();
     msg.to = target;
 
     // The same SYS tether owner carries both committed-member refresh and
     // fresh-incarnation admission. Membership intent is explicit only while
     // self is absent from committed authority; role labels never decide it.
-    const selfCommitted = six7CommittedMember(self);
+    const selfCommitted = phantomCommittedMember(self);
     if (!selfCommitted) {
       msg.admit = true;
       msg.admitReason = String(reason || "sys_admission");
     }
 
-    six7SysAdmissionLastSent.set(target, nowMs);
+    phantomSysAdmissionLastSent.set(target, nowMs);
 
-    const ok = six7SendSysControl(msg, "presence");
+    const ok = phantomSendSysControl(msg, "presence");
     const auditKind = selfCommitted ? "presence" : "admit";
 
-    six7MembershipAuditSet(
+    phantomMembershipAuditSet(
       ok ? auditKind + "_sent" : auditKind + "_send_failed",
       {
         peer: target,
         reason: String(reason || "sys_admission"),
-        pipe: String(six7SysPeers.get(target)?.sysdc?.readyState || "missing"),
+        pipe: String(phantomSysPeers.get(target)?.sysdc?.readyState || "missing"),
         role: concierge.localRoleCandidate || concierge.role || "peer",
       },
     );
@@ -9894,8 +9899,8 @@ export function createExtractedEngine(host) {
       concierge.lastRouteClass = "presence";
       concierge.routeMode = "sys_primary";
       concierge.lastRouteMode = "sys_primary";
-      concierge.route = "six7_sys";
-      concierge.wouldRoute = "six7_sys";
+      concierge.route = "phantom_sys";
+      concierge.wouldRoute = "phantom_sys";
       concierge.wouldRouteReason = "sys_admission_presence";
       emitSnapshot("sys_admission_presence_sent");
       return true;
@@ -9906,18 +9911,18 @@ export function createExtractedEngine(host) {
     return false;
   }
 
-  function six7ScheduleSysAdmission(reason = "schedule") {
-    const targets = six7SysAdmissionTargets();
+  function phantomScheduleSysAdmission(reason = "schedule") {
+    const targets = phantomSysAdmissionTargets();
     if (!targets.length) return false;
 
     let touched = false;
 
     for (const target of targets) {
-      const key = six7ShortKey(target);
+      const key = phantomShortKey(target);
       if (!key) continue;
 
-      if (six7HasOpenSysPipe(key)) {
-        six7SendSysAdmissionPresenceTo(
+      if (phantomHasOpenSysPipe(key)) {
+        phantomSendSysAdmissionPresenceTo(
           key,
           "sys_admission_open_" + String(reason || "schedule"),
         );
@@ -9928,7 +9933,7 @@ export function createExtractedEngine(host) {
       concierge.sysPeer = key;
       concierge.sysLastErr = null;
 
-      void six7EnsureSysPipe(
+      void phantomEnsureSysPipe(
         key,
         "peer_sys_admission_pipe_" + String(reason || "schedule"),
       );
@@ -9940,14 +9945,14 @@ export function createExtractedEngine(host) {
     return touched;
   }
 
-  function six7ScheduleSysPreflightUnstableRetry(
+  function phantomScheduleSysPreflightUnstableRetry(
     remoteHKey,
     reason = "pc_not_stable",
   ) {
-    const key = six7ShortKey(remoteHKey);
+    const key = phantomShortKey(remoteHKey);
     if (!key) return false;
 
-    const ent = six7SysPeers.get(key);
+    const ent = phantomSysPeers.get(key);
     const pc = ent?.pc || null;
     if (!pc) return false;
 
@@ -9959,43 +9964,43 @@ export function createExtractedEngine(host) {
       } catch {}
 
       try {
-        pc.__six7SysStableWaiter = false;
+        pc.__phantomSysStableWaiter = false;
       } catch {}
     };
 
     const resume = () => {
-      const currentSysPeer = six7ShortKey(concierge.sysPeer);
-      const freshTarget = six7ShortKey(six7SysTargetFromCandidates());
+      const currentSysPeer = phantomShortKey(concierge.sysPeer);
+      const freshTarget = phantomShortKey(phantomSysTargetFromCandidates());
 
       const stillOwner = key && (currentSysPeer === key || freshTarget === key);
 
       if (!stillOwner) {
         cleanupWaiter();
-        six7SysPreflightUnstableRetries.delete(key);
+        phantomSysPreflightUnstableRetries.delete(key);
 
         concierge.sysLastErr = null;
-        six7RefreshSysReadiness("sys_preflight_wait_target_changed");
+        phantomRefreshSysReadiness("sys_preflight_wait_target_changed");
         emitSnapshot("sys_preflight_wait_target_changed");
         return;
       }
 
-      if (six7HasOpenSysPipe(key)) {
+      if (phantomHasOpenSysPipe(key)) {
         cleanupWaiter();
-        six7SysPreflightUnstableRetries.delete(key);
+        phantomSysPreflightUnstableRetries.delete(key);
 
         concierge.sysPeer = key;
         concierge.sysPipeState = "open";
         concierge.sysLastErr = null;
 
-        six7RefreshSysReadiness("sys_preflight_wait_existing_open");
+        phantomRefreshSysReadiness("sys_preflight_wait_existing_open");
 
         if (
           String(concierge.localRoleCandidate || "peer") === "peer" ||
-          !six7CommittedMember(selfHKey)
+          !phantomCommittedMember(selfHKey)
         ) {
-          six7SendSysAdmissionPresence("sys_preflight_wait_existing_open", key);
+          phantomSendSysAdmissionPresence("sys_preflight_wait_existing_open", key);
         } else {
-          six7RefreshOpenSysPeer("sys_preflight_wait_existing_open");
+          phantomRefreshOpenSysPeer("sys_preflight_wait_existing_open");
         }
 
         emitSnapshot("sys_preflight_wait_existing_open");
@@ -10010,22 +10015,22 @@ export function createExtractedEngine(host) {
         pc.iceConnectionState === "closed"
       ) {
         cleanupWaiter();
-        six7SysPreflightUnstableRetries.delete(key);
+        phantomSysPreflightUnstableRetries.delete(key);
 
         concierge.sysPeer = key;
         concierge.sysPipeState = "closed";
         concierge.sysLastErr = "sys_preflight_wait_pc_closed:" + key;
 
-        six7RefreshSysReadiness("sys_preflight_wait_pc_closed");
+        phantomRefreshSysReadiness("sys_preflight_wait_pc_closed");
         emitSnapshot("sys_preflight_wait_pc_closed");
 
         if (
           String(concierge.localRoleCandidate || "peer") === "peer" ||
-          !six7CommittedMember(selfHKey)
+          !phantomCommittedMember(selfHKey)
         ) {
-          six7ScheduleSysAdmission("sys_preflight_wait_pc_closed");
+          phantomScheduleSysAdmission("sys_preflight_wait_pc_closed");
         } else {
-          six7ScheduleSysPreflight("sys_preflight_wait_pc_closed");
+          phantomScheduleSysPreflight("sys_preflight_wait_pc_closed");
         }
 
         return;
@@ -10034,13 +10039,13 @@ export function createExtractedEngine(host) {
       if (pc.signalingState !== "stable") return;
 
       cleanupWaiter();
-      six7SysPreflightUnstableRetries.delete(key);
+      phantomSysPreflightUnstableRetries.delete(key);
       concierge.sysLastErr = null;
 
-      const recentGoodSysRx = Number(six7SysLastGoodRx.get(key) || 0);
+      const recentGoodSysRx = Number(phantomSysLastGoodRx.get(key) || 0);
 
       if (recentGoodSysRx && now() - recentGoodSysRx < 5000) {
-        const ent = six7SysPeers.get(key);
+        const ent = phantomSysPeers.get(key);
         const sysState = String(ent?.sysdc?.readyState || "");
 
         if (sysState === "open") {
@@ -10051,14 +10056,14 @@ export function createExtractedEngine(host) {
               : "open";
           concierge.sysLastErr = null;
 
-          six7RefreshSysReadiness("sys_preflight_wait_recent_good_rx_open");
+          phantomRefreshSysReadiness("sys_preflight_wait_recent_good_rx_open");
           emitSnapshot("sys_preflight_wait_recent_good_rx_open");
           return;
         }
 
-        six7SysLastGoodRx.delete(key);
+        phantomSysLastGoodRx.delete(key);
 
-        if (six7ShortKey(concierge.sysReadyPeer) === key) {
+        if (phantomShortKey(concierge.sysReadyPeer) === key) {
           concierge.sysReadyPeer = null;
           concierge.sysReadyAt = 0;
           concierge.sysReadyProof = "none";
@@ -10070,13 +10075,13 @@ export function createExtractedEngine(host) {
           sysState === "connecting" ? "connecting" : "missing";
         concierge.sysLastErr = "wait_recent_good_rx_without_open_pipe";
 
-        six7RefreshSysReadiness("wait_recent_good_rx_without_open_pipe");
+        phantomRefreshSysReadiness("wait_recent_good_rx_without_open_pipe");
         emitSnapshot("wait_recent_good_rx_without_open_pipe");
 
-        // no return; fall through to six7EnsureSysPipe below
+        // no return; fall through to phantomEnsureSysPipe below
       }
 
-      six7EnsureSysPipe(
+      phantomEnsureSysPipe(
         key,
         "sys_preflight_pc_stable:" + String(reason || "sys_preflight"),
       );
@@ -10088,7 +10093,7 @@ export function createExtractedEngine(host) {
       "sys_preflight_waiting_for_pc_stable:" +
       String(pc.signalingState || "unknown");
 
-    six7RefreshSysReadiness("sys_preflight_waiting_for_pc_stable");
+    phantomRefreshSysReadiness("sys_preflight_waiting_for_pc_stable");
     emitSnapshot("sys_preflight_waiting_for_pc_stable");
 
     resume();
@@ -10100,44 +10105,44 @@ export function createExtractedEngine(host) {
       pc.connectionState === "closed" ||
       pc.iceConnectionState === "failed" ||
       pc.iceConnectionState === "closed" ||
-      six7HasOpenSysPipe(key)
+      phantomHasOpenSysPipe(key)
     ) {
       return true;
     }
 
-    if (!pc.__six7SysStableWaiter) {
+    if (!pc.__phantomSysStableWaiter) {
       try {
-        pc.__six7SysStableWaiter = true;
+        pc.__phantomSysStableWaiter = true;
         pc.addEventListener("signalingstatechange", resume);
         pc.addEventListener("connectionstatechange", resume);
         pc.addEventListener("iceconnectionstatechange", resume);
       } catch {
         try {
-          pc.__six7SysStableWaiter = false;
+          pc.__phantomSysStableWaiter = false;
         } catch {}
         return false;
       }
     }
 
-    const old = six7SysPreflightUnstableRetries.get(key) || {};
+    const old = phantomSysPreflightUnstableRetries.get(key) || {};
     const attempts = Number(old.attempts || 0) + 1;
 
-    six7SysPreflightUnstableRetries.set(key, {
+    phantomSysPreflightUnstableRetries.set(key, {
       attempts,
       at: Date.now(),
       reason: String(reason || "pc_not_stable"),
     });
 
-    if (attempts >= SIX7_SYS_PREFLIGHT_UNSTABLE_MAX) {
+    if (attempts >= PHANTOM_SYS_PREFLIGHT_UNSTABLE_MAX) {
       cleanupWaiter();
-      six7SysPreflightUnstableRetries.delete(key);
+      phantomSysPreflightUnstableRetries.delete(key);
 
       concierge.sysPeer = key;
       concierge.sysPipeState = "closed";
       concierge.sysLastErr =
         "sys_preflight_unstable_dead:" + String(pc.signalingState || "unknown");
 
-      six7RefreshSysReadiness("sys_preflight_unstable_dead");
+      phantomRefreshSysReadiness("sys_preflight_unstable_dead");
       emitSnapshot("sys_preflight_unstable_dead");
 
       return false;
@@ -10148,31 +10153,31 @@ export function createExtractedEngine(host) {
 
   const sdkSysBirthFailures=new Map();
   const sdkSysBirthFlights=new Map();
-  function six7EnsureSysPipe(remoteHKey, reason = "ensure") {
-    const key=six7ShortKey(remoteHKey);
+  function phantomEnsureSysPipe(remoteHKey, reason = "ensure") {
+    const key=phantomShortKey(remoteHKey);
     if(!key)return Promise.resolve(false);
-    return runSysBirth(sdkSysBirthFlights,key,()=>six7PerformSysBirth(key,reason));
+    return runSysBirth(sdkSysBirthFlights,key,()=>phantomPerformSysBirth(key,reason));
   }
-  async function six7PerformSysBirth(remoteHKey, reason = "ensure") {
-    const budgetKey=six7ShortKey(remoteHKey);
-    if(sdkSysBirthFailures.get(budgetKey)>=2 && !six7HasOpenSysPipe(budgetKey)){emitSnapshot("sys_birth_retry_budget_exhausted");return false;}
-    const key = six7ShortKey(remoteHKey);
+  async function phantomPerformSysBirth(remoteHKey, reason = "ensure") {
+    const budgetKey=phantomShortKey(remoteHKey);
+    if(sdkSysBirthFailures.get(budgetKey)>=2 && !phantomHasOpenSysPipe(budgetKey)){emitSnapshot("sys_birth_retry_budget_exhausted");return false;}
+    const key = phantomShortKey(remoteHKey);
     if (!key) return false;
     if (!selfHKey || !videoId) return false;
 
-    if (six7SysReplacementTerminal(key)) {
-      six7SysDialing.delete(key);
-      six7SysPreflightUnstableRetries.delete(key);
+    if (phantomSysReplacementTerminal(key)) {
+      phantomSysDialing.delete(key);
+      phantomSysPreflightUnstableRetries.delete(key);
       emitSnapshot("sys_birth_blocked_terminal_exit_pending");
       return false;
     }
 
-    const ownsPrimarySysState = six7OwnsPrimarySysState(key);
+    const ownsPrimarySysState = phantomOwnsPrimarySysState(key);
 
-    const recentGoodSysRx = Number(six7SysLastGoodRx.get(key) || 0);
+    const recentGoodSysRx = Number(phantomSysLastGoodRx.get(key) || 0);
 
     if (recentGoodSysRx && now() - recentGoodSysRx < 5000) {
-      const ent = six7SysPeers.get(key);
+      const ent = phantomSysPeers.get(key);
       const sysState = String(ent?.sysdc?.readyState || "");
 
       if (sysState === "open") {
@@ -10184,16 +10189,16 @@ export function createExtractedEngine(host) {
               : "open";
           concierge.sysLastErr = null;
 
-          six7RefreshSysReadiness("sys_preflight_recent_good_rx_open");
+          phantomRefreshSysReadiness("sys_preflight_recent_good_rx_open");
         }
 
         emitSnapshot("sys_preflight_recent_good_rx_open");
         return true;
       }
 
-      six7SysLastGoodRx.delete(key);
+      phantomSysLastGoodRx.delete(key);
 
-      if (six7ShortKey(concierge.sysReadyPeer) === key) {
+      if (phantomShortKey(concierge.sysReadyPeer) === key) {
         concierge.sysReadyPeer = null;
         concierge.sysReadyAt = 0;
         concierge.sysReadyProof = "none";
@@ -10206,7 +10211,7 @@ export function createExtractedEngine(host) {
           sysState === "connecting" ? "connecting" : "missing";
         concierge.sysLastErr = "recent_good_rx_without_open_pipe";
 
-        six7RefreshSysReadiness("recent_good_rx_without_open_pipe");
+        phantomRefreshSysReadiness("recent_good_rx_without_open_pipe");
       }
 
       emitSnapshot("recent_good_rx_without_open_pipe");
@@ -10214,7 +10219,7 @@ export function createExtractedEngine(host) {
       // Do not return. Fall through to the real owner/acceptor logic below.
     }
 
-    const birthRole = six7SysBirthRole(key);
+    const birthRole = phantomSysBirthRole(key);
     const ownsSysDial = birthRole === "opener";
 
     if (birthRole === "illegal") {
@@ -10230,7 +10235,7 @@ export function createExtractedEngine(host) {
     }
 
     if (!ownsSysDial) {
-      const ent = six7SysPeers.get(key);
+      const ent = phantomSysPeers.get(key);
       const dc = ent?.sysdc || null;
 
       if (ownsPrimarySysState) {
@@ -10241,7 +10246,7 @@ export function createExtractedEngine(host) {
         if (ownsPrimarySysState) {
           concierge.sysPipeState = dc.readyState;
           concierge.sysLastErr = null;
-          six7RefreshSysReadiness(
+          phantomRefreshSysReadiness(
             "sys_preflight_acceptor_observing_" + dc.readyState,
           );
         }
@@ -10253,7 +10258,7 @@ export function createExtractedEngine(host) {
       if (ownsPrimarySysState) {
         concierge.sysPipeState = "missing";
         concierge.sysLastErr = "sys_preflight_acceptor_waiting_for_owner";
-        six7RefreshSysReadiness("sys_preflight_acceptor_waiting_for_owner");
+        phantomRefreshSysReadiness("sys_preflight_acceptor_waiting_for_owner");
       }
 
       emitSnapshot("sys_preflight_acceptor_waiting_for_owner");
@@ -10263,7 +10268,7 @@ export function createExtractedEngine(host) {
     let birthEntry=null;
     const failOwnedSysBirth = (faultReason, detail = "") => {
       const fault = String(faultReason || "sys_birth_failed");
-      const current = six7SysPeers.get(key);
+      const current = phantomSysPeers.get(key);
       if(birthEntry && current!==birthEntry){emitSnapshot("sys_birth_stale_completion_ignored");return false;}
 
       // Retire this failed birth before reporting it. Any resulting callbacks
@@ -10277,7 +10282,7 @@ export function createExtractedEngine(host) {
         current.ownerAttemptId = null;
         current.sysCarrier = false;
 
-        six7SysPeers.delete(key);
+        phantomSysPeers.delete(key);
 
         try {
           failedDc?.close();
@@ -10288,55 +10293,55 @@ export function createExtractedEngine(host) {
         } catch {}
       }
 
-      six7SysDialing.delete(key);
-      six7SysPreflightUnstableRetries.delete(key);
+      phantomSysDialing.delete(key);
+      phantomSysPreflightUnstableRetries.delete(key);
 
       if (detail) {
         concierge.sysLastErr = `${fault}:${String(detail)}`;
         emitSnapshot(fault + "_detail");
       }
 
-      six7HandleTransportLoss(key, fault);
+      phantomHandleTransportLoss(key, fault);
       return false;
     };
 
-    if (six7HasOpenSysPipe(key)) {
-      six7SysPreflightUnstableRetries.delete(key);
+    if (phantomHasOpenSysPipe(key)) {
+      phantomSysPreflightUnstableRetries.delete(key);
 
       if (ownsPrimarySysState) {
         concierge.sysPeer = key;
         concierge.sysPipeState = "open";
         concierge.sysLastErr = null;
 
-        six7RefreshSysReadiness("sys_preflight_already_open");
+        phantomRefreshSysReadiness("sys_preflight_already_open");
       }
 
       if (
         String(concierge.localRoleCandidate || "peer") === "peer" ||
-        !six7CommittedMember(selfHKey)
+        !phantomCommittedMember(selfHKey)
       ) {
-        six7SendSysAdmissionPresence("sys_preflight_already_open", key);
+        phantomSendSysAdmissionPresence("sys_preflight_already_open", key);
       } else {
-        six7RefreshOpenSysPeer("sys_preflight_already_open");
+        phantomRefreshOpenSysPeer("sys_preflight_already_open");
       }
 
       emitSnapshot("sys_preflight_already_open");
       return true;
     }
 
-    if (six7SysDialing.has(key)) {
+    if (phantomSysDialing.has(key)) {
       emitSnapshot("sys_pipe_owner_already_dialing");
       return false;
     }
 
-    six7SysDialing.add(key);
+    phantomSysDialing.add(key);
 
     try {
       if (ownsPrimarySysState) {
         concierge.sysPeer = key;
       }
 
-      const ent = six7GetOrCreateSysPeer(key);
+      const ent = phantomGetOrCreateSysPeer(key);
       birthEntry=ent;
 
       if (ent && ownsPrimarySysState) {
@@ -10354,23 +10359,23 @@ export function createExtractedEngine(host) {
       const pcState = String(pc.signalingState || "");
 
       if (dc && dc.readyState === "open") {
-        six7SysPreflightUnstableRetries.delete(key);
+        phantomSysPreflightUnstableRetries.delete(key);
 
         if (ownsPrimarySysState) {
           concierge.sysPeer = key;
           concierge.sysPipeState = "open";
           concierge.sysLastErr = null;
 
-          six7RefreshSysReadiness("sys_preflight_existing_dc_open");
+          phantomRefreshSysReadiness("sys_preflight_existing_dc_open");
         }
 
         if (
           String(concierge.localRoleCandidate || "peer") === "peer" ||
-          !six7CommittedMember(selfHKey)
+          !phantomCommittedMember(selfHKey)
         ) {
-          six7SendSysAdmissionPresence("sys_preflight_existing_dc_open", key);
+          phantomSendSysAdmissionPresence("sys_preflight_existing_dc_open", key);
         } else {
-          six7RefreshOpenSysPeer("sys_preflight_existing_dc_open");
+          phantomRefreshOpenSysPeer("sys_preflight_existing_dc_open");
         }
 
         emitSnapshot("sys_preflight_existing_dc_open");
@@ -10391,9 +10396,9 @@ export function createExtractedEngine(host) {
 
           const legalReadyPipe = !!(
             concierge.sysReady &&
-            six7ShortKey(concierge.sysPeer) === key &&
-            six7ShortKey(concierge.sysReadyPeer) === key &&
-            six7HasOpenSysPipe(key)
+            phantomShortKey(concierge.sysPeer) === key &&
+            phantomShortKey(concierge.sysReadyPeer) === key &&
+            phantomHasOpenSysPipe(key)
           );
 
           if (ownsSysDial && transportDead && !legalReadyPipe) {
@@ -10403,7 +10408,7 @@ export function createExtractedEngine(host) {
           if (ownsSysDial && transportDead && legalReadyPipe) {
             concierge.sysLastErr =
               "transport_dead_ignored_legal_ready_sys_pipe";
-            six7RefreshSysReadiness(
+            phantomRefreshSysReadiness(
               "transport_dead_ignored_legal_ready_sys_pipe",
             );
             emitSnapshot("transport_dead_ignored_legal_ready_sys_pipe");
@@ -10416,14 +10421,14 @@ export function createExtractedEngine(host) {
             concierge.sysLastErr =
               "sys_preflight_existing_dc_connecting_waiting";
 
-            six7RefreshSysReadiness(
+            phantomRefreshSysReadiness(
               "sys_preflight_existing_dc_connecting_waiting",
             );
           }
 
           emitSnapshot("sys_preflight_existing_dc_connecting_waiting");
 
-          six7ScheduleSysPreflightUnstableRetry(
+          phantomScheduleSysPreflightUnstableRetry(
             key,
             "sys_preflight_existing_dc_connecting",
           );
@@ -10432,23 +10437,23 @@ export function createExtractedEngine(host) {
         }
 
         if (sysState === "open") {
-          six7SysPreflightUnstableRetries.delete(key);
+          phantomSysPreflightUnstableRetries.delete(key);
 
           if (ownsPrimarySysState) {
             concierge.sysPeer = key;
             concierge.sysPipeState = "open";
             concierge.sysLastErr = null;
 
-            six7RefreshSysReadiness("sys_preflight_existing_dc_open");
+            phantomRefreshSysReadiness("sys_preflight_existing_dc_open");
           }
 
           if (
             String(concierge.localRoleCandidate || "peer") === "peer" ||
-            !six7CommittedMember(selfHKey)
+            !phantomCommittedMember(selfHKey)
           ) {
-            six7SendSysAdmissionPresence("sys_preflight_existing_dc_open", key);
+            phantomSendSysAdmissionPresence("sys_preflight_existing_dc_open", key);
           } else {
-            six7RefreshOpenSysPeer("sys_preflight_existing_dc_open");
+            phantomRefreshOpenSysPeer("sys_preflight_existing_dc_open");
           }
 
           emitSnapshot("sys_preflight_existing_dc_open");
@@ -10461,20 +10466,20 @@ export function createExtractedEngine(host) {
           concierge.sysLastErr =
             "sys_preflight_waiting_for_pc_stable:" + pcState;
 
-          six7RefreshSysReadiness("sys_preflight_waiting_for_pc_stable");
+          phantomRefreshSysReadiness("sys_preflight_waiting_for_pc_stable");
         }
 
         emitSnapshot("sys_preflight_waiting_for_pc_stable");
 
-        six7ScheduleSysPreflightUnstableRetry(key, String(reason || "ensure"));
+        phantomScheduleSysPreflightUnstableRetry(key, String(reason || "ensure"));
         return false;
       }
 
       if (!ent.sysdc || ent.sysdc.readyState === "closed") {
         ent.sdkSysBirthCompleted = false;
-        ent.sysdc = pc.createDataChannel("six7-sys", { ordered: true });
+        ent.sysdc = pc.createDataChannel(COMPATIBILITY_WIRE.systemChannel, { ordered: true });
 
-        const edgeAttempt = six7SysEdgeAttempt(key);
+        const edgeAttempt = phantomSysEdgeAttempt(key);
         if (edgeAttempt) {
           edgeAttempt.role = "opener";
           edgeAttempt.state = "creating";
@@ -10484,7 +10489,7 @@ export function createExtractedEngine(host) {
           ent.sysAttemptId = edgeAttempt.id;
         }
 
-        six7WireSysDC(key, ent.sysdc);
+        phantomWireSysDC(key, ent.sysdc);
         createdSysDc = true;
       }
 
@@ -10493,18 +10498,18 @@ export function createExtractedEngine(host) {
         if(disposition==='failed')return failOwnedSysBirth("sys_transport_birth_failed");
         if(disposition==='waiting') {
           if(ownsPrimarySysState){concierge.sysPipeState="connecting";concierge.sysLastErr=null;}
-          six7RefreshSysReadiness("sys_birth_waiting_for_channel_open");
+          phantomRefreshSysReadiness("sys_birth_waiting_for_channel_open");
           emitSnapshot("sys_birth_waiting_for_channel_open");
           return false;
         }
       }
 
       const offer = await pc.createOffer();
-      if(!isCurrentSysBirth(six7SysPeers,key,ent))return false;
+      if(!isCurrentSysBirth(phantomSysPeers,key,ent))return false;
       await pc.setLocalDescription(offer);
-      if(!isCurrentSysBirth(six7SysPeers,key,ent))return false;
+      if(!isCurrentSysBirth(phantomSysPeers,key,ent))return false;
 
-      const edgeAttempt = six7SysEdgeAttempt(key);
+      const edgeAttempt = phantomSysEdgeAttempt(key);
       if (edgeAttempt) {
         edgeAttempt.role = "opener";
         edgeAttempt.state = "offer_sent";
@@ -10519,7 +10524,7 @@ export function createExtractedEngine(host) {
         sysCarrier: true,
       });
 
-      if(!isCurrentSysBirth(six7SysPeers,key,ent))return false;
+      if(!isCurrentSysBirth(phantomSysPeers,key,ent))return false;
       if (!sent) {
         return failOwnedSysBirth("sys_birth_offer_send_failed");
       }
@@ -10529,64 +10534,64 @@ export function createExtractedEngine(host) {
         concierge.sysPipeState = "connecting";
         concierge.sysLastErr = null;
 
-        six7RefreshSysReadiness("sys_preflight_offer_sent");
+        phantomRefreshSysReadiness("sys_preflight_offer_sent");
       }
 
       // A bounded response deadline detects silence, never elects authority.
       const sentEntry=ent;
-      armSysBirthDeadline(sentEntry,{schedule:setTimeout,cancel:clearTimeout},SIX7_SYS_REPLACEMENT_MS,()=>{
-        if(!isCurrentSysBirth(six7SysPeers,key,sentEntry))return;
-        if(six7HasOpenSysPipe(key)){sdkSysBirthFailures.delete(key);return;}
+      armSysBirthDeadline(sentEntry,{schedule:setTimeout,cancel:clearTimeout},PHANTOM_SYS_REPLACEMENT_MS,()=>{
+        if(!isCurrentSysBirth(phantomSysPeers,key,sentEntry))return;
+        if(phantomHasOpenSysPipe(key)){sdkSysBirthFailures.delete(key);return;}
         // A committed member can arrive before its historical mirror promotes.
         // Silence exhausts this attempt, not the member's recovery route forever.
-        if(six7GossipRecovery.kind === 'committed_mirror' &&
-            six7ShortKey(six7GossipRecovery.targets[six7GossipRecovery.index]) === key){
-          six7HandleTransportLoss(key,"sys_birth_response_deadline");return;
+        if(phantomGossipRecovery.kind === 'committed_mirror' &&
+            phantomShortKey(phantomGossipRecovery.targets[phantomGossipRecovery.index]) === key){
+          phantomHandleTransportLoss(key,"sys_birth_response_deadline");return;
         }
         const failures=(sdkSysBirthFailures.get(key)||0)+1;
         sdkSysBirthFailures.set(key,failures);
-        if(failures<2){six7HandleTransportLoss(key,"sys_birth_response_deadline");return;}
-        six7TeardownSysPeer(key,"sys_birth_response_deadline_exhausted");
-        if(six7ShortKey(concierge.sysPeer)===key){concierge.sysPipeState="faulted";concierge.sysReady=false;concierge.sysLastErr="sys_birth_response_deadline_exhausted";concierge.sysAttempt.state="faulted";concierge.sysAttempt.faultReason="sys_birth_response_deadline_exhausted";}
+        if(failures<2){phantomHandleTransportLoss(key,"sys_birth_response_deadline");return;}
+        phantomTeardownSysPeer(key,"sys_birth_response_deadline_exhausted");
+        if(phantomShortKey(concierge.sysPeer)===key){concierge.sysPipeState="faulted";concierge.sysReady=false;concierge.sysLastErr="sys_birth_response_deadline_exhausted";concierge.sysAttempt.state="faulted";concierge.sysAttempt.faultReason="sys_birth_response_deadline_exhausted";}
         post("ADMISSION_FAILED",{peer:key,reason:"sys_birth_response_deadline_exhausted",attempts:failures});
         emitSnapshot("sys_birth_response_deadline_exhausted");
       });
-      six7SysPreflightUnstableRetries.delete(key);
+      phantomSysPreflightUnstableRetries.delete(key);
       emitSnapshot("sys_preflight_offer_sent");
 
       return true;
     } catch (e) {
       return failOwnedSysBirth("sys_birth_exception", String(e?.message || e));
     } finally {
-      if(!birthEntry || !six7SysPeers.has(key) || six7SysPeers.get(key)===birthEntry)six7SysDialing.delete(key);
+      if(!birthEntry || !phantomSysPeers.has(key) || phantomSysPeers.get(key)===birthEntry)phantomSysDialing.delete(key);
     }
   }
 
-  function six7ScheduleSysPreflight(reason = "schedule") {
+  function phantomScheduleSysPreflight(reason = "schedule") {
     const role = String(concierge.localRoleCandidate || "peer");
 
     if (role !== "syscon1" && role !== "syscon2") {
       return false;
     }
 
-    const target = six7ShortKey(six7SysTargetFromCandidates());
+    const target = phantomShortKey(phantomSysTargetFromCandidates());
     if (!target) return false;
 
-    if (six7SysReplacementTerminal(target)) {
-      six7SysDialing.delete(target);
-      six7SysPreflightUnstableRetries.delete(target);
+    if (phantomSysReplacementTerminal(target)) {
+      phantomSysDialing.delete(target);
+      phantomSysPreflightUnstableRetries.delete(target);
       emitSnapshot("sys_preflight_blocked_terminal_exit_pending");
       return false;
     }
 
-    const ent = six7SysPeers.get(target);
+    const ent = phantomSysPeers.get(target);
     const dcState = String(ent?.sysdc?.readyState || "");
 
     if (dcState === "open" || dcState === "connecting") {
       concierge.sysPeer = target;
       concierge.sysPipeState = dcState;
 
-      six7RefreshSysReadiness(
+      phantomRefreshSysReadiness(
         "sys_preflight_observe_" + dcState + "_" + String(reason || "schedule"),
       );
       emitSnapshot("sys_preflight_observe_" + dcState);
@@ -10602,7 +10607,7 @@ export function createExtractedEngine(host) {
       concierge.sysPipeState = "missing";
       concierge.sysLastErr = null;
 
-      six7RefreshSysReadiness(
+      phantomRefreshSysReadiness(
         "sys_preflight_acceptor_wait_" + String(reason || "schedule"),
       );
       emitSnapshot("sys_preflight_acceptor_wait");
@@ -10613,27 +10618,27 @@ export function createExtractedEngine(host) {
      * Syscon1 is the deterministic pair opener.
      * Birth immediately from the authority/target event that called us.
      */
-    return six7EnsureSysPipe(
+    return phantomEnsureSysPipe(
       target,
       "syscon1_primary_" + String(reason || "schedule"),
     );
   }
 
   async function rtcDial(remoteHKey, opts = {}) {
-    const key = six7ShortKey(remoteHKey);
+    const key = phantomShortKey(remoteHKey);
     if (!key) return;
 
-    const self = six7ShortKey(selfHKey);
+    const self = phantomShortKey(selfHKey);
     if (!self || key === self) return;
 
     const requestedPipe = String(opts?.pipe || "chat");
     const dialReason = String(opts?.reason || requestedPipe || "rtc_dial");
 
     if (requestedPipe !== "chat") {
-      return six7EnsureSysPipe(key, dialReason);
+      return phantomEnsureSysPipe(key, dialReason);
     }
 
-    if (!six7OwnsChatPipeOffer(key)) {
+    if (!phantomOwnsChatPipeOffer(key)) {
       concierge.lastErr = "chat_pipe_not_offer_owner:" + dialReason;
       emitSnapshot("chat_pipe_not_offer_owner");
       return;
@@ -10641,10 +10646,10 @@ export function createExtractedEngine(host) {
 
     if (rtcDialing.has(key)) return;
 
-    const live = six7ChatPeers.get(key);
+    const live = phantomChatPeers.get(key);
 
     if (live?.dc?.readyState === "closed") {
-      six7ChatPeers.delete(key);
+      phantomChatPeers.delete(key);
     }
 
     if (live?.dc?.readyState === "open") {
@@ -10652,8 +10657,8 @@ export function createExtractedEngine(host) {
     }
 
     if (live?.dc?.readyState === "connecting") {
-      if (live.chatAttemptId && !six7ChatReconnectDeadlines.has(key)) {
-        six7ArmChatAttemptDeadline(
+      if (live.chatAttemptId && !phantomChatReconnectDeadlines.has(key)) {
+        phantomArmChatAttemptDeadline(
           key,
           live.chatAttemptId,
           "observe_existing_connecting",
@@ -10670,7 +10675,7 @@ export function createExtractedEngine(host) {
       rtcDialing.add(key);
       rtcInFlight = true;
 
-      const ent = six7GetOrCreateChatPeer(key);
+      const ent = phantomGetOrCreateChatPeer(key);
       if (!ent?.pc) return;
       const pc = ent.pc;
 
@@ -10679,8 +10684,8 @@ export function createExtractedEngine(host) {
       }
 
       if (ent.dc?.readyState === "connecting") {
-        if (ent.chatAttemptId && !six7ChatReconnectDeadlines.has(key)) {
-          six7ArmChatAttemptDeadline(
+        if (ent.chatAttemptId && !phantomChatReconnectDeadlines.has(key)) {
+          phantomArmChatAttemptDeadline(
             key,
             ent.chatAttemptId,
             "observe_existing_connecting",
@@ -10701,14 +10706,14 @@ export function createExtractedEngine(host) {
         ent.chatFault = "stale_dc_cleared_before_dial";
       }
 
-      ent.chatAttemptId = six7NewChatAttemptId(key);
+      ent.chatAttemptId = phantomNewChatAttemptId(key);
       ent.chatAttemptState = "creating";
       ent.chatAttemptStartedAt = now();
       ent.chatState = "creating";
       ent.chatFault = "none";
       ent.chatProof = "owner_created_dc";
 
-      ent.dc = pc.createDataChannel("six7", { ordered: true });
+      ent.dc = pc.createDataChannel(COMPATIBILITY_WIRE.chatChannel, { ordered: true });
       rtcWireDC(key, ent.dc);
       emitSnapshot("chat_pipe_owner_created_dc");
 
@@ -10720,14 +10725,14 @@ export function createExtractedEngine(host) {
       });
 
       ent.chatAttemptState = offerSent ? "awaiting_answer" : "signal_held";
-      six7ArmChatAttemptDeadline(key, ent.chatAttemptId, dialReason);
+      phantomArmChatAttemptDeadline(key, ent.chatAttemptId, dialReason);
       emitSnapshot("chat_pipe_offer_sent");
     } catch (e) {
-      const ent = six7ChatPeers.get(key);
+      const ent = phantomChatPeers.get(key);
       if (ent?.chatAttemptId) {
         ent.chatAttemptState = "signal_failed";
         ent.chatFault = "offer_failed";
-        six7ArmChatAttemptDeadline(key, ent.chatAttemptId, "offer_failed");
+        phantomArmChatAttemptDeadline(key, ent.chatAttemptId, "offer_failed");
       }
       concierge.lastErr = "chat_pipe_offer_failed:" + String(e?.message || e);
       emitSnapshot("chat_pipe_offer_failed");
@@ -10736,19 +10741,19 @@ export function createExtractedEngine(host) {
     }
   }
 
-  function six7RtcPipeFromMeta(meta = {}) {
+  function phantomRtcPipeFromMeta(meta = {}) {
     return meta?.pipe === "sys" || meta?.sysCarrier === true ? "sys" : "chat";
   }
 
-  function six7RtcEdgeForInbound(fromHKey, meta = {}) {
-    const key = six7ShortKey(fromHKey);
+  function phantomRtcEdgeForInbound(fromHKey, meta = {}) {
+    const key = phantomShortKey(fromHKey);
     if (!key) return null;
 
-    const pipe = six7RtcPipeFromMeta(meta);
+    const pipe = phantomRtcPipeFromMeta(meta);
     const ent =
       pipe === "sys"
-        ? six7GetOrCreateSysPeer(key)
-        : six7GetOrCreateChatPeer(key);
+        ? phantomGetOrCreateSysPeer(key)
+        : phantomGetOrCreateChatPeer(key);
 
     if (!ent) return null;
     if (!ent.rtcInboundChain) ent.rtcInboundChain = Promise.resolve();
@@ -10757,8 +10762,8 @@ export function createExtractedEngine(host) {
     return { key, pipe, ent };
   }
 
-  function six7QueueInboundRtc(fromHKey, meta, kind, apply) {
-    const edge = six7RtcEdgeForInbound(fromHKey, meta);
+  function phantomQueueInboundRtc(fromHKey, meta, kind, apply) {
+    const edge = phantomRtcEdgeForInbound(fromHKey, meta);
     if (!edge) return Promise.resolve(false);
 
     const { key, pipe, ent } = edge;
@@ -10772,7 +10777,7 @@ export function createExtractedEngine(host) {
           if(birth)await birth.catch(()=>{});
         }
         const current =
-          pipe === "sys" ? six7SysPeers.get(key) : six7ChatPeers.get(key);
+          pipe === "sys" ? phantomSysPeers.get(key) : phantomChatPeers.get(key);
 
         if (!current || current !== ent || !ent.pc) {
           emitSnapshot(pipe + "_rtc_inbound_stale_" + label);
@@ -10791,13 +10796,13 @@ export function createExtractedEngine(host) {
     return ent.rtcInboundChain;
   }
 
-  async function six7FlushInboundRtcIce(
+  async function phantomFlushInboundRtcIce(
     fromHKey,
     pipe,
     ent,
     reason = "remote_description_applied",
   ) {
-    const key = six7ShortKey(fromHKey);
+    const key = phantomShortKey(fromHKey);
     if (!key || !ent?.pc || !ent.pc.remoteDescription) return false;
 
     const pending = Array.isArray(ent.pendingRemoteIce)
@@ -10828,34 +10833,37 @@ export function createExtractedEngine(host) {
   }
 
   function rtcOnOffer(fromHKey, offer, meta = {}) {
-    return six7QueueInboundRtc(fromHKey, meta, "offer", () =>
-      six7ApplyRtcOffer(fromHKey, offer, meta),
+    if (!host.canAdmitPeer(phantomShortKey(fromHKey))) return;
+    return phantomQueueInboundRtc(fromHKey, meta, "offer", () =>
+      phantomApplyRtcOffer(fromHKey, offer, meta),
     );
   }
 
   function rtcOnAnswer(fromHKey, answer, meta = {}) {
-    return six7QueueInboundRtc(fromHKey, meta, "answer", () =>
-      six7ApplyRtcAnswer(fromHKey, answer, meta),
+    if (!host.canAdmitPeer(phantomShortKey(fromHKey))) return;
+    return phantomQueueInboundRtc(fromHKey, meta, "answer", () =>
+      phantomApplyRtcAnswer(fromHKey, answer, meta),
     );
   }
 
   function rtcOnIce(fromHKey, cand, meta = {}) {
-    return six7QueueInboundRtc(fromHKey, meta, "ice", () =>
-      six7ApplyRtcIce(fromHKey, cand, meta),
+    if (!host.canAdmitPeer(phantomShortKey(fromHKey))) return;
+    return phantomQueueInboundRtc(fromHKey, meta, "ice", () =>
+      phantomApplyRtcIce(fromHKey, cand, meta),
     );
   }
 
-  async function six7ApplyRtcOffer(fromHKey, offer, meta = {}) {
-    const fromKey = six7ShortKey(fromHKey);
-    const selfKey = six7ShortKey(selfHKey);
+  async function phantomApplyRtcOffer(fromHKey, offer, meta = {}) {
+    const fromKey = phantomShortKey(fromHKey);
+    const selfKey = phantomShortKey(selfHKey);
     if (!fromKey || fromKey === selfKey) return;
 
-    const pipe = six7RtcPipeFromMeta(meta);
+    const pipe = phantomRtcPipeFromMeta(meta);
 
     let sysBirthRole = "";
 
     if (pipe === "sys") {
-      if (six7SysReplacementTerminal(fromKey)) {
+      if (phantomSysReplacementTerminal(fromKey)) {
         concierge.lastErr =
           "sys_offer_rejected_terminal_exit_pending:" + fromKey;
         emitSnapshot("sys_offer_rejected_terminal_exit_pending");
@@ -10863,19 +10871,19 @@ export function createExtractedEngine(host) {
       }
 
       if (meta?.sysTemporary === true) {
-        if (!six7BindInboundTemporarySysTransaction(fromKey, meta)) {
+        if (!phantomBindInboundTemporarySysTransaction(fromKey, meta)) {
           concierge.lastErr =
             "sys_offer_rejected_invalid_temporary_transaction:" + fromKey;
           return;
         }
       }
 
-      sysBirthRole = six7SysBirthRole(fromKey);
-      const base = six7LocalCommittedAuthority();
+      sysBirthRole = phantomSysBirthRole(fromKey);
+      const base = phantomLocalCommittedAuthority();
       if (sysBirthRole !== "acceptor" && meta.sysTemporary !== true &&
           acceptsSuccessorHandshake({proof: meta.successorProof, base, sender: fromKey,
             self: selfKey, room: videoId, bootId: String(meta.bootId || ""),
-            leaderPipeOpen: base ? six7HasOpenSysPipe(base.syscon1) : true})) {
+            leaderPipeOpen: base ? phantomHasOpenSysPipe(base.syscon1) : true})) {
         sysBirthRole = "acceptor";
         emitSnapshot("historical_mirror_recovery_pipe_accepted");
       }
@@ -10890,17 +10898,17 @@ export function createExtractedEngine(host) {
 
     if(pipe==='sys') {
       // Validate the offer owner before an incoming attempt can retire a pipe.
-      six7ObserveRemoteIncarnation(fromKey,{bootId:String(meta.bootId||''),attemptId:String(meta.sysAttemptId||''),signalType:'rtc_offer',via:'rtc_offer',bindCurrent:meta.recoveryPeerPipe===true});
-      const incoming=String(meta.sysAttemptId||''),current=six7SysPeers.get(fromKey);
-      if(incoming && current?.sysAttemptId && incoming!==current.sysAttemptId && !six7HasOpenSysPipe(fromKey)) {
-        six7TeardownSysPeer(fromKey,"sys_attempt_superseded_by_remote_offer");
+      phantomObserveRemoteIncarnation(fromKey,{bootId:String(meta.bootId||''),attemptId:String(meta.sysAttemptId||''),signalType:'rtc_offer',via:'rtc_offer',bindCurrent:meta.recoveryPeerPipe===true});
+      const incoming=String(meta.sysAttemptId||''),current=phantomSysPeers.get(fromKey);
+      if(incoming && current?.sysAttemptId && incoming!==current.sysAttemptId && !phantomHasOpenSysPipe(fromKey)) {
+        phantomTeardownSysPeer(fromKey,"sys_attempt_superseded_by_remote_offer");
         emitSnapshot("sys_attempt_superseded_by_remote_offer");
       }
     }
 
     if (pipe === "chat") {
       const incomingAttemptId = String(meta?.chatAttemptId || "");
-      const current = six7ChatPeers.get(fromKey);
+      const current = phantomChatPeers.get(fromKey);
       const currentAttemptId = String(current?.chatAttemptId || "");
 
       if (
@@ -10915,8 +10923,8 @@ export function createExtractedEngine(host) {
 
     const ent =
       pipe === "sys"
-        ? six7GetOrCreateSysPeer(fromKey)
-        : six7GetOrCreateChatPeer(fromKey);
+        ? phantomGetOrCreateSysPeer(fromKey)
+        : phantomGetOrCreateChatPeer(fromKey);
     if (!ent?.pc) return;
 
     if (pipe === "chat") {
@@ -10928,7 +10936,7 @@ export function createExtractedEngine(host) {
 
     if (pipe === "sys") {
       ent.sysCarrier = true;
-      const edgeAttempt = six7SysEdgeAttempt(fromKey);
+      const edgeAttempt = phantomSysEdgeAttempt(fromKey);
       if (edgeAttempt) {
         const incomingAttemptId = String(meta?.sysAttemptId || "");
         if (incomingAttemptId) edgeAttempt.id = incomingAttemptId;
@@ -10940,8 +10948,8 @@ export function createExtractedEngine(host) {
         ent.sysAttemptId = edgeAttempt.id;
       }
       ent.remoteBootId =
-        String(meta?.bootId || six7RemoteBootIds.get(fromKey) || "") || null;
-      if (six7OwnsPrimarySysState(fromKey)) {
+        String(meta?.bootId || phantomRemoteBootIds.get(fromKey) || "") || null;
+      if (phantomOwnsPrimarySysState(fromKey)) {
         ent.ownerAttemptId = String(concierge.sysAttempt?.id || "") || null;
       }
     }
@@ -10952,7 +10960,7 @@ export function createExtractedEngine(host) {
       if (pipe === "sys") {
         concierge.lastErr =
           "sys_offer_rejected_acceptor_not_stable:" + pc.signalingState;
-        const edgeAttempt = six7SysEdgeAttempt(fromKey, false);
+        const edgeAttempt = phantomSysEdgeAttempt(fromKey, false);
         if (edgeAttempt) {
           edgeAttempt.state = "faulted";
           edgeAttempt.lastEvent = "acceptor_not_stable";
@@ -10984,7 +10992,7 @@ export function createExtractedEngine(host) {
     }
 
     await pc.setRemoteDescription(offer);
-    await six7FlushInboundRtcIce(
+    await phantomFlushInboundRtcIce(
       fromKey,
       pipe,
       ent,
@@ -11007,7 +11015,7 @@ export function createExtractedEngine(host) {
     });
 
     if (pipe === "sys") {
-      const edgeAttempt = six7SysEdgeAttempt(fromKey, false);
+      const edgeAttempt = phantomSysEdgeAttempt(fromKey, false);
       if (edgeAttempt) {
         edgeAttempt.state = "connecting";
         edgeAttempt.lastEvent = "answer_sent";
@@ -11024,16 +11032,16 @@ export function createExtractedEngine(host) {
       (getState(fromKey) === VEIL.INSIDE ||
         getState(fromKey) === VEIL.ESTABLISHED)
     ) {
-      six7RequestChatPipe(fromKey, "chat_carrier_stable_after_answer_sent");
+      phantomRequestChatPipe(fromKey, "chat_carrier_stable_after_answer_sent");
     }
   }
 
-  async function six7ApplyRtcAnswer(fromHKey, answer, meta = {}) {
-    const key = six7ShortKey(fromHKey);
+  async function phantomApplyRtcAnswer(fromHKey, answer, meta = {}) {
+    const key = phantomShortKey(fromHKey);
     if (!key) return;
 
-    const pipe = six7RtcPipeFromMeta(meta);
-    const ent = pipe === "sys" ? six7SysPeers.get(key) : six7ChatPeers.get(key);
+    const pipe = phantomRtcPipeFromMeta(meta);
+    const ent = pipe === "sys" ? phantomSysPeers.get(key) : phantomChatPeers.get(key);
     if (!ent?.pc) return;
 
     const pc = ent.pc;
@@ -11067,7 +11075,7 @@ export function createExtractedEngine(host) {
       }
 
       if (ent.temporary === true) {
-        const transaction = six7TemporarySysTransactions.get(key);
+        const transaction = phantomTemporarySysTransactions.get(key);
         if (
           meta?.sysTemporary !== true ||
           !transaction ||
@@ -11080,7 +11088,7 @@ export function createExtractedEngine(host) {
         }
       }
 
-      six7ObserveRemoteIncarnation(key, {
+      phantomObserveRemoteIncarnation(key, {
         bootId: String(meta?.bootId || ""),
         attemptId: incomingAttemptId || currentAttemptId,
         bindCurrent: true,
@@ -11097,7 +11105,7 @@ export function createExtractedEngine(host) {
 
     try {
       await pc.setRemoteDescription(answer);
-      await six7FlushInboundRtcIce(key, pipe, ent, "answer_remote_description");
+      await phantomFlushInboundRtcIce(key, pipe, ent, "answer_remote_description");
       emitSnapshot(pipe + "_rtc_answer_applied");
     } catch (e) {
       concierge.lastErr =
@@ -11120,44 +11128,44 @@ export function createExtractedEngine(host) {
         ent.chatState === "waiting_carrier_stable" &&
         (getState(key) === VEIL.INSIDE || getState(key) === VEIL.ESTABLISHED)
       ) {
-        six7RequestChatPipe(key, "chat_carrier_stable_after_accept");
+        phantomRequestChatPipe(key, "chat_carrier_stable_after_accept");
       }
       return;
     }
 
     const sysState = String(ent.sysdc?.readyState || "");
-    const edgeAttempt = six7SysEdgeAttempt(key, false);
+    const edgeAttempt = phantomSysEdgeAttempt(key, false);
     if (edgeAttempt) {
       edgeAttempt.state = sysState === "open" ? "open" : "connecting";
       edgeAttempt.lastEvent = "answer_applied";
       edgeAttempt.faultReason = "none";
     }
 
-    if (!six7OwnsPrimarySysState(key)) {
+    if (!phantomOwnsPrimarySysState(key)) {
       emitSnapshot("sys_peer_tether_answer_applied");
       return;
     }
 
     if (!sysState || sysState === "closed") {
       concierge.sysLastErr = "sys_answer_applied_pipe_missing";
-      six7RefreshSysReadiness("sys_answer_applied_pipe_missing");
+      phantomRefreshSysReadiness("sys_answer_applied_pipe_missing");
     } else if (sysState === "connecting") {
       concierge.sysPeer = key;
       concierge.sysPipeState = "connecting";
-      six7RefreshSysReadiness("sys_answer_applied_connecting");
+      phantomRefreshSysReadiness("sys_answer_applied_connecting");
     } else if (sysState === "open") {
       concierge.sysPeer = key;
       concierge.sysPipeState = "open";
-      six7RefreshOpenSysPeer("sys_answer_applied_open");
+      phantomRefreshOpenSysPeer("sys_answer_applied_open");
     }
   }
 
-  async function six7ApplyRtcIce(fromHKey, cand, meta = {}) {
-    const key = six7ShortKey(fromHKey);
+  async function phantomApplyRtcIce(fromHKey, cand, meta = {}) {
+    const key = phantomShortKey(fromHKey);
     if (!key) return;
 
-    const pipe = six7RtcPipeFromMeta(meta);
-    const ent = pipe === "sys" ? six7SysPeers.get(key) : six7ChatPeers.get(key);
+    const pipe = phantomRtcPipeFromMeta(meta);
+    const ent = pipe === "sys" ? phantomSysPeers.get(key) : phantomChatPeers.get(key);
     if (!ent?.pc) return;
 
     if (pipe === "chat") {
@@ -11189,7 +11197,7 @@ export function createExtractedEngine(host) {
       }
 
       if (ent.temporary === true) {
-        const transaction = six7TemporarySysTransactions.get(key);
+        const transaction = phantomTemporarySysTransactions.get(key);
         if (
           meta?.sysTemporary !== true ||
           !transaction ||
@@ -11208,10 +11216,10 @@ export function createExtractedEngine(host) {
     if (!ent.pc.remoteDescription) {
       ent.pendingRemoteIce.push(cand);
 
-      if (ent.pendingRemoteIce.length > SIX7_RTC_ICE_QUEUE_MAX) {
+      if (ent.pendingRemoteIce.length > PHANTOM_RTC_ICE_QUEUE_MAX) {
         ent.pendingRemoteIce.splice(
           0,
-          ent.pendingRemoteIce.length - SIX7_RTC_ICE_QUEUE_MAX,
+          ent.pendingRemoteIce.length - PHANTOM_RTC_ICE_QUEUE_MAX,
         );
       }
 
@@ -11232,7 +11240,7 @@ export function createExtractedEngine(host) {
   }
 
   function post(type, payload) {
-    try { six7CountEvent("post:" + String(type || "unknown")); } catch {}
+    try { phantomCountEvent("post:" + String(type || "unknown")); } catch {}
     host.emit(type, payload);
   }
   function postLocal(type, payload) { host.emit(type, payload); }
@@ -11242,16 +11250,16 @@ export function createExtractedEngine(host) {
     return {
       t: now(),
       reason: reason || null,
-      eventCounts: six7EventCountRows(20),
+      eventCounts: phantomEventCountRows(20),
 
-      chatPairs: Array.from(six7ChatPeers.entries())
+      chatPairs: Array.from(phantomChatPeers.entries())
         .map(([hKey, ent]) => ({
-          hKey: six7ShortKey(hKey),
+          hKey: phantomShortKey(hKey),
           handle: String(
-            six7PresenceBook.get(six7ShortKey(hKey))?.handle || "",
+            phantomPresenceBook.get(phantomShortKey(hKey))?.handle || "",
           ),
-          relationship: getState(six7ShortKey(hKey)),
-          offerOwner: six7OwnsChatPipeOffer(six7ShortKey(hKey)),
+          relationship: getState(phantomShortKey(hKey)),
+          offerOwner: phantomOwnsChatPipeOffer(phantomShortKey(hKey)),
 
           pcState: String(ent?.pc?.connectionState || "missing"),
           iceState: String(ent?.pc?.iceConnectionState || "missing"),
@@ -11265,19 +11273,14 @@ export function createExtractedEngine(host) {
           chatReadyAt: Number(ent?.chatReadyAt || 0),
           chatFault: String(ent?.chatFault || "none"),
 
-          reconnecting: reconnectingPeers.has(six7ShortKey(hKey)),
-          pendingDm: Number(six7PendingDm.get(six7ShortKey(hKey))?.length || 0),
+          reconnecting: reconnectingPeers.has(phantomShortKey(hKey)),
+          pendingDm: Number(phantomPendingDm.get(phantomShortKey(hKey))?.length || 0),
         }))
         .filter((row) => row.hKey),
 
       enabled: !!enabled,
       self: { handle: selfHandle, hex: selfHex, hKey: selfHKey },
-      ctx: {
-        parentHref: ctx?.parentHref || null,
-        iframeHref: ctx?.iframeHref || null,
-        pathname: ctx?.pathname || null,
-        search: ctx?.search || null,
-      },
+      ctx: { roomId: ctx?.roomId || null },
       videoId: videoId || null,
       origin: origin || null,
       tofu: {
@@ -11330,20 +11333,20 @@ export function createExtractedEngine(host) {
       },
 
       rosterAudit: {
-        source: six7RosterAudit.source || "none",
-        count: Number(six7RosterAudit.count || 0),
-        added: six7RosterAudit.added || "none",
-        removed: six7RosterAudit.removed || "none",
-        pruneReason: six7RosterAudit.pruneReason || "none",
-        at: Number(six7RosterAudit.at || 0),
+        source: phantomRosterAudit.source || "none",
+        count: Number(phantomRosterAudit.count || 0),
+        added: phantomRosterAudit.added || "none",
+        removed: phantomRosterAudit.removed || "none",
+        pruneReason: phantomRosterAudit.pruneReason || "none",
+        at: Number(phantomRosterAudit.at || 0),
       },
 
-      temporarySys: Array.from(six7TemporarySysTransactions.values()).map(
+      temporarySys: Array.from(phantomTemporarySysTransactions.values()).map(
         (rec) => ({
           id: String(rec?.id || ""),
           purpose: String(rec?.purpose || "none"),
-          peer: six7ShortKey(rec?.peer),
-          initiator: six7ShortKey(rec?.initiator),
+          peer: phantomShortKey(rec?.peer),
+          initiator: phantomShortKey(rec?.initiator),
           state: String(rec?.state || "unknown"),
           inbound: rec?.inbound === true,
           createdAt: Number(rec?.createdAt || 0),
@@ -11354,20 +11357,20 @@ export function createExtractedEngine(host) {
       ),
 
       gossipRecovery: {
-        source: six7ShortKey(six7GossipRecovery.source) || null,
-        targets: Array.isArray(six7GossipRecovery.targets)
-          ? six7GossipRecovery.targets.map(six7ShortKey).filter(Boolean)
+        source: phantomShortKey(phantomGossipRecovery.source) || null,
+        targets: Array.isArray(phantomGossipRecovery.targets)
+          ? phantomGossipRecovery.targets.map(phantomShortKey).filter(Boolean)
           : [],
-        index: Number(six7GossipRecovery.index || 0),
-        epoch: Number(six7GossipRecovery.epoch || 0),
-        rosterSeq: Number(six7GossipRecovery.rosterSeq || 0),
-        at: Number(six7GossipRecovery.at || 0),
-        state: String(six7GossipRecovery.state || "idle"),
-        successor: six7ShortKey(six7GossipRecovery.successor) || null,
-        exhaustedAt: Number(six7GossipRecovery.exhaustedAt || 0),
-        kind: String(six7GossipRecovery.kind || 'gossip'),
-        retryCount: Number(six7GossipRecovery.retryCount || 0),
-        nextRetryAt: Number(six7GossipRecovery.nextRetryAt || 0),
+        index: Number(phantomGossipRecovery.index || 0),
+        epoch: Number(phantomGossipRecovery.epoch || 0),
+        rosterSeq: Number(phantomGossipRecovery.rosterSeq || 0),
+        at: Number(phantomGossipRecovery.at || 0),
+        state: String(phantomGossipRecovery.state || "idle"),
+        successor: phantomShortKey(phantomGossipRecovery.successor) || null,
+        exhaustedAt: Number(phantomGossipRecovery.exhaustedAt || 0),
+        kind: String(phantomGossipRecovery.kind || 'gossip'),
+        retryCount: Number(phantomGossipRecovery.retryCount || 0),
+        nextRetryAt: Number(phantomGossipRecovery.nextRetryAt || 0),
       },
 
       concierge: {
@@ -11465,24 +11468,24 @@ export function createExtractedEngine(host) {
         sysLastRxAt: concierge.sysLastRxAt,
         sysLastRxType: concierge.sysLastRxType,
         sysLastErr:
-          [concierge.sysLastErr, six7MembershipAuditText()]
+          [concierge.sysLastErr, phantomMembershipAuditText()]
             .filter(Boolean)
             .join(" | ") || null,
         membershipAudit: {
-          at: Number(six7MembershipAudit.at || 0),
-          stage: six7MembershipAudit.stage || "idle",
-          peer: six7MembershipAudit.peer || null,
-          id: six7MembershipAudit.id || "none",
-          detail: six7MembershipAudit.detail || "none",
-          topology: six7MembershipAuditTopology(),
-          trace: six7MembershipAuditTrace.slice(-10).map((row) => ({
+          at: Number(phantomMembershipAudit.at || 0),
+          stage: phantomMembershipAudit.stage || "idle",
+          peer: phantomMembershipAudit.peer || null,
+          id: phantomMembershipAudit.id || "none",
+          detail: phantomMembershipAudit.detail || "none",
+          topology: phantomMembershipAuditTopology(),
+          trace: phantomMembershipAuditTrace.slice(-10).map((row) => ({
             at: Number(row.at || 0),
             stage: String(row.stage || "unknown"),
             peer: row.peer || null,
             id: String(row.id || "none"),
             detail: String(row.detail || "none"),
           })),
-          chatSignalTrace: six7ChatSignalTrace
+          chatSignalTrace: phantomChatSignalTrace
             .slice(-12)
             .map((row) => ({ ...row })),
         },
@@ -11509,36 +11512,36 @@ export function createExtractedEngine(host) {
     };
   }
 
-  const six7EventCounts = new Map();
-  const SIX7_EVENT_COUNTS_MAX = 80;
+  const phantomEventCounts = new Map();
+  const PHANTOM_EVENT_COUNTS_MAX = 80;
 
-  function six7CountEvent(name) {
+  function phantomCountEvent(name) {
     const key = String(name || "unknown").slice(0, 80);
     if (!key) return;
 
-    const old = six7EventCounts.get(key) || { count: 0, at: 0 };
+    const old = phantomEventCounts.get(key) || { count: 0, at: 0 };
 
-    six7EventCounts.set(key, {
+    phantomEventCounts.set(key, {
       count: Number(old.count || 0) + 1,
       at: now(),
     });
 
-    if (six7EventCounts.size > SIX7_EVENT_COUNTS_MAX) {
-      const rows = Array.from(six7EventCounts.entries()).sort(
+    if (phantomEventCounts.size > PHANTOM_EVENT_COUNTS_MAX) {
+      const rows = Array.from(phantomEventCounts.entries()).sort(
         (a, b) => Number(a[1]?.at || 0) - Number(b[1]?.at || 0),
       );
 
       while (
-        six7EventCounts.size > Math.floor(SIX7_EVENT_COUNTS_MAX * 0.75) &&
+        phantomEventCounts.size > Math.floor(PHANTOM_EVENT_COUNTS_MAX * 0.75) &&
         rows.length
       ) {
-        six7EventCounts.delete(rows.shift()[0]);
+        phantomEventCounts.delete(rows.shift()[0]);
       }
     }
   }
 
-  function six7EventCountRows(limit = 20) {
-    return Array.from(six7EventCounts.entries())
+  function phantomEventCountRows(limit = 20) {
+    return Array.from(phantomEventCounts.entries())
       .sort((a, b) => Number(b[1]?.count || 0) - Number(a[1]?.count || 0))
       .slice(0, limit)
       .map(([name, rec]) => ({
@@ -11548,10 +11551,10 @@ export function createExtractedEngine(host) {
       }));
   }
 
-  let six7LastSnapshotSig = "";
-  let six7LastSnapshotReason = "none";
+  let phantomLastSnapshotSig = "";
+  let phantomLastSnapshotReason = "none";
 
-  function six7SnapshotSignature() {
+  function phantomSnapshotSignature() {
     const rosterCount = lastRoster instanceof Set ? lastRoster.size : 0;
 
     return [
@@ -11582,37 +11585,37 @@ export function createExtractedEngine(host) {
 
       String(concierge.lastErr || "none"),
       String(concierge.sysLastErr || "none"),
-      String(six7MembershipAudit.stage || "idle"),
-      String(six7MembershipAudit.peer || "none"),
-      String(six7MembershipAudit.id || "none"),
-      String(six7MembershipAudit.detail || "none"),
+      String(phantomMembershipAudit.stage || "idle"),
+      String(phantomMembershipAudit.peer || "none"),
+      String(phantomMembershipAudit.id || "none"),
+      String(phantomMembershipAudit.detail || "none"),
     ].join("|");
   }
 
   function emitSnapshot(reason) {
     try {
       const why = String(reason || "snapshot");
-      six7CountEvent("snapshot:" + why);
+      phantomCountEvent("snapshot:" + why);
 
-      const sig = six7SnapshotSignature();
+      const sig = phantomSnapshotSignature();
 
-      if (sig === six7LastSnapshotSig && why === six7LastSnapshotReason) {
+      if (sig === phantomLastSnapshotSig && why === phantomLastSnapshotReason) {
         return;
       }
 
       if (
-        sig === six7LastSnapshotSig &&
+        sig === phantomLastSnapshotSig &&
         (why.includes("rtc_ice") ||
           why.includes("ice_candidate") ||
           why.includes("sysdc_rx_SYS_CONTROL_ACK") ||
           why.includes("sysdc_rx_SYS_STATUS_ACK"))
       ) {
-        six7LastSnapshotReason = why;
+        phantomLastSnapshotReason = why;
         return;
       }
 
-      six7LastSnapshotSig = sig;
-      six7LastSnapshotReason = why;
+      phantomLastSnapshotSig = sig;
+      phantomLastSnapshotReason = why;
 
       post("SNAPSHOT", snapshot(why));
     } catch {}
@@ -11703,8 +11706,7 @@ export function createExtractedEngine(host) {
       let h = localStorage.getItem(TOFU_HKEY_KEY);
       const t = localStorage.getItem(TOFU_FIRST_KEY);
 
-      // Legacy migration: old builds stored full 64-hex here.
-      // If it matches our current selfHex, migrate to short hKey (16) once.
+      // Normalize a pinned full public identity to its short transport ID.
       if (h && h.length === 64 && selfHex && selfHKey && h === selfHex) {
         try {
           localStorage.setItem(TOFU_HKEY_KEY, selfHKey);
@@ -11818,7 +11820,7 @@ export function createExtractedEngine(host) {
 
   function wsAdvanceDoorwayRecovery(attemptId, failure = {}) {
     const recoveryLegal =
-      !six7SessionKilling && enabled && !!selfHKey && !!videoId;
+      !phantomSessionKilling && enabled && !!selfHKey && !!videoId;
 
     if (!recoveryLegal) return false;
 
@@ -11909,7 +11911,7 @@ export function createExtractedEngine(host) {
           typeof failure.localCloseCode === "number"
             ? failure.localCloseCode
             : 4000,
-          String(failure.localCloseReason || "six7_doorway_failure"),
+          String(failure.localCloseReason || "phantom_doorway_failure"),
         );
       } catch {}
     }
@@ -11964,8 +11966,8 @@ export function createExtractedEngine(host) {
     const closeCode = connectPhase ? 4001 : 4002;
     const closeClass = connectPhase ? "connect_deadline" : "ready_deadline";
     const closeDetail = connectPhase
-      ? "six7_connect_deadline"
-      : "six7_ready_deadline";
+      ? "phantom_connect_deadline"
+      : "phantom_ready_deadline";
 
     return wsFailOwnedDoorwayAttempt(sock, attemptId, {
       state: "failed",
@@ -11984,7 +11986,7 @@ export function createExtractedEngine(host) {
   function wsArmDoorwayDeadline(sock, attemptId, phase) {
     const p = String(phase || "connect");
     const deadlineMs =
-      p === "ready" ? SIX7_WS_READY_DEADLINE_MS : SIX7_WS_CONNECT_DEADLINE_MS;
+      p === "ready" ? PHANTOM_WS_READY_DEADLINE_MS : PHANTOM_WS_CONNECT_DEADLINE_MS;
 
     wsClearConnectWatchdog();
 
@@ -11999,7 +12001,7 @@ export function createExtractedEngine(host) {
       }
 
       wsObserveDoorwayDeadline("watchdog_tick");
-    }, SIX7_WS_WATCH_TICK_MS);
+    }, PHANTOM_WS_WATCH_TICK_MS);
   }
 
   function wsClose(reason) {
@@ -12029,7 +12031,7 @@ export function createExtractedEngine(host) {
   }
 
   function wsOpenBootstrap(url) {
-    if (six7SessionKilling) return;
+    if (phantomSessionKilling) return;
 
     if (ws && ws.readyState === WebSocket.OPEN) return;
 
@@ -12122,7 +12124,7 @@ export function createExtractedEngine(host) {
         videoId,
         from: selfHKey,
         handle: selfHandle,
-        bootId: six7BootId,
+        bootId: phantomBootId,
         t: now(),
       };
 
@@ -12130,7 +12132,7 @@ export function createExtractedEngine(host) {
       bootstrap.lastSendAt = now();
       bootstrap.lastSendOk = false;
 
-      const ok = six7SendControl(connectMsg, "concierge_connect");
+      const ok = phantomSendControl(connectMsg, "concierge_connect");
       bootstrap.lastSendOk = !!ok;
 
       if (!ok) {
@@ -12139,7 +12141,7 @@ export function createExtractedEngine(host) {
         return;
       }
 
-      post("brainReady", {
+      post("NETWORK_READY", {
         booted: true,
         handle: selfHandle,
         selfHKey,
@@ -12173,7 +12175,7 @@ export function createExtractedEngine(host) {
         : null;
 
       if (msg && msg.type) {
-        six7MarkControlRx(msg.type);
+        phantomMarkControlRx(msg.type);
 
         let cfBucket = "";
 
@@ -12218,14 +12220,14 @@ export function createExtractedEngine(host) {
         }
       }
 
-      if (msg && six7IsRtcSignalType(msg.type)) {
+      if (msg && phantomIsRtcSignalType(msg.type)) {
         concierge.lastRtcRxAt = now();
         concierge.lastRtcRxType = String(msg.type || "unknown");
         concierge.lastRtcRxVia = "bootstrap_ws";
       }
 
       if (msg && msg.type === "status_request") {
-        six7SendControl(
+        phantomSendControl(
           {
             type: "status_response",
             t: now(),
@@ -12250,14 +12252,14 @@ export function createExtractedEngine(host) {
           wsSetDoorwayState("joined", msg.type);
         }
 
-        const acceptedDoorwayRoster = six7ApplyConciergeRoute(msg, msg.type);
+        const acceptedDoorwayRoster = phantomApplyConciergeRoute(msg, msg.type);
 
         const provedDoorwayRoster = !!(
           Array.isArray(msg.list) &&
           msg.list.some((row) => {
-            const key = six7ShortKey(typeof row === "string" ? row : row?.hKey);
+            const key = phantomShortKey(typeof row === "string" ? row : row?.hKey);
 
-            return key && key === six7ShortKey(selfHKey);
+            return key && key === phantomShortKey(selfHKey);
           })
         );
 
@@ -12334,22 +12336,22 @@ export function createExtractedEngine(host) {
           msg.list
             .map((p) => (typeof p === "string" ? p : p?.hKey))
             .filter(Boolean)
-            .map((k) => six7ShortKey(k)),
+            .map((k) => phantomShortKey(k)),
         );
 
-        const sysAuthority = six7LocalCommittedAuthority();
+        const sysAuthority = phantomLocalCommittedAuthority();
         const sysOwnsRoster = !!(concierge.sysReady || sysAuthority);
 
         if (!sysOwnsRoster) {
           for (const oldKey of Array.from(lastRoster || [])) {
-            const gone = six7ShortKey(oldKey);
-            if (!gone || gone === six7ShortKey(selfHKey)) continue;
+            const gone = phantomShortKey(oldKey);
+            if (!gone || gone === phantomShortKey(selfHKey)) continue;
             if (nextRosterKeys.has(gone)) continue;
 
             emitSnapshot("bootstrap_roster_peer_temporarily_absent");
           }
 
-          lastRoster = six7MarkRosterAudit(
+          lastRoster = phantomMarkRosterAudit(
             "bootstrap_roster",
             Array.from(nextRosterKeys),
             "bootstrap_roster_replace",
@@ -12364,7 +12366,7 @@ export function createExtractedEngine(host) {
               ? { hKey: p, from: p, videoId: msg.videoId || videoId || null }
               : p;
 
-          six7RememberPresencePeer(row, "bootstrap_roster", {
+          phantomRememberPresencePeer(row, "bootstrap_roster", {
             peerEvent: false,
             rosterEvent: false,
           });
@@ -12373,7 +12375,7 @@ export function createExtractedEngine(host) {
         dialReady = true;
 
         if (sysOwnsRoster) {
-          six7EmitPresenceRoster("bootstrap_roster_observed_sys_owns_roster");
+          phantomEmitPresenceRoster("bootstrap_roster_observed_sys_owns_roster");
         } else {
           post("PRESENCE_ROSTER", {
             videoId: msg.videoId || videoId || null,
@@ -12381,23 +12383,23 @@ export function createExtractedEngine(host) {
           });
         }
 
-        six7RefreshSysReadiness("roster_rx");
-        six7RefreshSysCandidates(msg.list, "roster_rx");
-        six7ReconcileRelationshipStatus("relationship_status_roster_rx");
+        phantomRefreshSysReadiness("roster_rx");
+        phantomRefreshSysCandidates(msg.list, "roster_rx");
+        phantomReconcileRelationshipStatus("relationship_status_roster_rx");
 
         if (!concierge.sysReady) {
           if (
             concierge.localRoleCandidate === "syscon1" ||
             concierge.localRoleCandidate === "syscon2"
           ) {
-            six7ScheduleSysPreflight("roster_rx");
+            phantomScheduleSysPreflight("roster_rx");
           }
 
           if (
             concierge.localRoleCandidate === "peer" ||
-            !six7CommittedMember(selfHKey)
+            !phantomCommittedMember(selfHKey)
           ) {
-            six7ScheduleSysAdmission("roster_rx");
+            phantomScheduleSysAdmission("roster_rx");
           }
         }
 
@@ -12413,18 +12415,18 @@ export function createExtractedEngine(host) {
       }
 
       if (msg && msg.type === "rtc_undeliverable") {
-        const target = six7ShortKey(msg.target);
-        const attemptTarget = six7ShortKey(concierge.sysAttempt?.target);
+        const target = phantomShortKey(msg.target);
+        const attemptTarget = phantomShortKey(concierge.sysAttempt?.target);
         const role = String(concierge.localRoleCandidate || "peer");
 
-        if (target && six7SysReplacementTerminal(target)) {
-          six7TeardownSysPeer(
+        if (target && phantomSysReplacementTerminal(target)) {
+          phantomTeardownSysPeer(
             target,
             "rtc_undeliverable_terminal_exit_pending",
           );
-          six7SysDialing.delete(target);
-          six7SysPreflightUnstableRetries.delete(target);
-          six7PendingRtcIce.delete(target);
+          phantomSysDialing.delete(target);
+          phantomSysPreflightUnstableRetries.delete(target);
+          phantomPendingRtcIce.delete(target);
           emitSnapshot("rtc_undeliverable_held_terminal_exit_pending");
           return;
         }
@@ -12433,9 +12435,9 @@ export function createExtractedEngine(host) {
           target &&
           msg.signalType === "rtc_offer" &&
           msg.sysCarrier === true &&
-          six7TemporarySysTransactions.has(target)
+          phantomTemporarySysTransactions.has(target)
         ) {
-          six7CloseTemporarySysTransaction(target, "rtc_undeliverable");
+          phantomCloseTemporarySysTransaction(target, "rtc_undeliverable");
           emitSnapshot("temporary_sys_rtc_undeliverable");
           return;
         }
@@ -12445,7 +12447,7 @@ export function createExtractedEngine(host) {
           msg.sysCarrier === true &&
           role === "syscon1" &&
           target &&
-          target === six7ShortKey(concierge.syscon2) &&
+          target === phantomShortKey(concierge.syscon2) &&
           target === attemptTarget &&
           Number(concierge.sysAttempt?.recoveryCount || 0) === 1
         );
@@ -12455,7 +12457,7 @@ export function createExtractedEngine(host) {
           return;
         }
 
-        const ent = six7SysPeers.get(target);
+        const ent = phantomSysPeers.get(target);
 
         if (ent) {
           const failedDc = ent.sysdc || null;
@@ -12466,7 +12468,7 @@ export function createExtractedEngine(host) {
           ent.ownerAttemptId = null;
           ent.sysCarrier = false;
 
-          six7SysPeers.delete(target);
+          phantomSysPeers.delete(target);
 
           try {
             failedDc?.close();
@@ -12477,11 +12479,11 @@ export function createExtractedEngine(host) {
           } catch {}
         }
 
-        six7SysDialing.delete(target);
-        six7SysPreflightUnstableRetries.delete(target);
+        phantomSysDialing.delete(target);
+        phantomSysPreflightUnstableRetries.delete(target);
 
-        if (!six7CompleteFailedSysReplacement(target, "rtc_undeliverable")) {
-          six7HandleTransportLoss(target, "sys_transport_undeliverable");
+        if (!phantomCompleteFailedSysReplacement(target, "rtc_undeliverable")) {
+          phantomHandleTransportLoss(target, "sys_transport_undeliverable");
         }
         return;
       }
@@ -12495,14 +12497,14 @@ export function createExtractedEngine(host) {
         const pipe =
           msg?.pipe === "sys" || msg?.sysCarrier === true ? "sys" : "chat";
         if (pipe === "chat") {
-          const from = six7ShortKey(msg.from);
-          const relationship = six7RelationshipGet(from);
+          const from = phantomShortKey(msg.from);
+          const relationship = phantomRelationshipGet(from);
           const incomingCycle = String(msg.relationshipCycleId || "");
           if (
             !from ||
-            six7PendingTerminalExits.has(from) ||
-            __six7GoneNotified.has(from) ||
-            !six7RelationshipIsAccepted(relationship) ||
+            phantomPendingTerminalExits.has(from) ||
+            __phantomGoneNotified.has(from) ||
+            !phantomRelationshipIsAccepted(relationship) ||
             !incomingCycle ||
             incomingCycle !== String(relationship.cycleId || "")
           ) {
@@ -12553,8 +12555,8 @@ export function createExtractedEngine(host) {
       if (msg && msg.type === "rtc_ice") {
         if (!isDirectMsgForMe(msg)) return;
 
-        const from = six7ShortKey(msg.from);
-        const ent = from ? six7SysPeers.get(from) : null;
+        const from = phantomShortKey(msg.from);
+        const ent = from ? phantomSysPeers.get(from) : null;
         const sysState = String(ent?.sysdc?.readyState || "");
         const sysCarrier = !!(
           msg.sysCarrier === true || ent?.sysCarrier === true
@@ -12582,7 +12584,7 @@ export function createExtractedEngine(host) {
 
         emitSnapshot("rtc_ice_rx_" + iceVia);
 
-        if (!six7RememberRtcSignal(msg, iceVia)) {
+        if (!phantomRememberRtcSignal(msg, iceVia)) {
           rtcOnIce(msg.from, msg.cand, {
             pipe:
               msg?.pipe === "sys" || msg?.sysCarrier === true ? "sys" : "chat",
@@ -12600,14 +12602,14 @@ export function createExtractedEngine(host) {
         return;
       }
 
-      // Phase 4 unified relationship fallback path.
+      // Use the shared relationship fallback path.
       // Handles veil_invite / veil_accept / veil_deny / sys_block / sys_unblock / sys_unblock_ack.
-      if (six7HandleInboundRelationshipControl(msg, "bootstrap_ws")) {
+      if (phantomHandleInboundRelationshipControl(msg, "bootstrap_ws")) {
         return;
       }
 
       if (msg && msg.type === "presence" && msg.from) {
-        six7RememberPresencePeer(msg, "bootstrap_ws");
+        phantomRememberPresencePeer(msg, "bootstrap_ws");
         return;
       }
 
@@ -12625,13 +12627,13 @@ export function createExtractedEngine(host) {
         state: "failed",
         reason: "ws_error",
         closeCode: 4000,
-        closeDetail: "six7_ws_error",
+        closeDetail: "phantom_ws_error",
         closeClean: false,
         closeClass: "local_ws_error_close",
         lastErr: "ws_error",
         snapshot: "ws_error",
         localCloseCode: 4000,
-        localCloseReason: "six7_ws_error",
+        localCloseReason: "phantom_ws_error",
       });
     };
 
@@ -12646,14 +12648,14 @@ export function createExtractedEngine(host) {
 
       if (closeCode === 4000 && closeDetail === "doorway_replaced") {
         closeClass = "doorway_replaced";
-      } else if (closeCode === 4000 && closeDetail === "six7_ws_error") {
+      } else if (closeCode === 4000 && closeDetail === "phantom_ws_error") {
         closeClass = "local_ws_error_close";
       } else if (
         closeCode === 4001 &&
-        closeDetail === "six7_connect_deadline"
+        closeDetail === "phantom_connect_deadline"
       ) {
         closeClass = "connect_deadline";
-      } else if (closeCode === 4002 && closeDetail === "six7_ready_deadline") {
+      } else if (closeCode === 4002 && closeDetail === "phantom_ready_deadline") {
         closeClass = "ready_deadline";
       } else if (closeCode === 1000) {
         closeClass = closeClean ? "normal_clean_close" : "normal_unclean_close";
@@ -12718,16 +12720,16 @@ export function createExtractedEngine(host) {
     { passive: true },
   );
 
-  window.__six7_core_listener_ready = true;
+  window.__phantom_core_listener_ready = true;
   post("CORE_LISTENER_READY", { ts: now() });
 
-  let __six7ExitSent = false;
-  const __six7GoneNotified = new Set();
+  let __phantomExitSent = false;
+  const __phantomGoneNotified = new Set();
   // Membership exit has its own idempotence latch. The committed authority
   // consequence is the only owner allowed to project room-exit teardown.
-  const __six7MembershipExitApplied = new Map(); // hKey -> { bootId, epoch, at, reason }
+  const __phantomMembershipExitApplied = new Map(); // hKey -> { bootId, epoch, at, reason }
 
-  function six7NotifyPeerGone(hKey, sys = "ROOM_EXITED", at = Date.now()) {
+  function phantomNotifyPeerGone(hKey, sys = "ROOM_EXITED", at = Date.now()) {
     const key = String(hKey || "")
       .slice(0, 16)
       .toLowerCase();
@@ -12737,35 +12739,35 @@ export function createExtractedEngine(host) {
     const membershipExit = String(sys || "ROOM_EXITED") !== "CHAT_ENDED";
 
     if (membershipExit) {
-      if (__six7MembershipExitApplied.has(key)) return false;
-      const terminal = six7PendingTerminalExits.get(key) || null;
-      __six7MembershipExitApplied.set(key, {
+      if (__phantomMembershipExitApplied.has(key)) return false;
+      const terminal = phantomPendingTerminalExits.get(key) || null;
+      __phantomMembershipExitApplied.set(key, {
         bootId:
-          String(terminal?.bootId || six7RemoteBootIds.get(key) || "") || null,
+          String(terminal?.bootId || phantomRemoteBootIds.get(key) || "") || null,
         epoch: Number(
           terminal?.epoch ||
-            six7SysAuthority.epoch ||
+            phantomSysAuthority.epoch ||
             concierge.sysconEpoch ||
             0,
         ),
         at: Number(at || Date.now()),
         reason: String(sys || "ROOM_EXITED"),
       });
-      __six7GoneNotified.add(key);
+      __phantomGoneNotified.add(key);
     } else {
-      if (__six7GoneNotified.has(key)) return false;
-      __six7GoneNotified.add(key);
+      if (__phantomGoneNotified.has(key)) return false;
+      __phantomGoneNotified.add(key);
     }
 
     // Relationship/chat teardown may already have run. Committed membership
     // removal still owns one final, idempotent consequence projection.
-    six7RelationshipEnd(key, String(sys || "peer_gone"), at, true);
-    six7CancelReconnect(key);
-    const reconnectDeadline = six7ChatReconnectDeadlines.get(key);
+    phantomRelationshipEnd(key, String(sys || "peer_gone"), at, true);
+    phantomCancelReconnect(key);
+    const reconnectDeadline = phantomChatReconnectDeadlines.get(key);
     if (reconnectDeadline) clearTimeout(reconnectDeadline);
-    six7ChatReconnectDeadlines.delete(key);
+    phantomChatReconnectDeadlines.delete(key);
 
-    const ent = six7ChatPeers.get(key);
+    const ent = phantomChatPeers.get(key);
 
     try {
       ent?.dc?.close();
@@ -12780,13 +12782,13 @@ export function createExtractedEngine(host) {
     }
 
     loungeWaiters.delete(key);
-    six7PendingRelationship.delete(key);
-    six7PendingSysRelay.delete(key);
-    six7PendingDm.delete(key);
-    six7PendingIncomingFileOffers.delete(key);
+    phantomPendingRelationship.delete(key);
+    phantomPendingSysRelay.delete(key);
+    phantomPendingDm.delete(key);
+    phantomPendingIncomingFileOffers.delete(key);
     reconnectingPeers.delete(key);
 
-    six7RelationshipRevoked.add(key);
+    phantomRelationshipRevoked.add(key);
     setState(key, VEIL.OUTSIDE, true);
 
     const uiSys = sys === "CHAT_ENDED" ? "CHAT_ENDED" : "ROOM_EXITED";
@@ -12809,24 +12811,24 @@ export function createExtractedEngine(host) {
     try {
       rtcTeardown(key, membershipExit ? "room_exited" : "chat_ended");
       if (membershipExit) {
-        six7TeardownSysPeer(key, "sys_room_exited");
+        phantomTeardownSysPeer(key, "sys_room_exited");
       }
     } catch {}
 
     if (membershipExit) {
       try {
-        six7PresenceBook.delete(key);
-        six7PendingRelationship.delete(key);
-        six7PendingRtcIce.delete(key);
-        six7SysAdmissionLastSent.delete(key);
-        six7SysPreflightUnstableRetries.delete(key);
-        six7SysDialing.delete(key);
+        phantomPresenceBook.delete(key);
+        phantomPendingRelationship.delete(key);
+        phantomPendingRtcIce.delete(key);
+        phantomSysAdmissionLastSent.delete(key);
+        phantomSysPreflightUnstableRetries.delete(key);
+        phantomSysDialing.delete(key);
       } catch {}
 
       if (
-        six7ShortKey(concierge.sysPeer) === key ||
-        six7ShortKey(concierge.sysReadyPeer) === key ||
-        six7ShortKey(concierge.sysAttempt?.target) === key
+        phantomShortKey(concierge.sysPeer) === key ||
+        phantomShortKey(concierge.sysReadyPeer) === key ||
+        phantomShortKey(concierge.sysAttempt?.target) === key
       ) {
         concierge.sysPeer = null;
         concierge.sysPipeState = "missing";
@@ -12844,29 +12846,29 @@ export function createExtractedEngine(host) {
         }
       }
 
-      if (six7ShortKey(concierge.syscon1) === key) concierge.syscon1 = null;
-      if (six7ShortKey(concierge.syscon2) === key) concierge.syscon2 = null;
+      if (phantomShortKey(concierge.syscon1) === key) concierge.syscon1 = null;
+      if (phantomShortKey(concierge.syscon2) === key) concierge.syscon2 = null;
 
-      six7RefreshSysCandidates(
-        six7LatchedSysRosterList(),
+      phantomRefreshSysCandidates(
+        phantomLatchedSysRosterList(),
         "peer_gone_committed_projection",
       );
-      six7RefreshSysReadiness("peer_gone_dead_session");
-      six7EmitPresenceRoster("peer_gone_dead_session");
+      phantomRefreshSysReadiness("peer_gone_dead_session");
+      phantomEmitPresenceRoster("peer_gone_dead_session");
     }
 
     return true;
   }
 
-  function six7CancelPendingVeilInvites(reason = "leaving") {
+  function phantomCancelPendingVeilInvites(reason = "leaving") {
     try {
       for (const [hKey, relationship] of Array.from(
-        six7Relationships.entries(),
+        phantomRelationships.entries(),
       )) {
         const st = String(relationship?.state || VEIL.OUTSIDE);
         if (st !== VEIL.INVITE_SENT && st !== VEIL.INVITE_RECEIVED) continue;
 
-        six7SendControl(
+        phantomSendControl(
           {
             type: "veil_deny",
             from: selfHKey,
@@ -12885,15 +12887,15 @@ export function createExtractedEngine(host) {
     } catch {}
   }
 
-  function six7DeclinePendingIncomingFileOffers(
+  function phantomDeclinePendingIncomingFileOffers(
     reason = "session_kill",
     at = Date.now(),
   ) {
     try {
       for (const [to, offers] of Array.from(
-        six7PendingIncomingFileOffers.entries(),
+        phantomPendingIncomingFileOffers.entries(),
       )) {
-        const key = six7ShortKey(to);
+        const key = phantomShortKey(to);
         if (!key || !offers || !offers.size) continue;
 
         for (const file of Array.from(offers.values())) {
@@ -12914,14 +12916,14 @@ export function createExtractedEngine(host) {
           } catch {}
         }
 
-        six7PendingIncomingFileOffers.delete(key);
+        phantomPendingIncomingFileOffers.delete(key);
       }
     } catch {}
   }
 
-  function six7SurrenderRoomSession(txId = null) {
-    if (__six7ExitSent) {
-      post("SIX7_SESSION_SUSPENDED", {
+  function phantomSurrenderRoomSession(txId = null) {
+    if (__phantomExitSent) {
+      post("PHANTOM_SESSION_SUSPENDED", {
         txId,
         room: videoId || null,
         alreadySuspended: true,
@@ -12930,69 +12932,69 @@ export function createExtractedEngine(host) {
       return;
     }
 
-    __six7ExitSent = true;
-    six7SessionKilling = true;
+    __phantomExitSent = true;
+    phantomSessionKilling = true;
     enabled = false;
 
     const retiredRoom = videoId || null;
     const at = Date.now();
 
-    six7DeclinePendingIncomingFileOffers("session_suspend", at);
-    six7SendTerminalExitCommand("session_suspend");
+    phantomDeclinePendingIncomingFileOffers("session_suspend", at);
+    phantomSendTerminalExitCommand("session_suspend");
 
-    six7Relationships.clear();
-    six7RelationshipRevoked.clear();
-    six7PendingRelationship.clear();
-    six7PendingSysRelay.clear();
-    six7PendingDm.clear();
-    six7SeenControlCids.clear();
+    phantomRelationships.clear();
+    phantomRelationshipRevoked.clear();
+    phantomPendingRelationship.clear();
+    phantomPendingSysRelay.clear();
+    phantomPendingDm.clear();
+    phantomSeenControlCids.clear();
 
     rtcTeardownAll("session_suspend");
     wsClose("session_suspend");
 
-    six7RetireRoomAuthority("session_suspend");
+    phantomRetireRoomAuthority("session_suspend");
 
     bootOnce = false;
 
-    post("SIX7_SESSION_SUSPENDED", {
+    post("PHANTOM_SESSION_SUSPENDED", {
       txId,
       room: retiredRoom,
       at,
     });
   }
 
-  function six7SendRoomExitedAndTeardown(finalDeparture = true) {
-    if (__six7ExitSent) return;
-    __six7ExitSent = true;
+  function phantomSendRoomExitedAndTeardown(finalDeparture = true) {
+    if (__phantomExitSent) return;
+    __phantomExitSent = true;
 
-    six7SessionKilling = true;
+    phantomSessionKilling = true;
     enabled = false;
 
     const at = Date.now();
 
     const exitReason = finalDeparture ? "session_kill" : "document_detach";
 
-    six7CancelPendingVeilInvites(exitReason);
-    six7DeclinePendingIncomingFileOffers(exitReason, at);
+    phantomCancelPendingVeilInvites(exitReason);
+    phantomDeclinePendingIncomingFileOffers(exitReason, at);
     if (finalDeparture) {
-      six7SendTerminalExitCommand(exitReason);
+      phantomSendTerminalExitCommand(exitReason);
     } else {
-      six7SendDocumentDetachCommand(exitReason);
+      phantomSendDocumentDetachCommand(exitReason);
     }
 
-    six7Relationships.clear();
-    six7RelationshipRevoked.clear();
-    six7PendingRelationship.clear();
-    six7PendingSysRelay.clear();
-    six7PendingDm.clear();
-    six7PendingRtcIce.clear();
-    six7SeenControlCids.clear();
-    six7SeenRtcSignals.clear();
+    phantomRelationships.clear();
+    phantomRelationshipRevoked.clear();
+    phantomPendingRelationship.clear();
+    phantomPendingSysRelay.clear();
+    phantomPendingDm.clear();
+    phantomPendingRtcIce.clear();
+    phantomSeenControlCids.clear();
+    phantomSeenRtcSignals.clear();
 
     rtcTeardownAll(exitReason);
     wsClose(exitReason);
 
-    six7RetireRoomAuthority(exitReason);
+    phantomRetireRoomAuthority(exitReason);
 
     bootOnce = false;
 
@@ -13003,21 +13005,21 @@ export function createExtractedEngine(host) {
     emitSnapshot(finalDeparture ? "session_killed" : "session_detached");
   }
 
-  function six7RetireRoomAuthority(reason = "room_retired") {
+  function phantomRetireRoomAuthority(reason = "room_retired") {
     lastRoster = new Set();
-    six7PresenceBook.clear();
-    six7RemoteBootIds.clear();
-    six7RemoteEndpointIds.clear();
-    six7DoorwayAdmittedPeers.clear();
-    six7PendingTerminalExits.clear();
-    for (const rec of six7TemporarySysTransactions.values()) {
+    phantomPresenceBook.clear();
+    phantomRemoteBootIds.clear();
+    phantomRemoteEndpointIds.clear();
+    phantomDoorwayAdmittedPeers.clear();
+    phantomPendingTerminalExits.clear();
+    for (const rec of phantomTemporarySysTransactions.values()) {
       try {
         if (rec?.deadlineTimer) clearTimeout(rec.deadlineTimer);
       } catch {}
     }
-    six7TemporarySysTransactions.clear();
-    six7AuthorityGossipHints.clear();
-    six7GossipRecovery = {
+    phantomTemporarySysTransactions.clear();
+    phantomAuthorityGossipHints.clear();
+    phantomGossipRecovery = {
       source: null,
       targets: [],
       index: 0,
@@ -13025,19 +13027,19 @@ export function createExtractedEngine(host) {
       rosterSeq: 0,
       at: 0,
     };
-    for (const rec of six7SysReplacementWindows.values()) {
+    for (const rec of phantomSysReplacementWindows.values()) {
       try {
         clearTimeout(rec?.timer);
       } catch {}
     }
-    six7SysReplacementWindows.clear();
+    phantomSysReplacementWindows.clear();
     reconnectingPeers.clear();
-    __six7GoneNotified.clear();
-    __six7MembershipExitApplied.clear();
+    __phantomGoneNotified.clear();
+    __phantomMembershipExitApplied.clear();
 
-    concierge = JSON.parse(JSON.stringify(SIX7_EMPTY_CONCIERGE));
+    concierge = JSON.parse(JSON.stringify(PHANTOM_EMPTY_CONCIERGE));
 
-    Object.assign(six7SysAuthority, {
+    Object.assign(phantomSysAuthority, {
       at: 0,
       via: "none",
       from: null,
@@ -13049,14 +13051,14 @@ export function createExtractedEngine(host) {
       pending: null,
     });
 
-    Object.assign(six7PeerSysCarrier, {
+    Object.assign(phantomPeerSysCarrier, {
       epoch: 0,
       target: null,
       primaryRecoveryUsed: false,
       authorityRefreshPending: false,
     });
 
-    six7RosterAudit = {
+    phantomRosterAudit = {
       source: String(reason || "room_retired"),
       count: 0,
       added: "none",
@@ -13068,7 +13070,7 @@ export function createExtractedEngine(host) {
     videoId = null;
   }
 
-  function six7LifecycleCommandMatchesCurrentRoom(payload = {}) {
+  function phantomLifecycleCommandMatchesCurrentRoom(payload = {}) {
     const commandRoom = String(payload?.room || payload?.videoId || "").trim();
 
     const currentRoom = String(videoId || "").trim();
@@ -13082,7 +13084,7 @@ export function createExtractedEngine(host) {
   // ---- Inbound CORE_* ----
   window.addEventListener("message", (ev) => {
     const d = ev?.data;
-    if (!d || d.six7 !== 1) return;
+    if (!d || d.phantom !== 1) return;
 
     wsObserveDoorwayDeadline("core_message");
 
@@ -13092,18 +13094,18 @@ export function createExtractedEngine(host) {
       return;
     }
 
-    if (d.type === "SIX7_SESSION_SUSPEND") {
-      if (!six7LifecycleCommandMatchesCurrentRoom(d.payload)) {
+    if (d.type === "PHANTOM_SESSION_SUSPEND") {
+      if (!phantomLifecycleCommandMatchesCurrentRoom(d.payload)) {
         emitSnapshot("stale_room_session_suspend_ignored");
         return;
       }
 
-      six7SurrenderRoomSession(d.payload?.txId || null);
+      phantomSurrenderRoomSession(d.payload?.txId || null);
       return;
     }
 
-    if (d.type === "SIX7_SESSION_RESET") {
-      if (!six7LifecycleCommandMatchesCurrentRoom(d.payload)) {
+    if (d.type === "PHANTOM_SESSION_RESET") {
+      if (!phantomLifecycleCommandMatchesCurrentRoom(d.payload)) {
         emitSnapshot("stale_room_session_reset_ignored");
         return;
       }
@@ -13113,17 +13115,17 @@ export function createExtractedEngine(host) {
       wsClose("session_reset");
       rtcTeardownAll("session_reset");
 
-      six7Relationships.clear();
-      six7RelationshipRevoked.clear();
-      six7PendingRelationship.clear();
-      six7PendingSysRelay.clear();
-      six7PendingDm.clear();
+      phantomRelationships.clear();
+      phantomRelationshipRevoked.clear();
+      phantomPendingRelationship.clear();
+      phantomPendingSysRelay.clear();
+      phantomPendingDm.clear();
 
-      six7RetireRoomAuthority("session_reset");
+      phantomRetireRoomAuthority("session_reset");
 
       bootOnce = false;
-      __six7ExitSent = false;
-      six7SessionKilling = false;
+      __phantomExitSent = false;
+      phantomSessionKilling = false;
 
       wsDoorwayRecovering = false;
       wsDoorwayBirthFailures = 0;
@@ -13133,23 +13135,23 @@ export function createExtractedEngine(host) {
       return;
     }
 
-    if (d.type === "SIX7_SESSION_DETACH") {
-      if (!six7LifecycleCommandMatchesCurrentRoom(d.payload)) {
+    if (d.type === "PHANTOM_SESSION_DETACH") {
+      if (!phantomLifecycleCommandMatchesCurrentRoom(d.payload)) {
         emitSnapshot("stale_room_session_detach_ignored");
         return;
       }
 
-      six7SendRoomExitedAndTeardown(false);
+      phantomSendRoomExitedAndTeardown(false);
       return;
     }
 
-    if (d.type === "SIX7_SESSION_KILL") {
-      if (!six7LifecycleCommandMatchesCurrentRoom(d.payload)) {
+    if (d.type === "PHANTOM_SESSION_KILL") {
+      if (!phantomLifecycleCommandMatchesCurrentRoom(d.payload)) {
         emitSnapshot("stale_room_session_kill_ignored");
         return;
       }
 
-      six7SendRoomExitedAndTeardown(true);
+      phantomSendRoomExitedAndTeardown(true);
       return;
     }
 
@@ -13164,8 +13166,8 @@ export function createExtractedEngine(host) {
         return;
       }
 
-      for (const [hKey, ent] of six7ChatPeers.entries()) {
-        const key = six7ShortKey(hKey);
+      for (const [hKey, ent] of phantomChatPeers.entries()) {
+        const key = phantomShortKey(hKey);
         if (!key || !ent) continue;
 
         const chatReady =
@@ -13173,7 +13175,7 @@ export function createExtractedEngine(host) {
           ent.chatState === "ready" &&
           ent.chatProof === "chat_hello" &&
           ent.chatReadyAt > 0 &&
-          six7CanUseChat(key);
+          phantomCanUseChat(key);
 
         if (!chatReady) continue;
 
@@ -13188,11 +13190,11 @@ export function createExtractedEngine(host) {
       const to = String(d.payload?.hKey || "").slice(0, 16);
       if (!to) return;
       if (
-        !six7CommittedMember(to) ||
-        six7PendingTerminalExits.has(to) ||
-        __six7MembershipExitApplied.has(to) ||
-        six7IsBlocked(to) ||
-        six7IsBlockedBy(to)
+        !phantomCommittedMember(to) ||
+        phantomPendingTerminalExits.has(to) ||
+        __phantomMembershipExitApplied.has(to) ||
+        phantomIsBlocked(to) ||
+        phantomIsBlockedBy(to)
       ) {
         emitSnapshot("local_invite_blocked_nonmember_or_terminal");
         return;
@@ -13205,10 +13207,10 @@ export function createExtractedEngine(host) {
         return;
       }
 
-      six7RelationshipRevoked.delete(to);
-      __six7GoneNotified.delete(to);
+      phantomRelationshipRevoked.delete(to);
+      __phantomGoneNotified.delete(to);
 
-      const invite = six7PrepareRelationshipControl(
+      const invite = phantomPrepareRelationshipControl(
         {
           type: "veil_invite",
           from: selfHKey,
@@ -13218,14 +13220,14 @@ export function createExtractedEngine(host) {
         "veil_invite",
       );
 
-      const relationship = six7RelationshipBegin(to, VEIL.INVITE_SENT, {
+      const relationship = phantomRelationshipBegin(to, VEIL.INVITE_SENT, {
         cycleId: invite.cid,
         inviteCid: invite.cid,
         origin: "local_invite",
       });
       invite.cycleId = relationship.cycleId;
       setState(to, VEIL.INVITE_SENT, true);
-      six7SendControl(invite, "veil_invite");
+      phantomSendControl(invite, "veil_invite");
 
       return;
     }
@@ -13233,9 +13235,9 @@ export function createExtractedEngine(host) {
     if (d.type === "VEIL_ACCEPT") {
       const from = String(d.payload?.from || "").slice(0, 16);
       if (!from) return;
-      if (six7IsBlocked(from) || six7IsBlockedBy(from)) return;
+      if (phantomIsBlocked(from) || phantomIsBlockedBy(from)) return;
 
-      const relationship = six7RelationshipGet(from);
+      const relationship = phantomRelationshipGet(from);
       if (
         relationship.state !== VEIL.INVITE_RECEIVED ||
         relationship.endedAt ||
@@ -13243,15 +13245,15 @@ export function createExtractedEngine(host) {
       )
         return;
 
-      six7RelationshipRevoked.delete(from);
+      phantomRelationshipRevoked.delete(from);
       relationship.state = VEIL.INSIDE;
       relationship.updatedAt = now();
       relationship.endedAt = 0;
       relationship.endReason = "none";
-      six7Relationships.set(from, relationship);
+      phantomRelationships.set(from, relationship);
       setState(from, VEIL.INSIDE);
 
-      six7SendControl(
+      phantomSendControl(
         {
           type: "veil_accept",
           from: selfHKey,
@@ -13263,7 +13265,7 @@ export function createExtractedEngine(host) {
         "veil_accept",
       );
 
-      six7RequestChatPipe(from, "relationship_accept");
+      phantomRequestChatPipe(from, "relationship_accept");
       return;
     }
 
@@ -13271,16 +13273,16 @@ export function createExtractedEngine(host) {
       const h = String(d.payload?.hKey || "").slice(0, 16);
       if (!h) return;
 
-      const relationship = six7RelationshipGet(h);
+      const relationship = phantomRelationshipGet(h);
       if (getState(h) !== VEIL.INSIDE) {
-        six7RelationshipEnd(h, "local_deny", now(), false);
+        phantomRelationshipEnd(h, "local_deny", now(), false);
         setState(h, VEIL.OUTSIDE, true);
         try {
           rtcTeardown(h, "relationship_denied_local");
         } catch {}
       }
 
-      six7SendControl(
+      phantomSendControl(
         {
           type: "veil_deny",
           from: selfHKey,
@@ -13299,16 +13301,16 @@ export function createExtractedEngine(host) {
       const h = String(d.payload?.hKey || "").slice(0, 16);
       if (!h) return;
 
-      const relationship = six7RelationshipGet(h);
+      const relationship = phantomRelationshipGet(h);
       if (getState(h) !== VEIL.INSIDE) {
-        six7RelationshipEnd(h, "local_deny", now(), false);
+        phantomRelationshipEnd(h, "local_deny", now(), false);
         setState(h, VEIL.OUTSIDE, true);
         try {
           rtcTeardown(h, "relationship_denied_local");
         } catch {}
       }
 
-      six7SendControl(
+      phantomSendControl(
         {
           type: "veil_deny",
           from: selfHKey,
@@ -13326,7 +13328,7 @@ export function createExtractedEngine(host) {
     if (d.type === "TRY_DIAL") {
       const hKey = String(d.payload?.hKey || "").slice(0, 16);
       if (!hKey) return;
-      six7RequestChatPipe(hKey, "user_open_dm");
+      phantomRequestChatPipe(hKey, "user_open_dm");
       return;
     }
 
@@ -13346,7 +13348,7 @@ export function createExtractedEngine(host) {
 
       const blockSent =
         directBlockSent ||
-        six7SendControl(
+        phantomSendControl(
           {
             type: "sys_block",
             from: selfHKey,
@@ -13363,16 +13365,16 @@ export function createExtractedEngine(host) {
         emitSnapshot("relationship_block_notification_unroutable");
       }
 
-      six7BlockedPeers.add(to);
-      six7BlockedByPeers.delete(to);
-      six7RelationshipEnd(to, "blocked_local", now(), true);
+      phantomBlockedPeers.add(to);
+      phantomBlockedByPeers.delete(to);
+      phantomRelationshipEnd(to, "blocked_local", now(), true);
 
-      six7CancelReconnect(to);
+      phantomCancelReconnect(to);
       loungeWaiters.delete(to);
-      six7PendingRelationship.delete(to);
-      six7PendingDm.delete(to);
+      phantomPendingRelationship.delete(to);
+      phantomPendingDm.delete(to);
 
-      six7PendingRtcIce.delete(to);
+      phantomPendingRtcIce.delete(to);
 
       setState(to, VEIL.OUTSIDE, true);
       rtcTeardown(to, "blocked_local");
@@ -13384,20 +13386,20 @@ export function createExtractedEngine(host) {
       const to = String(d.payload?.to || "").slice(0, 16);
       if (!to) return;
 
-      six7BlockedPeers.delete(to);
-      six7BlockedByPeers.delete(to);
-      six7RelationshipRevoked.delete(to);
+      phantomBlockedPeers.delete(to);
+      phantomBlockedByPeers.delete(to);
+      phantomRelationshipRevoked.delete(to);
       if (
-        six7CommittedMember(to) &&
-        !six7PendingTerminalExits.has(to) &&
-        !__six7MembershipExitApplied.has(to)
+        phantomCommittedMember(to) &&
+        !phantomPendingTerminalExits.has(to) &&
+        !__phantomMembershipExitApplied.has(to)
       ) {
-        __six7GoneNotified.delete(to);
+        __phantomGoneNotified.delete(to);
       }
-      six7RelationshipEnd(to, "unblocked_local", now(), false);
+      phantomRelationshipEnd(to, "unblocked_local", now(), false);
       setState(to, VEIL.OUTSIDE, true);
 
-      six7SendControl(
+      phantomSendControl(
         {
           type: "sys_unblock",
           from: selfHKey,
@@ -13422,7 +13424,7 @@ export function createExtractedEngine(host) {
       postSysIntent(kind, to, { payload: d.payload || {} });
 
       if (kind === "UNBLOCK") {
-        six7SendControl(
+        phantomSendControl(
           {
             type: "sys_unblock",
             from: selfHKey,
@@ -13445,7 +13447,7 @@ export function createExtractedEngine(host) {
         const file = d.payload?.file || null;
         const bytes = d.payload?.bytes || null;
 
-        if (!six7CanUseChat(to)) {
+        if (!phantomCanUseChat(to)) {
           postLocal("FILE_BIN_CHUNK_SENT", {
             ok: false,
             to,
@@ -13455,7 +13457,7 @@ export function createExtractedEngine(host) {
           return;
         }
 
-        if (!to || !file?.id || !six7IsArrayBuffer(bytes)) {
+        if (!to || !file?.id || !phantomIsArrayBuffer(bytes)) {
           postLocal("FILE_BIN_CHUNK_SENT", {
             ok: false,
             to,
@@ -13465,9 +13467,9 @@ export function createExtractedEngine(host) {
           return;
         }
 
-        const channel = six7ChatPeers.get(six7ShortKey(to))?.dc;
+        const channel = phantomChatPeers.get(phantomShortKey(to))?.dc;
         const drained = await rtcWaitDCDrain(channel);
-        if (!drained || channel !== six7ChatPeers.get(six7ShortKey(to))?.dc || !six7CanUseChat(to) || host.canSendFile?.(file) === false) {
+        if (!drained || channel !== phantomChatPeers.get(phantomShortKey(to))?.dc || !phantomCanUseChat(to) || host.canSendFile?.(file) === false) {
           postLocal('FILE_BIN_CHUNK_SENT', {ok:false,to,file,error:'File channel unavailable'});
           return;
         }
@@ -13506,24 +13508,24 @@ export function createExtractedEngine(host) {
     }
 
     if (d.type === "VEIL_TYPING") {
-      const to = six7ShortKey(d.payload?.to);
+      const to = phantomShortKey(d.payload?.to);
       const active = d.payload?.active === true;
 
       if (!to) return;
 
-      const relationship = six7RelationshipGet(to);
+      const relationship = phantomRelationshipGet(to);
 
       if (
-        six7IsBlocked(to) ||
-        six7IsBlockedBy(to) ||
-        !six7CommittedMember(to) ||
-        !six7RelationshipIsAccepted(relationship) ||
+        phantomIsBlocked(to) ||
+        phantomIsBlockedBy(to) ||
+        !phantomCommittedMember(to) ||
+        !phantomRelationshipIsAccepted(relationship) ||
         !relationship.cycleId
       ) {
         return;
       }
 
-      six7SendControl(
+      phantomSendControl(
         {
           type: "veil_typing",
           from: selfHKey,
@@ -13540,28 +13542,28 @@ export function createExtractedEngine(host) {
     }
 
     if (d.type === 'PHANTOM_DIST_RECOVER_SYS') {
-      const base = six7LocalCommittedAuthority();
-      const self = six7ShortKey(selfHKey);
-      const one = six7ShortKey(base?.syscon1);
-      const two = six7ShortKey(base?.syscon2);
+      const base = phantomLocalCommittedAuthority();
+      const self = phantomShortKey(selfHKey);
+      const one = phantomShortKey(base?.syscon1);
+      const two = phantomShortKey(base?.syscon2);
       // Use only the historical committed mirror, never an untrusted doorway
       // roster or distribution table. Existing SYS proof/admission rules apply.
       if (String(concierge.localRoleCandidate || 'peer') !== 'peer' || !base ||
-          !one || !two || two === self || one === self || six7HasOpenSysPipe(one) ||
-          !six7CommittedMember(self) || six7PendingTerminalExits.has(two)) return;
+          !one || !two || two === self || one === self || phantomHasOpenSysPipe(one) ||
+          !phantomCommittedMember(self) || phantomPendingTerminalExits.has(two)) return;
       let retryCount = 0;
-      if(six7GossipRecovery.targets.length){
+      if(phantomGossipRecovery.targets.length){
         // Leave active attempts and other gossip/election recovery untouched.
         // Retry only the same exhausted mirror route from this committed base.
-        const r=six7GossipRecovery;
+        const r=phantomGossipRecovery;
         if(r.kind!=='committed_mirror'||r.targets.length!==1||r.targets[0]!==two||
             r.index<r.targets.length||r.epoch!==Number(base.epoch)||
             r.rosterSeq!==Number(base.rosterSeq)||now()<Number(r.nextRetryAt||0))return;
         retryCount=Number(r.retryCount||0);
       }
-      six7GossipRecovery = {source:self, targets:[two], index:0,kind:'committed_mirror',retryCount,nextRetryAt:0,
+      phantomGossipRecovery = {source:self, targets:[two], index:0,kind:'committed_mirror',retryCount,nextRetryAt:0,
         epoch:Number(base.epoch), rosterSeq:Number(base.rosterSeq), at:now()};
-      six7ScheduleSysAdmission('distribution_restore_committed_mirror');
+      phantomScheduleSysAdmission('distribution_restore_committed_mirror');
       emitSnapshot('distribution_restore_committed_mirror');
       return;
     }
@@ -13571,9 +13573,9 @@ export function createExtractedEngine(host) {
     if (d.type === 'PHANTOM_DIST_SEND') {
       const packet = {t:'PHANTOM_DIST', frame:d.payload?.frame};
       if (JSON.stringify(packet).length > 32768) return;
-      const requested = d.payload?.to ? six7ShortKey(d.payload.to) : null;
-      for (const [key, ent] of six7SysPeers) {
-        if ((requested && key !== requested) || ent.sysdc?.readyState !== 'open' || six7TemporarySysTransactions.has(key)) continue;
+      const requested = d.payload?.to ? phantomShortKey(d.payload.to) : null;
+      for (const [key, ent] of phantomSysPeers) {
+        if ((requested && key !== requested) || ent.sysdc?.readyState !== 'open' || phantomTemporarySysTransactions.has(key)) continue;
         try { ent.sysdc.send(JSON.stringify(packet)); } catch {}
       }
       return;
@@ -13582,14 +13584,14 @@ export function createExtractedEngine(host) {
     if (d.type === 'PHANTOM_ADMIN_SEND') {
       const packet = {t:'PHANTOM_ADMIN', record:d.payload?.record};
       if (JSON.stringify(packet).length > 4096) return;
-      const requested = d.payload?.to ? six7ShortKey(d.payload.to) : null;
+      const requested = d.payload?.to ? phantomShortKey(d.payload.to) : null;
       const sent = new Set();
-      for (const [key, ent] of six7SysPeers) {
-        if ((requested && key !== requested) || ent.sysdc?.readyState !== 'open' || six7TemporarySysTransactions.has(key)) continue;
+      for (const [key, ent] of phantomSysPeers) {
+        if ((requested && key !== requested) || ent.sysdc?.readyState !== 'open' || phantomTemporarySysTransactions.has(key)) continue;
         try { ent.sysdc.send(JSON.stringify(packet)); sent.add(key); } catch {}
       }
-      for (const [key, ent] of six7ChatPeers) {
-        if ((requested && key !== requested) || sent.has(key) || !six7CanUseChat(key) || ent.dc?.readyState !== 'open') continue;
+      for (const [key, ent] of phantomChatPeers) {
+        if ((requested && key !== requested) || sent.has(key) || !phantomCanUseChat(key) || ent.dc?.readyState !== 'open') continue;
         try { ent.dc.send(JSON.stringify(packet)); sent.add(key); } catch {}
       }
       post('PHANTOM_ADMIN_SENT', {operationId:packet.record?.operationId, peers:[...sent]});
@@ -13608,25 +13610,25 @@ export function createExtractedEngine(host) {
         (sys === "FILE_ACCEPT" || sys === "FILE_DECLINE") &&
         d.payload?.file?.id
       ) {
-        const key = six7ShortKey(to);
-        const offers = key ? six7PendingIncomingFileOffers.get(key) : null;
+        const key = phantomShortKey(to);
+        const offers = key ? phantomPendingIncomingFileOffers.get(key) : null;
 
         if (offers) {
           offers.delete(String(d.payload.file.id));
-          if (!offers.size) six7PendingIncomingFileOffers.delete(key);
+          if (!offers.size) phantomPendingIncomingFileOffers.delete(key);
         }
       }
 
-      if (!six7IsSysMessage(sys) && !six7CanUseChat(to)) {
+      if (!phantomIsSysMessage(sys) && !phantomCanUseChat(to)) {
         CORE_DEBUG &&
-          console.log("[six7][CORE] SEND_DM blocked; chat not allowed →", to);
+          console.log("[phantom][CORE] SEND_DM blocked; chat not allowed →", to);
 
         concierge.lastErr = "dm_send_blocked_chat_not_allowed";
         emitSnapshot("dm_send_blocked_chat_not_allowed");
         return;
       }
 
-      const chatEnt = six7ChatPeers.get(to);
+      const chatEnt = phantomChatPeers.get(to);
       const chatDcState = String(chatEnt?.dc?.readyState || "missing");
 
       let ok = false;
@@ -13636,7 +13638,7 @@ export function createExtractedEngine(host) {
         chatEnt?.chatState === "ready" &&
         chatEnt?.chatProof === "chat_hello" &&
         chatEnt?.chatReadyAt > 0 &&
-        six7CanUseChat(to)
+        phantomCanUseChat(to)
       ) {
         ok = rtcSendDC(to, {
           t: "MSG",
@@ -13657,10 +13659,10 @@ export function createExtractedEngine(host) {
         );
 
         if (canRecoverChat) {
-          let q = six7PendingDm.get(to);
+          let q = phantomPendingDm.get(to);
           if (!q) {
             q = [];
-            six7PendingDm.set(to, q);
+            phantomPendingDm.set(to, q);
           }
 
           q.push({
@@ -13670,8 +13672,8 @@ export function createExtractedEngine(host) {
             at: Date.now(),
           });
 
-          if (q.length > SIX7_DM_PENDING_MAX) {
-            q.splice(0, q.length - SIX7_DM_PENDING_MAX);
+          if (q.length > PHANTOM_DM_PENDING_MAX) {
+            q.splice(0, q.length - PHANTOM_DM_PENDING_MAX);
           }
 
           concierge.lastErr = "dm_queued_waiting_for_chat_pipe:" + chatDcState;
@@ -13690,7 +13692,7 @@ export function createExtractedEngine(host) {
         }
       }
 
-      CORE_DEBUG && console.log("[six7][CORE] SEND_DM →", to, "ok=", ok);
+      CORE_DEBUG && console.log("[phantom][CORE] SEND_DM →", to, "ok=", ok);
       if (ok) {
         post("messageEcho", {
           to,
@@ -13701,8 +13703,8 @@ export function createExtractedEngine(host) {
         });
 
         if (sys === "CHAT_ENDED") {
-          __six7GoneNotified.add(to);
-          six7CancelReconnect(to);
+          __phantomGoneNotified.add(to);
+          phantomCancelReconnect(to);
           rtcTeardown(to);
         }
       }
@@ -13720,63 +13722,63 @@ export function createExtractedEngine(host) {
       if (previousRoom && nextRoom && previousRoom !== nextRoom) {
         // A room identity change retires the previous room through the existing
         // lifecycle owner before the reused core claims the new room.
-        six7SendRoomExitedAndTeardown(true);
+        phantomSendRoomExitedAndTeardown(true);
       }
 
       videoId = nextRoom || null;
 
       try {
         const saved = JSON.parse(
-          sessionStorage.getItem("six7_refresh_relationships_v1") || "null",
+          sessionStorage.getItem("phantom_refresh_relationships_v1") || "null",
         );
 
         const sameRoom =
           !!videoId && !!saved?.room && String(saved.room) === String(videoId);
 
         if (sameRoom && Array.isArray(saved?.peers)) {
-          six7PendingRefreshRelationships.clear();
-          six7PendingRefreshRoom = String(videoId || "");
+          phantomPendingRefreshRelationships.clear();
+          phantomPendingRefreshRoom = String(videoId || "");
 
           const savedRecords = new Map(
             (Array.isArray(saved.relationships) ? saved.relationships : [])
-              .map((row) => [six7ShortKey(row?.hKey), row])
+              .map((row) => [phantomShortKey(row?.hKey), row])
               .filter(([key]) => !!key),
           );
 
           for (const peer of saved.peers) {
-            const key = six7ShortKey(peer);
+            const key = phantomShortKey(peer);
             if (!key) continue;
 
             const row = savedRecords.get(key) || {};
             const cycleId = String(row.cycleId || "");
             if (!cycleId) continue;
 
-            const relationship = six7RelationshipGet(key);
+            const relationship = phantomRelationshipGet(key);
             relationship.state = VEIL.OUTSIDE;
             relationship.cycleId = cycleId;
             relationship.inviteCid = String(row.inviteCid || "") || null;
-            relationship.localBootId = six7BootId;
+            relationship.localBootId = phantomBootId;
             relationship.remoteBootId =
-              String(row.remoteBootId || six7RemoteBootIds.get(key) || "") ||
+              String(row.remoteBootId || phantomRemoteBootIds.get(key) || "") ||
               null;
             relationship.membershipEpoch = Number(row.membershipEpoch || 0);
             relationship.createdAt = now();
             relationship.updatedAt = now();
             relationship.endedAt = 0;
             relationship.endReason = "continuity_pending";
-            six7Relationships.set(key, relationship);
-            six7PendingRefreshRelationships.add(key);
+            phantomRelationships.set(key, relationship);
+            phantomPendingRefreshRelationships.add(key);
           }
 
           emitSnapshot("relationship_continuity_staged_for_authority");
         } else {
-          six7PendingRefreshRelationships.clear();
-          six7PendingRefreshRoom = "";
-          sessionStorage.removeItem("six7_refresh_relationships_v1");
+          phantomPendingRefreshRelationships.clear();
+          phantomPendingRefreshRoom = "";
+          sessionStorage.removeItem("phantom_refresh_relationships_v1");
         }
       } catch {
         try {
-          sessionStorage.removeItem("six7_refresh_relationships_v1");
+          sessionStorage.removeItem("phantom_refresh_relationships_v1");
         } catch {}
       }
 
@@ -13809,7 +13811,6 @@ export function createExtractedEngine(host) {
 
         selfAvatar = host.avatar || null;
 
-        // --- PATCH C1: accept precomputed hKey if provided ---
         const providedHKey = String(d.payload?.hKey || "")
           .trim()
           .toLowerCase();
@@ -13840,7 +13841,7 @@ export function createExtractedEngine(host) {
           applyTOFU();
 
           if (!bootOnce) {
-            six7BootId = crypto.randomUUID();
+            phantomBootId = crypto.randomUUID();
             bootOnce = true;
 
             emitSnapshot("CORE_BOOTSTRAP");
@@ -13862,24 +13863,13 @@ export function createExtractedEngine(host) {
             wsOpenBootstrap();
           }
         }
-        // ---- LOCAL identity event for hobo ----
-        try {
-          if (selfHandle && selfHKey) {
-            window.dispatchEvent(
-              new CustomEvent("six7_identity_ready", {
-                detail: { handle: selfHandle, hKey: selfHKey },
-              }),
-            );
-          }
-        } catch {}
-
-        // --- PATCH B3: enriched identity snapshot to TOP ---
+        // Publish identity and network context to SDK observers.
         post("IDENTITY_UPDATE", {
           handle: selfHandle,
           hex: selfHex,
           hKey: selfHKey,
 
-          // core context injection (needed for stability + TOFU + HUD)
+          // Pin identity to the current origin and network context.
           videoId,
           origin,
 
@@ -13891,8 +13881,8 @@ export function createExtractedEngine(host) {
         applyTOFU();
         emitSnapshot("CORE_SET_SELF");
 
-        // Do not mark full brain boot from CORE_SET_SELF.
-        // Identity is ready here, but CORE_BOOTSTRAP owns bootOnce + brainReady.
+        // Identity initialization does not complete network startup.
+        // CORE_BOOTSTRAP owns the boot latch and NETWORK_READY event.
         if (selfHKey) {
           post("IDENTITY_READY", {
             handle: selfHandle,
@@ -13916,8 +13906,8 @@ export function createExtractedEngine(host) {
     if (d.type === "CORE_BOOTSTRAP") {
       // A reused suspended core must regain lifecycle authority before
       // deciding whether bootstrap work was already claimed.
-      __six7ExitSent = false;
-      six7SessionKilling = false;
+      __phantomExitSent = false;
+      phantomSessionKilling = false;
 
       if (bootOnce) {
         const doorwayMissing =
@@ -13933,7 +13923,7 @@ export function createExtractedEngine(host) {
       }
 
       CORE_DEBUG &&
-        console.log("[six7][CORE] CORE_BOOTSTRAP HIT", {
+        console.log("[phantom][CORE] CORE_BOOTSTRAP HIT", {
           bootOnce,
           selfHandle,
           selfHKey,
@@ -13947,11 +13937,11 @@ export function createExtractedEngine(host) {
 
       if (!selfHKey) {
         CORE_DEBUG &&
-          console.debug("[six7][CORE] CORE_BOOTSTRAP waiting for identity");
+          console.debug("[phantom][CORE] CORE_BOOTSTRAP waiting for identity");
         return;
       }
 
-      six7BootId = crypto.randomUUID();
+      phantomBootId = crypto.randomUUID();
       bootOnce = true;
 
       const url =
@@ -13965,12 +13955,12 @@ export function createExtractedEngine(host) {
     }
 
     // ======================================================
-    // P2P WebRTC (Signaling from TOP/BG)
+    // Peer WebRTC signaling
     // ======================================================
 
     // RTC_DIAL disabled; TRY_DIAL remains the only public dial request path
 
-    // Inbound signaling from BG → TOP → brain
+    // Apply incoming signaling to the peer transport.
     // d.type: "RTC_SIGNAL" payload: { from, kind, data, room, to }
     if (d.type === "RTC_SIGNAL") {
       (async () => {
@@ -13981,7 +13971,7 @@ export function createExtractedEngine(host) {
           const data = p.data;
 
           if (!from || !kind) return;
-          if (six7SessionKilling) return;
+          if (phantomSessionKilling) return;
 
           if (kind === "offer") {
             await rtcOnOffer(from, data);
@@ -14010,19 +14000,17 @@ export function createExtractedEngine(host) {
   // SPRING #1 — Chat Scan Integration Hook
   // ======================================================
 
-  const peerTable = new Map(); // reserved for future core-owned peer state only
-
   ksLoad();
   CORE_DEBUG && console.log(TAG, "boot", location.href);
   emitSnapshot("core_boot");
 
   return {
     command(type, payload = {}) {
-      window.dispatchEvent({ type: "message", data: { six7: 1, type, payload } });
+      window.dispatchEvent({ type: "message", data: { phantom: 1, type, payload } });
     },
     snapshot() { return snapshot("sdk_read"); },
     dispose() {
-      six7SendRoomExitedAndTeardown(true);
+      phantomSendRoomExitedAndTeardown(true);
       wsClose("sdk_dispose");
       rtcTeardownAll("sdk_dispose");
     }

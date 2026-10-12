@@ -1,5 +1,7 @@
 # Phantom SDK
 
+**[Explore the demos →](demos/README.md)**
+
 Phantom turns browsers into a peer-powered network, giving developers a foundation for applications that run on the strength of their users.
 
 This is the current development base. Its API is still evolving.
@@ -27,12 +29,22 @@ const invite = network.invite;
 
 The default entry uses Nostr relay discovery. Developers can configure other doorways. The application owns its interface and how it uses the network.
 
+## Restricted networks
+
+Applications can configure an admission checkpoint before relay discovery and peer admission. The developer owns the access rules; Phantom enforces credential verification and expiry. See [authorization integration](docs/admission.md). Without an `admission` configuration, networks retain open admission.
+
+Run the focused checks with `npm test`.
+
 ## Source
 
 - `packages/phantom-core`: networking engine, membership, peer roles, file distribution and admin controls.
 - `packages/phantom-doorways`: browser entry and discovery adapters.
 
-This repository contains SDK source only, without test suites, demo pages or generated test reports. Package names are local workspace names; the SDK is not published on npm.
+This repository contains SDK source, integration tests, runnable demos, and a relay template. Generated bundles and test reports are excluded. Package names are local workspace names; the SDK is not published on npm.
+
+## Relay template
+
+A [Cloudflare doorway template](templates/cloudflare-doorway/README.md) provides proof-preserving WebSocket discovery/signaling with hibernation support and deployment instructions.
 
 ## License
 

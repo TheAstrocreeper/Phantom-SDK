@@ -1,3 +1,4 @@
+import {isConciergeProtocol} from '../../phantom-core/src/compatibility.js';
 import { DISCOVERY_TYPES, decodeDiscovery, encodeDiscovery } from './discovery.js';
 export class DoorwayConfigurationError extends TypeError {
   constructor(code, field, message) {
@@ -26,7 +27,7 @@ export function createDoorway({ open, discovery = false, presence = 'discovery-h
   return Object.freeze(validateDoorway({ protocol: discovery ? 'phantom-doorway-v2' : 'phantom-doorway-v1', presence, open }));
 }
 
-/** Temporary compatibility bridge; engine election rules stay in the engine. */
+/** Adapt transport sessions to the engine socket interface. */
 export function bridgeDoorway(doorway) {
   validateDoorway(doorway);
   class Socket {
@@ -65,20 +66,34 @@ export function bridgeDoorway(doorway) {
     publishAuthority(snapshot) {if(this.readyState!==1)throw new Error("Doorway not open");this.session?.publishAuthority?.(snapshot);}
     close() {if(this.readyState===3)return;this.readyState=3;this.session?.close();this.pending=[];}
   }
-  return {protocol:'six7-concierge-v1',presence:doorway.presence??'discovery-hints',url:'ws://phantom-adapter.invalid/',WebSocket:Socket};
+  return {protocol:'phantom-concierge-v1',presence:doorway.presence??'discovery-hints',url:'ws://phantom-adapter.invalid/',WebSocket:Socket};
 }
 
-/** Wrap existing CF/custom WebSocket or local fixture for incremental migration. */
-export function adaptLegacyDoorway(legacy) {
-  if(legacy?.protocol!=='six7-concierge-v1')throw new TypeError('Legacy doorway required');
-  return createDoorway({discovery:true,presence:legacy.presence??'live-sockets',open({roomId,peerId,onOpen,onDiscovery,onSignal,onClose,onError}) {
-    const url=new URL('ws',legacy.url);url.searchParams.set('v',roomId);url.searchParams.set('to',peerId);
-    const socket=new legacy.WebSocket(url.href);
+/** Adapt a WebSocket relay to the common discovery and signaling interface. */
+export function adaptWebSocketDoorway(transport) {
+  if(!isConciergeProtocol(transport?.protocol))throw new TypeError('WebSocket doorway required');
+  return createDoorway({discovery:true,presence:transport.presence??'live-sockets',open({roomId,peerId,authorization,signAdmission,onOpen,onDiscovery,onSignal,onClose,onError}) {
+    const url=new URL('ws',transport.url);url.searchParams.set('v',roomId);url.searchParams.set('to',peerId);
+    const socket=new transport.WebSocket(url.href);
+    let challenge,pendingAnnouncement;
+    function announce(value){
+      if(authorization&&!challenge){pendingAnnouncement=value;return;}
+      const {roomId:room,peerId:key,...identity}=value;
+      if(authorization){
+        const {admissionProof,...payload}=value;
+        identity.connectionChallenge=challenge;
+        identity.admissionProof=signAdmission('announce',{...payload,connectionChallenge:challenge});
+      }
+      socket.send(JSON.stringify({...identity,type:'concierge_connect',videoId:room,from:key}));
+    }
     socket.onopen=onOpen;
-    socket.onmessage=event=>{try{const packet=JSON.parse(event.data);if(DISCOVERY_TYPES.has(packet.type))onDiscovery(decodeDiscovery(packet));else onSignal(packet);}catch(error){onError(error);}};
+    socket.onmessage=event=>{try{const packet=JSON.parse(event.data);
+      if(authorization&&packet.type==='hello'&&typeof packet.connectionChallenge==='string'&&packet.connectionChallenge.length<=128){challenge=packet.connectionChallenge;if(pendingAnnouncement){const value=pendingAnnouncement;pendingAnnouncement=null;announce(value);}return;}
+      if(DISCOVERY_TYPES.has(packet.type))onDiscovery(decodeDiscovery(packet));else onSignal(packet);
+    }catch(error){onError(error);}};
     socket.onclose=onClose;socket.onerror=onError;
     return {
-      announce:({roomId,peerId,...identity})=>socket.send(JSON.stringify({...identity,type:'concierge_connect',videoId:roomId,from:peerId})),
+      announce,
       reconcile:packet=>socket.send(JSON.stringify(packet)),
       sendSignal:packet=>socket.send(JSON.stringify(packet)),
       publishAuthority:snapshot=>socket.send(JSON.stringify({type:'doorway_authority',videoId:roomId,from:peerId,snapshot})),close:()=>socket.close()
