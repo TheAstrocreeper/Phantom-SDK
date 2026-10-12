@@ -14,7 +14,22 @@ export function createFileDistribution({core,crypto=globalThis.crypto,emit=()=>{
   if(!Number.isInteger(chunkSize)||chunkSize<1024||chunkSize>65536)throw new TypeError('Chunk size must be 1024–65536 bytes');
   if(typeof name!=='string'||name.length>256||typeof type!=='string'||type.length>128||typeof distributionId!=='string'||distributionId.length>256)throw new TypeError('Invalid file metadata');
   if(Math.ceil(file.size/chunkSize)>65536)throw new TypeError('At most 65536 chunks per file');
-  const hashes=[];for(let i=0;i<Math.ceil(file.size/chunkSize);i++){if(closed||!allowed('',distributionId))throw new Error('Distribution unavailable');hashes.push(await digest(await file.slice(i*chunkSize,(i+1)*chunkSize).arrayBuffer(),crypto));}
+  const total=Math.ceil(file.size/chunkSize),hashes=new Array(total),startedAt=performance.now();let readMs=0,hashMs=0;
+  // Bound temporary file data to 4 MiB and outstanding WebCrypto jobs to eight.
+  const batchChunks=Math.max(1,Math.floor(4*1024*1024/chunkSize));
+  for(let base=0;base<total;base+=batchChunks){
+   if(closed||!allowed('',distributionId))throw new Error('Distribution unavailable');
+   const end=Math.min(total,base+batchChunks),readAt=performance.now();
+   const bytes=await file.slice(base*chunkSize,Math.min(file.size,end*chunkSize)).arrayBuffer();readMs+=performance.now()-readAt;
+   const hashAt=performance.now();
+   for(let offset=base;offset<end;offset+=8){
+    if(closed||!allowed('',distributionId))throw new Error('Distribution unavailable');
+    await Promise.all(Array.from({length:Math.min(8,end-offset)},async(_,j)=>{const index=offset+j,start=(index-base)*chunkSize;hashes[index]=await digest(new Uint8Array(bytes,start,Math.min(chunkSize,bytes.byteLength-start)),crypto);}));
+   }
+   hashMs+=performance.now()-hashAt;
+   if(closed||!allowed('',distributionId))throw new Error('Distribution unavailable');
+   emit('filePreparationProgress',{name,processed:end,total,readMs,hashMs,elapsedMs:performance.now()-startedAt});
+  }
   const m={version:1,name,type,size:file.size,chunkSize,total:hashes.length,hashRoot:await digest(new TextEncoder().encode(hashes.join('')),crypto),distributionId};
   m.id='sha256:'+await digest(new TextEncoder().encode(JSON.stringify(descriptor(m))),crypto);m.hashes=hashes;checkAllowed(m);manifests.set(m.id,m);sources.set(m.id,file);emit('filePublished',publicManifest(m));return publicManifest(m);
  }
