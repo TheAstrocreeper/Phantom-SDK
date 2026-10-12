@@ -5576,6 +5576,11 @@ export function createExtractedEngine(host) {
     topologyOverride = null,
     transactionMeta = null,
   ) {
+    const existing = new Set(six7AuthorityRosterRows(six7SysAuthority.roster).map(row => row.hKey));
+    if (six7AuthorityRosterRows(nextRows).some(row => row.hKey !== six7ShortKey(selfHKey) && !existing.has(row.hKey) && !host.canAdmitPeer(row.hKey))) {
+      emitSnapshot('peer_authorization_denied');
+      return false;
+    }
     if (!six7AuthorizeSyscon1Duty('stage:'+via+':'+String(transactionMeta?.admission?.member || ''), () => {
       if (six7StageSyscon1Authority(nextRows, via, transactionBase, topologyOverride, transactionMeta))
         six7PublishCommittedAuthority('admin_checked_'+via);
@@ -6356,6 +6361,11 @@ export function createExtractedEngine(host) {
   function sdkApplySysAdmission(key,inner) {
     if(String(concierge.localRoleCandidate || concierge.role || "peer")!=="syscon1")return;
     const fromKey=six7ShortKey(inner.from),selfKey=six7ShortKey(selfHKey);
+    if (fromKey !== selfKey && !host.canAdmitPeer(fromKey)) {
+      sdkDeferredAdmissions.delete(fromKey);
+      emitSnapshot('peer_authorization_denied');
+      return;
+    }
             const committedRoster = six7AuthorityRosterRows(
               six7SysAuthority.roster,
             );
@@ -10828,18 +10838,21 @@ export function createExtractedEngine(host) {
   }
 
   function rtcOnOffer(fromHKey, offer, meta = {}) {
+    if (!host.canAdmitPeer(six7ShortKey(fromHKey))) return;
     return six7QueueInboundRtc(fromHKey, meta, "offer", () =>
       six7ApplyRtcOffer(fromHKey, offer, meta),
     );
   }
 
   function rtcOnAnswer(fromHKey, answer, meta = {}) {
+    if (!host.canAdmitPeer(six7ShortKey(fromHKey))) return;
     return six7QueueInboundRtc(fromHKey, meta, "answer", () =>
       six7ApplyRtcAnswer(fromHKey, answer, meta),
     );
   }
 
   function rtcOnIce(fromHKey, cand, meta = {}) {
+    if (!host.canAdmitPeer(six7ShortKey(fromHKey))) return;
     return six7QueueInboundRtc(fromHKey, meta, "ice", () =>
       six7ApplyRtcIce(fromHKey, cand, meta),
     );

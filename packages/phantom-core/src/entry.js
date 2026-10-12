@@ -79,5 +79,6 @@ export function createPhantomEntry({openContext, relays, doorways, adminPublicKe
       return network;
     } catch(error){network.close();throw error;}
   }
-  return {join:(invite,options)=>start(invite,options,true),create:options=>start(createInvite({relays,doorways,adminPublicKey}),options,false)};
+  return {join:(invite,options)=>start(invite,options,true),create:options=>start(createInvite({relays,doorways,adminPublicKey}),options,false),
+    startCreated:(invite,options)=>start(invite,options,false)};
 }

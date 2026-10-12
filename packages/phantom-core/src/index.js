@@ -30,7 +30,7 @@ function eventSurface() {
 /** Standalone facade; legacy handle-only joins remain available. */
 export function createPhantom({ doorway, origin = 'https://phantom.local',
     avatar = null, storage = memoryStorage(), sessionStorage = memoryStorage(),
-    runtime = globalThis, canSendFile = () => true, authorizeSyscon1 = () => true } = {}) {
+    runtime = globalThis, canSendFile = () => true, authorizeSyscon1 = () => true, canAdmitPeer = () => true } = {}) {
   if (['phantom-doorway-v1','phantom-doorway-v2'].includes(doorway?.protocol)) doorway = bridgeDoorway(doorway);
   if (doorway?.protocol !== 'six7-concierge-v1') {
     throw new Error('This checkpoint requires a SIX7-compatible concierge doorway');
@@ -61,6 +61,7 @@ export function createPhantom({ doorway, origin = 'https://phantom.local',
     doorwayPresence: doorway.presence ?? 'live-sockets',
     WebSocket: doorway.WebSocket, RTCPeerConnection: runtime.RTCPeerConnection,
     crypto: runtime.crypto, canSendFile, authorizeSyscon1,
+    canAdmitPeer: peer => { try { return canAdmitPeer(peer) === true; } catch { return false; } },
     emit(type, payload) {
       if (disposed) return;
       if(type==='SNAPSHOT') {
@@ -178,3 +179,4 @@ export {createControlStore} from './admin-lifecycle.js';
 export {createMemoryChunkStore} from './files.js';
 
 export {createAdminController} from './admin-controller.js';
+export {createAdmissionCheckpoint, createAdmissionVerifier, AdmissionError} from './admission.js';

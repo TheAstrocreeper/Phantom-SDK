@@ -27,12 +27,18 @@ const invite = network.invite;
 
 The default entry uses Nostr relay discovery. Developers can configure other doorways. The application owns its interface and how it uses the network.
 
+## Restricted networks
+
+Applications can configure an admission checkpoint before relay discovery and peer admission. The developer owns the access rules; Phantom enforces credential verification and expiry. See [authorization integration](docs/admission.md). Without an `admission` configuration, networks retain open admission.
+
+Run the focused checks with `npm test`.
+
 ## Source
 
 - `packages/phantom-core`: networking engine, membership, peer roles, file distribution and admin controls.
 - `packages/phantom-doorways`: browser entry and discovery adapters.
 
-This repository contains SDK source only, without test suites, demo pages or generated test reports. Package names are local workspace names; the SDK is not published on npm.
+This repository contains SDK source and focused admission tests, without demo pages or generated test reports. Package names are local workspace names; the SDK is not published on npm.
 
 ## License
 
