@@ -50,6 +50,7 @@ export function createNetworkEngine(host) {
   // current or successor syscon1 to commit the corresponding removal.
   const phantomPendingTerminalExits = new Map(); // hKey -> { bootId, epoch, at, via }
   let ws = null;
+  let discoveryDisconnected = false;
 
   let tofu = {
     pinned: false,
@@ -11819,6 +11820,7 @@ export function createNetworkEngine(host) {
   }
 
   function wsAdvanceDoorwayRecovery(attemptId, failure = {}) {
+    if (discoveryDisconnected) return false;
     const recoveryLegal =
       !phantomSessionKilling && enabled && !!selfHKey && !!videoId;
 
@@ -12031,7 +12033,7 @@ export function createNetworkEngine(host) {
   }
 
   function wsOpenBootstrap(url) {
-    if (phantomSessionKilling) return;
+    if (phantomSessionKilling || discoveryDisconnected) return;
 
     if (ws && ws.readyState === WebSocket.OPEN) return;
 
@@ -13894,6 +13896,18 @@ export function createNetworkEngine(host) {
           });
         }
       })();
+      return;
+    }
+
+    if (d.type === "CORE_DISCONNECT_DISCOVERY") {
+      discoveryDisconnected = true;
+      bootstrap.discoveryDisconnected = true;
+      // Remove socket ownership before close callbacks can trigger recovery.
+      const socket = ws;
+      ws = null;
+      wsClose("discovery_disconnected_by_application");
+      try { socket?.close(); } catch {}
+      post("DISCOVERY_DISCONNECTED", { at: now(), recoveryEnabled: false });
       return;
     }
 

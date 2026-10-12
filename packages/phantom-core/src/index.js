@@ -158,6 +158,7 @@ export function createPhantom({ doorway, origin = 'https://phantom.local',
       if (!publicIdentity) throw new Error("No standalone identity initialized; join with name first");
       return {...publicIdentity};
     },
+    disconnectDiscovery() { command("CORE_DISCONNECT_DISCOVERY", {}); },
     snapshot: () => engine.snapshot(),
     command,
     dispose() {

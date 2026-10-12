@@ -55,7 +55,7 @@ export function createFileDistribution({core,crypto=globalThis.crypto,emit=()=>{
   if(event.type==='INCOMING_MSG'&&p.sys==='PHANTOM_FILE_MISSING'){const d=downloads.get(f?.id),pending=d?.pending.get(f.index);if(pending?.peer===from){clearTimeout(pending.timer);d.pending.delete(f.index);pump(f.id);}return;}
   if(event.type==='FILE_BIN_CHUNK'){const d=downloads.get(f?.id),pending=d?.pending.get(f.index);if(!d||pending?.peer!==from)return;check(f.id);
    if(!(p.bytes instanceof ArrayBuffer)||p.bytes.byteLength!==Math.min(d.m.chunkSize,d.m.size-f.index*d.m.chunkSize)||await digest(p.bytes,crypto)!==d.m.hashes[f.index]){clearTimeout(pending.timer);d.pending.delete(f.index);emit('fileError',{id:f.id,from,error:'Chunk failed verification'});pump(f.id);return;}
-   check(f.id);if(downloads.get(f.id)!==d||d.pending.get(f.index)!==pending)return;await chunkStore.put(f.id,f.index,p.bytes);check(f.id);if(downloads.get(f.id)!==d||d.pending.get(f.index)!==pending)return;clearTimeout(pending.timer);d.pending.delete(f.index);d.have.add(f.index);emit('fileProgress',{id:f.id,received:d.have.size,total:d.m.total,from});pump(f.id);
+   check(f.id);if(downloads.get(f.id)!==d||d.pending.get(f.index)!==pending)return;await chunkStore.put(f.id,f.index,p.bytes);check(f.id);if(downloads.get(f.id)!==d||d.pending.get(f.index)!==pending)return;clearTimeout(pending.timer);d.pending.delete(f.index);d.have.add(f.index);emit('fileProgress',{id:f.id,index:f.index,bytes:p.bytes.byteLength,received:d.have.size,total:d.m.total,from});pump(f.id);
   }
  }
  const off=core.onEvent(e=>{void handle(e).catch(error=>{if(e.payload?.file?.id)fail(e.payload.file.id,error);emit('fileError',{error:error.message});});});

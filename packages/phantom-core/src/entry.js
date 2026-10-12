@@ -61,6 +61,7 @@ export function createPhantomEntry({openContext, relays, doorways, adminPublicKe
       getControls:()=>lifecycle?.records()??[],
       isRevoked:target=>lifecycle?.isRevoked(target)??false,
       on(type,fn){if(closed)throw new Error('Network closed');if(typeof fn!=='function')throw new TypeError('Listener required');if(!handlers.has(type))handlers.set(type,new Set());handlers.get(type).add(fn);return()=>handlers.get(type)?.delete(fn);},
+      disconnectDiscovery:()=>{active();core.disconnectDiscovery();},
       getState:()=>retired?{...core.getState(),state:'retired',reason:'signed_network_retirement',nextAction:'none'}:core.getState(),snapshot:()=>core.snapshot(),getPeers:()=>structuredClone(peers),
       invitePeer:id=>{active();return core.invite(id);},acceptPeer:id=>{active();return core.accept(id);},send:(id,text)=>{active();return core.send(id,text);},
       close(){if(closed)return;closed=true;clearTimeout(retireTimer);distribution?.close();files.close();offEvent();offState();core.dispose();adminGate.close();handlers.clear();}
