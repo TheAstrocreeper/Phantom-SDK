@@ -59,6 +59,7 @@ export function withAdmissionDoorway(adapter,{checkpoint,credential,identity,now
    context.onSignal(payload);
   });}
   const callbacks={...context,authorization:{networkId:roomId,peerPublicKey:identity.publicKey,credential:copy(credential)},
+   signAdmission:(kind,payload)=>proof(kind,payload),
    onDiscovery:hint=>discovery(copy(hint)),onSignal:packet=>signal(copy(packet)),
    onPacket:packet=>{const p=copy(packet);if(DISCOVERY_TYPES.has(p?.type))discovery(decodeDiscovery(p));else signal(p);},
    onClose:detail=>{closed=true;context.onClose?.(detail);},

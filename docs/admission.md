@@ -63,7 +63,7 @@ Each hook has a five-second deadline, configurable with `authorizationTimeoutMs`
 
 ## Adapter and relay contract
 
-The checkpoint is outside the adapter. Adapter factories run only after authorization, and the shared wrapper checks authorization again before opening a session. No Nostr-specific admission logic is required.
+The checkpoint is outside the adapter. Adapter factories run only after authorization, and the shared wrapper checks authorization again before opening a session. No Nostr-specific admission logic is required. A custom adapter may use `context.signAdmission(kind, payload)` to sign a transport challenge after the checkpoint has approved local access.
 
 For restricted sessions, `open(context)` receives `context.authorization` with the locally verified `networkId`, `peerPublicKey`, and `credential`. A private-server adapter may use these to request an authenticated connection; this does not replace receiving-peer verification.
 
@@ -74,9 +74,9 @@ Adapters and servers must preserve:
 
 The common wrapper signs both using the peer's Ed25519 key. Incoming discovery rows are checked against the signed peer ID, full public key, and boot ID. Incoming signaling is checked against its signed sender, network, recipient, and complete payload. Recent duplicate signaling proofs are rejected. The developer's verifier independently checks the credential's entitlement.
 
-Nostr announcements carry the proof inside `row`. The legacy WebSocket adapter carries it on `concierge_connect`; its server must retain that field when constructing roster rows. It already forwards the proof on signaling without interpreting it. Custom typed adapters carry it through `announce`/`onDiscovery` and `sendSignal`/`onSignal`. Raw adapters carry the same fields through `send`/`onPacket`.
+Nostr announcements carry the proof inside `row`. The legacy WebSocket adapter carries it on `concierge_connect`; its server must retain that field when constructing roster rows. It forwards the proof on signaling without interpreting it. Restricted WebSocket entry waits for `hello.connectionChallenge` and binds its signed announcement to that connection. The [Cloudflare template](../templates/cloudflare-doorway/README.md) implements this exchange; a private WebSocket server must implement the same challenge contract. Custom typed adapters carry it through `announce`/`onDiscovery` and `sendSignal`/`onSignal`. Raw adapters carry the same fields through `send`/`onPacket`.
 
-A server may additionally enforce authorization before upgrading a connection, but this SDK change does not modify a deployed CF worker or private server. The client checkpoint protects entry before traffic, and the shared receiving-peer checkpoint protects membership even when the relay itself does not authenticate users.
+A server may additionally enforce authorization before upgrading a connection, but the included Cloudflare worker is a deployable template, not a modification of any deployed CF worker or private server. The client checkpoint protects entry before traffic, and the shared receiving-peer checkpoint protects membership even when the relay itself does not authenticate users.
 
 ## Boundaries of this first implementation
 

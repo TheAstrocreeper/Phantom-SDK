@@ -40,6 +40,10 @@ Run the focused checks with `npm test`.
 
 This repository contains SDK source and focused admission tests, without demo pages or generated test reports. Package names are local workspace names; the SDK is not published on npm.
 
+## Relay template
+
+A [Cloudflare doorway template](templates/cloudflare-doorway/README.md) provides proof-preserving WebSocket discovery/signaling with hibernation support and deployment instructions.
+
 ## License
 
 Free for the noncommercial purposes permitted by [PolyForm Noncommercial 1.0.0](LICENSE). Uses outside those permissions require a separate paid commercial agreement. See [commercial licensing](COMMERCIAL.md). Preserve the required notices in NOTICE when sharing the software.

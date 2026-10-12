@@ -71,14 +71,28 @@ export function bridgeDoorway(doorway) {
 /** Wrap existing CF/custom WebSocket or local fixture for incremental migration. */
 export function adaptLegacyDoorway(legacy) {
   if(legacy?.protocol!=='six7-concierge-v1')throw new TypeError('Legacy doorway required');
-  return createDoorway({discovery:true,presence:legacy.presence??'live-sockets',open({roomId,peerId,onOpen,onDiscovery,onSignal,onClose,onError}) {
+  return createDoorway({discovery:true,presence:legacy.presence??'live-sockets',open({roomId,peerId,authorization,signAdmission,onOpen,onDiscovery,onSignal,onClose,onError}) {
     const url=new URL('ws',legacy.url);url.searchParams.set('v',roomId);url.searchParams.set('to',peerId);
     const socket=new legacy.WebSocket(url.href);
+    let challenge,pendingAnnouncement;
+    function announce(value){
+      if(authorization&&!challenge){pendingAnnouncement=value;return;}
+      const {roomId:room,peerId:key,...identity}=value;
+      if(authorization){
+        const {admissionProof,...payload}=value;
+        identity.connectionChallenge=challenge;
+        identity.admissionProof=signAdmission('announce',{...payload,connectionChallenge:challenge});
+      }
+      socket.send(JSON.stringify({...identity,type:'concierge_connect',videoId:room,from:key}));
+    }
     socket.onopen=onOpen;
-    socket.onmessage=event=>{try{const packet=JSON.parse(event.data);if(DISCOVERY_TYPES.has(packet.type))onDiscovery(decodeDiscovery(packet));else onSignal(packet);}catch(error){onError(error);}};
+    socket.onmessage=event=>{try{const packet=JSON.parse(event.data);
+      if(authorization&&packet.type==='hello'&&typeof packet.connectionChallenge==='string'&&packet.connectionChallenge.length<=128){challenge=packet.connectionChallenge;if(pendingAnnouncement){const value=pendingAnnouncement;pendingAnnouncement=null;announce(value);}return;}
+      if(DISCOVERY_TYPES.has(packet.type))onDiscovery(decodeDiscovery(packet));else onSignal(packet);
+    }catch(error){onError(error);}};
     socket.onclose=onClose;socket.onerror=onError;
     return {
-      announce:({roomId,peerId,...identity})=>socket.send(JSON.stringify({...identity,type:'concierge_connect',videoId:roomId,from:peerId})),
+      announce,
       reconcile:packet=>socket.send(JSON.stringify(packet)),
       sendSignal:packet=>socket.send(JSON.stringify(packet)),
       publishAuthority:snapshot=>socket.send(JSON.stringify({type:'doorway_authority',videoId:roomId,from:peerId,snapshot})),close:()=>socket.close()

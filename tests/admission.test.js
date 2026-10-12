@@ -149,7 +149,7 @@ for(const type of ['websocket','custom'])for(const operation of ['create','join'
 test('authorized private WebSocket starts the real core with a portable signed announcement',async()=>{
  const order=[],sent=[];
  class Server {
-  constructor(){order.push('socket');queueMicrotask(()=>this.onopen?.());}
+  constructor(){order.push('socket');queueMicrotask(()=>{this.onopen?.();this.onmessage?.({data:JSON.stringify({type:'hello',connectionChallenge:'private-challenge'})});});}
   send(raw){sent.push(JSON.parse(raw));}
   close(){}
  }
