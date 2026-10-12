@@ -4,8 +4,8 @@ import assert from 'node:assert/strict';
 import {createAdminIdentity} from '../packages/phantom-core/src/authorization.js';
 import {createAdmissionCheckpoint,createAdmissionVerifier} from '../packages/phantom-core/src/admission.js';
 import {createNostrIdentity} from '../packages/phantom-doorways/src/nostr-crypto.js';
-import {createLegacyDoorway} from '../packages/phantom-doorways/src/index.js';
-import {adaptLegacyDoorway} from '../packages/phantom-doorways/src/interface.js';
+import {createWebSocketDoorway} from '../packages/phantom-doorways/src/index.js';
+import {adaptWebSocketDoorway} from '../packages/phantom-doorways/src/interface.js';
 import {withAdmissionDoorway} from '../packages/phantom-doorways/src/admission-doorway.js';
 const admin=await createAdminIdentity();
 const root=fileURLToPath(new URL('../',import.meta.url));
@@ -21,7 +21,7 @@ async function waitFor(check){const deadline=Date.now()+5000;while(!check()){if(
 async function peer(){
  const identity=createNostrIdentity();const checkpoint=createAdmissionCheckpoint({networkId:room,peerPublicKey:identity.publicKey,policy:{authorize:({networkId,peerPublicKey})=>admin.signAdmission({networkId,peerPublicKey,expiresAt:Date.now()+60000}),verify}});
  const credential=await checkpoint.authorize();const states=[],signals=[],errors=[];let open=false;
- const raw=adaptLegacyDoorway(createLegacyDoorway({url:'ws://127.0.0.1:8787/',WebSocket:TrackingSocket}));
+ const raw=adaptWebSocketDoorway(createWebSocketDoorway({url:'ws://127.0.0.1:8787/',WebSocket:TrackingSocket}));
  const session=withAdmissionDoorway(raw,{identity,checkpoint,credential}).open({roomId:room,peerId:identity.publicKey.slice(0,16),onOpen:()=>{open=true;},onDiscovery:p=>states.push(p),onSignal:p=>signals.push(p),onClose(){},onError:e=>errors.push(e)});
  await waitFor(()=>open);session.announce({roomId:room,peerId:identity.publicKey.slice(0,16),handle:'Local test',bootId:crypto.randomUUID(),t:Date.now()});
  await waitFor(()=>states.length>0);return {identity,session,states,signals,errors};

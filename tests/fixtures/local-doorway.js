@@ -13,7 +13,7 @@ export function createLocalDemoDoorway() {
   close(){if(this.readyState===3)return;this.readyState=3;sockets.delete(this);if(!blocked)this.channel.postMessage({kind:'leave',hKey:this.self});this.channel.close();}
   cut(){if(this.readyState===3)return;this.close();this.onclose?.({code:1006,reason:'demo_doorway_cut',wasClean:false});}
  }
- return {protocol:'six7-concierge-v1',presence:'discovery-hints',url:'ws://local-demo.invalid/',WebSocket:Socket,
+ return {protocol:'phantom-concierge-v1',presence:'discovery-hints',url:'ws://local-demo.invalid/',WebSocket:Socket,
   cut(){blocked=true;for(const socket of [...sockets])socket.cut();},
   get offline(){return blocked;}
  };

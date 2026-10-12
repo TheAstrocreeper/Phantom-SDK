@@ -2,7 +2,8 @@ import { projectNetworkState } from './network-state.js';
 import { resolvePeerIdentity, validatePeerName } from './identity.js';
 export { createPeerIdentity } from './identity.js';
 import { bridgeDoorway } from '../../phantom-doorways/src/interface.js';
-import { createExtractedEngine } from './extracted-engine.js';
+import {isConciergeProtocol,migrateStorage,normalizeCommand} from './compatibility.js';
+import { createNetworkEngine } from './network-engine.js';
 
 function memoryStorage() {
   const values = new Map();
@@ -27,14 +28,16 @@ function eventSurface() {
   };
 }
 
-/** Standalone facade; legacy handle-only joins remain available. */
+/** Public peer-network facade with injectable transport and runtime. */
 export function createPhantom({ doorway, origin = 'https://phantom.local',
     avatar = null, storage = memoryStorage(), sessionStorage = memoryStorage(),
     runtime = globalThis, canSendFile = () => true, authorizeSyscon1 = () => true, canAdmitPeer = () => true } = {}) {
   if (['phantom-doorway-v1','phantom-doorway-v2'].includes(doorway?.protocol)) doorway = bridgeDoorway(doorway);
-  if (doorway?.protocol !== 'six7-concierge-v1') {
-    throw new Error('This checkpoint requires a SIX7-compatible concierge doorway');
+  if (!isConciergeProtocol(doorway?.protocol)) {
+    throw new Error('A Phantom concierge doorway is required');
   }
+  migrateStorage(storage);
+  migrateStorage(sessionStorage);
   // Browser timer functions require their Window receiver, even when
   // supplied through a plain runtime configuration object.
   const timerTarget = runtime.timerTarget ?? globalThis;
@@ -92,10 +95,10 @@ export function createPhantom({ doorway, origin = 'https://phantom.local',
     },
     clearInterval(id) { timers.clearInterval(id); intervals.delete(id); },
   };
-  const engine = createExtractedEngine(host);
+  const engine = createNetworkEngine(host);
   function command(type, payload) {
     if (disposed) throw new Error('Phantom instance disposed');
-    engine.command(type, payload);
+    engine.command(normalizeCommand(type), payload);
   }
   return {
     getState() {return structuredClone(networkState);},

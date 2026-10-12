@@ -1,6 +1,6 @@
 # Cloudflare doorway template
 
-A focused Phantom discovery and WebRTC signaling worker, cleaned from the supplied Switchboard worker. It routes peers through one Durable Object per network; it does not host files, chat history, or the authoritative Phantom membership roster.
+A Phantom discovery and WebRTC signaling worker. It routes peers through one Durable Object per network; it does not host files, chat history, or the authoritative Phantom membership roster.
 
 ## What is included
 
@@ -11,7 +11,7 @@ A focused Phantom discovery and WebRTC signaling worker, cleaned from the suppli
 - Durable hibernation recovery and the original ten-second endpoint replacement grace period.
 - Bounded messages, sockets, and unjoined handshake lifetime.
 
-The old SBDM token/state relay, recipient-scoped admin routes, disabled room beacon, verbose identity logging, and unauthenticated HTTP peer-removal route are omitted. This is a new template, not an in-place migration of your existing worker.
+This template is configured for a new worker and namespace. Existing deployments require their own migration plan.
 
 ## Configure and run
 

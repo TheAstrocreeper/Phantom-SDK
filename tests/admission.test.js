@@ -29,13 +29,13 @@ test('missing verifier cannot silently select open mode',()=>{
 });
 
 test('credentials are scoped to network, identity, expiry, and strict approval',async()=>{
- let clock=Date.now();
- const checkpoint=createAdmissionCheckpoint({policy:{authorize:()=>credential(),verify},networkId:room,peerPublicKey:publicKey,now:()=>clock});
+ const grant=credential();let clock=grant.expiresAt-60000;
+ const checkpoint=createAdmissionCheckpoint({policy:{authorize:()=>grant,verify},networkId:room,peerPublicKey:publicKey,now:()=>clock});
  await checkpoint.authorize();assert.equal(checkpoint.allows(publicKey.slice(0,16)),true);
  assert.equal(await checkpoint.verify('d'.repeat(64),credential()),false);
  assert.equal(await checkpoint.verify(publicKey,credential(publicKey,otherRoom)),false);
- clock+=60001;assert.equal(checkpoint.allows(publicKey.slice(0,16)),false);
- assert.equal(await checkpoint.verify(publicKey,credential()),false);
+ clock=grant.expiresAt+1;assert.equal(checkpoint.allows(publicKey.slice(0,16)),false);
+ assert.equal(await checkpoint.verify(publicKey,grant),false);
  const truthy=createAdmissionCheckpoint({policy:{authorize:()=>credential(),verify:()=>({allowed:true})},networkId:room,peerPublicKey:publicKey});
  await assert.rejects(truthy.authorize(),{code:'PHANTOM_ADMISSION_DENIED'});
 });

@@ -2,7 +2,7 @@ const hex=b=>Array.from(new Uint8Array(b),x=>x.toString(16).padStart(2,'0')).joi
 const digest=async(b,crypto)=>hex(await crypto.subtle.digest('SHA-256',b));
 const descriptor=m=>[m.name,m.type,m.size,m.chunkSize,m.total,m.hashRoot,m.distributionId];
 export function createMemoryChunkStore(){const data=new Map();return {async get(id,index){return data.get(id+':'+index);},async put(id,index,bytes){data.set(id+':'+index,bytes.slice(0));}};}
-/** Reuses SIX7 FILE_OFFER, binary metadata/data and its channel backpressure. */
+/** Chunked file exchange over the peer data channel with backpressure. */
 export function createFileDistribution({core,crypto=globalThis.crypto,emit=()=>{},allowed=()=>true,chunkStore=createMemoryChunkStore(),requestTimeoutMs=10000,maxFileBytes=1024*1024*1024}) {
  const manifests=new Map(),sources=new Map(),offers=new Map(),downloads=new Map(),sendQueues=new Map(),queueCounts=new Map(),activeSends=new Set();let closed=false;
  if(!Number.isFinite(requestTimeoutMs)||requestTimeoutMs<=0||!Number.isSafeInteger(maxFileBytes)||maxFileBytes<0)throw new TypeError('Invalid file service limits');

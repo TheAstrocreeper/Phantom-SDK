@@ -1,4 +1,4 @@
-/** Read-only projection of existing SIX7 state; never drives elections or retries. */
+/** Project engine diagnostics into public network state without changing it. */
 export function projectNetworkState(snapshot={}) {
  const c=snapshot.concierge??{},b=snapshot.bootstrap??{},t=c.membershipAudit?.topology??{};
  const admitted=!!snapshot.self?.hKey && String(t.committedKeys??'').split(',').includes(snapshot.self.hKey.slice(0,8));
