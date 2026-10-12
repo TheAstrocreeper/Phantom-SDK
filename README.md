@@ -39,3 +39,8 @@ This repository contains SDK source only, without test suites, demo pages or gen
 Free for the noncommercial purposes permitted by [PolyForm Noncommercial 1.0.0](LICENSE). Uses outside those permissions require a separate paid commercial agreement. See [commercial licensing](COMMERCIAL.md). Preserve the required notices in NOTICE when sharing the software.
 
 Third-party dependencies retain their own licenses; see THIRD_PARTY_NOTICES.md.
+
+
+
+
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/theastrocreeper)
