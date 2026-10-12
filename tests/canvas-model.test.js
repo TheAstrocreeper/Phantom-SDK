@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createBoard,apply,history} from '../examples/shared-canvas/src/model.js';
-import {shareLink,readLink} from '../examples/shared-canvas/src/link.js';
+import {createBoard,apply,history} from '../demos/shared-canvas/src/model.js';
+import {shareLink,readLink} from '../demos/shared-canvas/src/link.js';
 import {encodeInvite} from '../packages/phantom-core/src/invite.js';
 const peer='a'.repeat(16),other='b'.repeat(16);
 const stroke=(id='s',epoch={id:'initial',clock:0,author:''})=>({type:'stroke',epoch,id,author:peer,clock:1,color:'#7556f5',width:5,points:[[.1,.2],[.3,.4]]});

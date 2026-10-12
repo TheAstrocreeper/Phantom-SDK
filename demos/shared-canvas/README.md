@@ -8,11 +8,11 @@ From the repository root:
 
 ```sh
 npm install
-npm install --prefix examples/shared-canvas
-npm run build --prefix examples/shared-canvas
+npm install --prefix demos/shared-canvas
+npm run build --prefix demos/shared-canvas
 ```
 
-Serve `examples/shared-canvas/dist` over HTTPS on a host reachable by both devices. A localhost URL on your laptop is not reachable from your phone. The QR encodes that hosted page plus a compressed, validated SDK invitation in its query string (so sign-in redirects can retain it); older clients can use the ordinary invite fragment format. QR generation is local.
+Serve `demos/shared-canvas/dist` over HTTPS on a host reachable by both devices. A localhost URL on your laptop is not reachable from your phone. The QR encodes that hosted page plus a compressed, validated SDK invitation in its query string (so sign-in redirects can retain it); older clients can use the ordinary invite fragment format. QR generation is local.
 
 This example imports the workspace SDK source. `src/session.js` shows room creation/joining, peer invitation/acceptance, messaging, event subscription, and cleanup. `src/model.js` supplies bounded drawing operations, duplicate detection, deterministic clear ordering, and late-join synchronization. `src/app.js` binds pointer/touch input and the UI to those functions.
 
@@ -30,4 +30,4 @@ The inspector counts application messages queued through `network.send` and mess
 
 `npm test` includes convergence, malformed-operation, and invite round-trip checks. The application is designed for contemporary browsers with WebRTC, Pointer Events, secure contexts, and clipboard access; copying the displayed link remains available when clipboard permission is denied.
 
-The native-WebRTC integration attempt on the implementation host produced no ICE candidates and could not establish a peer connection. It is not recorded as a passing end-to-end drawing test. Browser visual QA and a laptop/phone connection test remain necessary.
+The native-WebRTC integration attempt on the implementation host produced no ICE candidates and could not establish a peer connection. It is not recorded as a passing end-to-end drawing test. A subsequent user-run laptop/phone check confirmed an active peer data channel and canvas messages received. This confirms that two-device session; it does not establish connectivity on every network.

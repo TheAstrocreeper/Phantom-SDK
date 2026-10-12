@@ -1,5 +1,7 @@
 # Phantom SDK
 
+**[Explore the demos →](demos/README.md)**
+
 Phantom turns browsers into a peer-powered network, giving developers a foundation for applications that run on the strength of their users.
 
 This is the current development base. Its API is still evolving.
@@ -38,11 +40,7 @@ Run the focused checks with `npm test`.
 - `packages/phantom-core`: networking engine, membership, peer roles, file distribution and admin controls.
 - `packages/phantom-doorways`: browser entry and discovery adapters.
 
-This repository contains SDK source and focused admission tests, without demo pages or generated test reports. Package names are local workspace names; the SDK is not published on npm.
-
-## Example app
-
-The [shared canvas](examples/shared-canvas/README.md) uses the actual SDK for laptop/phone drawing, QR invitations, peer messaging, and live connection inspection.
+This repository contains SDK source, integration tests, runnable demos, and a relay template. Generated bundles and test reports are excluded. Package names are local workspace names; the SDK is not published on npm.
 
 ## Relay template
 
