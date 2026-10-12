@@ -3,9 +3,10 @@ const digest=async(b,crypto)=>hex(await crypto.subtle.digest('SHA-256',b));
 const descriptor=m=>[m.name,m.type,m.size,m.chunkSize,m.total,m.hashRoot,m.distributionId];
 export function createMemoryChunkStore(){const data=new Map();return {async get(id,index){return data.get(id+':'+index);},async put(id,index,bytes){data.set(id+':'+index,bytes.slice(0));}};}
 /** Chunked file exchange over the peer data channel with backpressure. */
-export function createFileDistribution({core,crypto=globalThis.crypto,emit=()=>{},allowed=()=>true,chunkStore=createMemoryChunkStore(),requestTimeoutMs=10000,maxFileBytes=1024*1024*1024}) {
+export function createFileDistribution({core,crypto=globalThis.crypto,emit=()=>{},allowed=()=>true,chunkStore=createMemoryChunkStore(),requestTimeoutMs=10000,requestWindow=8,maxAttemptsPerPeer=2,maxFileBytes=1024*1024*1024}) {
  const manifests=new Map(),sources=new Map(),offers=new Map(),downloads=new Map(),sendQueues=new Map(),queueCounts=new Map(),activeSends=new Set();let closed=false;
  if(!Number.isFinite(requestTimeoutMs)||requestTimeoutMs<=0||!Number.isSafeInteger(maxFileBytes)||maxFileBytes<0)throw new TypeError('Invalid file service limits');
+ if(!Number.isInteger(requestWindow)||requestWindow<1||requestWindow>8||!Number.isInteger(maxAttemptsPerPeer)||maxAttemptsPerPeer<1||maxAttemptsPerPeer>3)throw new TypeError('Invalid file request window or retry limit');
  const check=id=>{if(closed)throw new Error('File service closed');const m=manifests.get(id);if(!m)throw new Error('Unknown file');if(!allowed(id,m.distributionId))throw new Error('Distribution revoked');return m;};
  const packet=(to,sys,file)=>core.command('SEND_DM',{to,sys,file});
  async function publish(file,{name=file?.name||'file',type=file?.type||'application/octet-stream',chunkSize=16384,distributionId=''}={}){
@@ -29,19 +30,22 @@ export function createFileDistribution({core,crypto=globalThis.crypto,emit=()=>{
  }
  function queueChunk(to,id,index){if((queueCounts.get(to)||0)>=16)return;queueCounts.set(to,(queueCounts.get(to)||0)+1);const previous=sendQueues.get(to)||Promise.resolve();const next=previous.catch(()=>{}).then(()=>sendChunk(to,id,index));sendQueues.set(to,next);next.catch(error=>emit('fileError',{id,from:to,error:error.message})).finally(()=>{queueCounts.set(to,Math.max(0,(queueCounts.get(to)||1)-1));if(sendQueues.get(to)===next)sendQueues.delete(to);});}
  async function request(id,{peers,signal,indexes}={}){
-  const m=check(id);if(!Array.isArray(peers)||!peers.length||peers.some(p=>! /^[0-9a-f]{16}$/.test(p)))throw new TypeError('Supply connected peer IDs');if(downloads.has(id))throw new Error('File download already active');if(signal?.aborted)throw new Error('File download aborted');
+  const m=check(id);if(!Array.isArray(peers)||!peers.length||peers.length>16||peers.some(p=>! /^[0-9a-f]{16}$/.test(p)))throw new TypeError('Supply connected peer IDs');if(downloads.has(id))throw new Error('File download already active');if(signal?.aborted)throw new Error('File download aborted');
   if(indexes!==undefined&&(!Array.isArray(indexes)||indexes.some(i=>!Number.isInteger(i)||i<0||i>=m.total)))throw new TypeError('Invalid chunk indexes');
   const wanted=new Set(indexes??Array.from({length:m.total},(_,i)=>i));
   const have=new Set();for(const i of wanted){const bytes=await chunkStore.get(id,i);if(bytes&&bytes.byteLength===Math.min(m.chunkSize,m.size-i*m.chunkSize)&&await digest(bytes,crypto)===m.hashes[i])have.add(i);}
   check(id);
-  return new Promise((resolve,reject)=>{const d={m,wanted,partial:indexes!==undefined,peers:[...new Set(peers)],have,pending:new Map(),attempts:new Map(),resolve,reject,signal,abort:()=>fail(id,new Error('File download aborted'))};downloads.set(id,d);signal?.addEventListener('abort',d.abort,{once:true});if(signal?.aborted){d.abort();return;}pump(id);});
+  return new Promise((resolve,reject)=>{const d={m,wanted,partial:indexes!==undefined,peers:[...new Set(peers)],have,startedAt:performance.now(),verifiedBytes:0,verificationMs:0,pending:new Map(),attempts:new Map(),resolve,reject,signal,abort:()=>fail(id,new Error('File download aborted'))};downloads.set(id,d);signal?.addEventListener('abort',d.abort,{once:true});if(signal?.aborted){d.abort();return;}pump(id);});
  }
  function fail(id,error){const d=downloads.get(id);if(!d)return;downloads.delete(id);for(const p of d.pending.values())clearTimeout(p.timer);d.signal?.removeEventListener('abort',d.abort);d.reject(error);}
  async function complete(id){const d=downloads.get(id);if(!d)return;try{check(id);const parts=[];for(const i of [...d.wanted].sort((a,b)=>a-b)){const bytes=await chunkStore.get(id,i);if(!bytes||await digest(bytes,crypto)!==d.m.hashes[i])throw new Error('Stored file chunk failed verification');parts.push(bytes);}check(id);if(downloads.get(id)!==d)return;downloads.delete(id);d.signal?.removeEventListener('abort',d.abort);if(d.partial){const indexes=[...d.wanted].sort((a,b)=>a-b);emit('fileChunksComplete',{id,indexes});d.resolve({id,indexes});return;}const blob=new Blob(parts,{type:d.m.type});emit('fileComplete',{id,size:blob.size});d.resolve(blob);}catch(error){fail(id,error);}}
  function pump(id){const d=downloads.get(id);if(!d)return;try{check(id);}catch(e){fail(id,e);return;}if(d.have.size===d.wanted.size){if(!d.completing){d.completing=true;void complete(id);}return;}
-  for(const peer of d.peers){if([...d.pending.values()].some(p=>p.peer===peer))continue;let index=-1;for(let i=0;i<d.m.total;i++)if(d.wanted.has(i)&&!d.have.has(i)&&!d.pending.has(i)&&!d.attempts.get(i)?.has(peer)){index=i;break;}if(index<0)continue;
-   if(!d.attempts.has(index))d.attempts.set(index,new Set());d.attempts.get(index).add(peer);
-   const timer=setTimeout(()=>{if(downloads.get(id)!==d)return;d.pending.delete(index);pump(id);},requestTimeoutMs);d.pending.set(index,{peer,timer});packet(peer,'PHANTOM_FILE_REQUEST',{id,index});
+  for(const peer of d.peers){let outstanding=[...d.pending.values()].filter(p=>p.peer===peer).length;
+   while(outstanding<requestWindow){let index=-1;for(let i=0;i<d.m.total;i++)if(d.wanted.has(i)&&!d.have.has(i)&&!d.pending.has(i)&&(d.attempts.get(i)?.get(peer)||0)<maxAttemptsPerPeer){index=i;break;}if(index<0)break;
+    if(!d.attempts.has(index))d.attempts.set(index,new Map());const attempts=d.attempts.get(index);attempts.set(peer,(attempts.get(peer)||0)+1);
+    const pending={peer,processing:false};pending.timer=setTimeout(()=>{if(downloads.get(id)!==d||d.pending.get(index)!==pending)return;d.pending.delete(index);emit('fileRetry',{id,index,from:peer,attempt:attempts.get(peer)});pump(id);},requestTimeoutMs);
+    d.pending.set(index,pending);outstanding++;packet(peer,'PHANTOM_FILE_REQUEST',{id,index});
+   }
   }
   if(!d.pending.size&&d.have.size<d.wanted.size)fail(id,new Error('No source supplied the remaining chunks; retry to resume'));
  }
@@ -52,10 +56,10 @@ export function createFileDistribution({core,crypto=globalThis.crypto,emit=()=>{
   }
   if(event.type==='INCOMING_MSG'&&p.sys==='PHANTOM_FILE_MANIFEST'){const row=offers.get(from+':'+f?.id);if(!row||!Array.isArray(f.hashes)||f.hashes.length>64||!Number.isInteger(f.offset)||f.offset<0||f.offset+f.hashes.length>row.m.total||f.hashes.some(h=>! /^[0-9a-f]{64}$/.test(h)))return;for(let i=0;i<f.hashes.length;i++)row.hashes.set(f.offset+i,f.hashes[i]);await finishManifest(from,row);return;}
   if(event.type==='INCOMING_MSG'&&p.sys==='PHANTOM_FILE_REQUEST'){if(manifests.has(f?.id)&&allowed(f.id,manifests.get(f.id).distributionId))queueChunk(from,f.id,f.index);return;}
-  if(event.type==='INCOMING_MSG'&&p.sys==='PHANTOM_FILE_MISSING'){const d=downloads.get(f?.id),pending=d?.pending.get(f.index);if(pending?.peer===from){clearTimeout(pending.timer);d.pending.delete(f.index);pump(f.id);}return;}
-  if(event.type==='FILE_BIN_CHUNK'){const d=downloads.get(f?.id),pending=d?.pending.get(f.index);if(!d||pending?.peer!==from)return;check(f.id);
-   if(!(p.bytes instanceof ArrayBuffer)||p.bytes.byteLength!==Math.min(d.m.chunkSize,d.m.size-f.index*d.m.chunkSize)||await digest(p.bytes,crypto)!==d.m.hashes[f.index]){clearTimeout(pending.timer);d.pending.delete(f.index);emit('fileError',{id:f.id,from,error:'Chunk failed verification'});pump(f.id);return;}
-   check(f.id);if(downloads.get(f.id)!==d||d.pending.get(f.index)!==pending)return;await chunkStore.put(f.id,f.index,p.bytes);check(f.id);if(downloads.get(f.id)!==d||d.pending.get(f.index)!==pending)return;clearTimeout(pending.timer);d.pending.delete(f.index);d.have.add(f.index);emit('fileProgress',{id:f.id,index:f.index,bytes:p.bytes.byteLength,received:d.have.size,total:d.m.total,from});pump(f.id);
+  if(event.type==='INCOMING_MSG'&&p.sys==='PHANTOM_FILE_MISSING'){const d=downloads.get(f?.id),pending=d?.pending.get(f.index);if(pending?.peer===from){d.attempts.get(f.index)?.set(from,maxAttemptsPerPeer);clearTimeout(pending.timer);d.pending.delete(f.index);pump(f.id);}return;}
+  if(event.type==='FILE_BIN_CHUNK'){const d=downloads.get(f?.id),pending=d?.pending.get(f.index);if(!d||pending?.peer!==from||pending.processing)return;pending.processing=true;const verificationStart=performance.now();check(f.id);
+   if(!(p.bytes instanceof ArrayBuffer)||p.bytes.byteLength!==Math.min(d.m.chunkSize,d.m.size-f.index*d.m.chunkSize)||await digest(p.bytes,crypto)!==d.m.hashes[f.index]){if(downloads.get(f.id)!==d||d.pending.get(f.index)!==pending)return;d.attempts.get(f.index)?.set(from,maxAttemptsPerPeer);clearTimeout(pending.timer);d.pending.delete(f.index);emit('fileError',{id:f.id,from,error:'Chunk failed verification'});pump(f.id);return;}
+   check(f.id);if(downloads.get(f.id)!==d||d.pending.get(f.index)!==pending)return;await chunkStore.put(f.id,f.index,p.bytes);check(f.id);if(downloads.get(f.id)!==d||d.pending.get(f.index)!==pending)return;clearTimeout(pending.timer);d.pending.delete(f.index);d.have.add(f.index);d.verifiedBytes+=p.bytes.byteLength;d.verificationMs+=performance.now()-verificationStart;emit('fileProgress',{id:f.id,index:f.index,bytes:p.bytes.byteLength,verifiedBytes:d.verifiedBytes,elapsedMs:performance.now()-d.startedAt,verificationMs:d.verificationMs,inFlight:d.pending.size,received:d.have.size,total:d.m.total,from});pump(f.id);
   }
  }
  const off=core.onEvent(e=>{void handle(e).catch(error=>{if(e.payload?.file?.id)fail(e.payload.file.id,error);emit('fileError',{error:error.message});});});

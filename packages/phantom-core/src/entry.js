@@ -42,7 +42,7 @@ export function createPhantomEntry({openContext, relays, doorways, adminPublicKe
     const offState=core.onState(state=>{adminGate.observe(adminContext());config.onNetworkState?.(state);if(retired)lifecycle?.sync();else emit('state',state);});
     const active=()=>{if(closed)throw new Error('Network closed');if(retired)throw new Error('Network permanently retired');};
     files=createFileDistribution({core,crypto:config.runtime?.crypto??globalThis.crypto,emit,
-      allowed:(id,target)=>!retired&&!closed&&!lifecycle?.isRevoked(id)&&(!target||!lifecycle?.isRevoked(target)),...Object.fromEntries(Object.entries(config.files??{}).filter(([key])=>['chunkStore','requestTimeoutMs','maxFileBytes'].includes(key)))});
+      allowed:(id,target)=>!retired&&!closed&&!lifecycle?.isRevoked(id)&&(!target||!lifecycle?.isRevoked(target)),...Object.fromEntries(Object.entries(config.files??{}).filter(([key])=>['chunkStore','requestTimeoutMs','requestWindow','maxAttemptsPerPeer','maxFileBytes'].includes(key)))});
     if(config.distribution)distribution=createNetworkDistribution({core,networkId:context.networkId,adminPublicKey:context.adminPublicKey,lifecycle,runtime:config.runtime,emit,allowed:(id,target)=>!retired&&!closed&&!lifecycle?.isRevoked(id)&&(!target||!lifecycle?.isRevoked(target)),checkAdmin:()=>adminGate.wait(adminContext()),options:config.distribution});
     const network={invite,networkId:context.networkId,
       distributeFile:(file,options)=>{active();if(!distribution)throw new Error('Enable distribution in SDK configuration');return distribution.publish(file,options);},

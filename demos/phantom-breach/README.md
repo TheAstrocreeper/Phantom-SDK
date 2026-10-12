@@ -1,10 +1,12 @@
 # Phantom Breach
 
-An experimental two-device demo using the actual Phantom SDK. Create a room, scan its QR code, close signaling on both devices, then transfer a file chosen by the user. Signaling disconnection is optional: transfer immediately after connecting, or disconnect signaling to test the established channel. The receiver verifies each SDK chunk and independently compares a full-file SHA-256 hash before offering the file for download.
+[Open the demo](https://phantom-breach.pages.dev/)
 
-## Build and deploy
+A real Phantom SDK application: connect two screens, send a user-selected file through their WebRTC peer channel, and verify received chunks plus the full-file SHA-256. The doorway stays available for bootstrap and recovery; there is no signaling-disconnect step.
 
-From the repository root, with Node 22 or newer:
+## Build
+
+From the repository root, using Node 22 or newer:
 
 ```sh
 npm install
@@ -12,34 +14,31 @@ npm install --prefix demos/phantom-breach
 npm run build --prefix demos/phantom-breach
 ```
 
-Serve `demos/phantom-breach/dist` over HTTPS. All invitations are generated from the current page URL; there is no hard-coded host. For Cloudflare Pages, upload the three runtime assets (`index.html`, `style.css`, `app.js`) as a new project. Keep the canvas project separate.
+Host `demos/phantom-breach/dist` over HTTPS. For a Cloudflare Pages direct upload, deploy `index.html`, `style.css`, and `app.js`. Invitations use the current page URL. Keep the canvas and transfer projects separate.
 
-## Run the live test
+## Use
 
-1. On the laptop, click **Deploy network**. Scan the QR with the phone.
-2. Wait for an open peer data channel and measured round-trip replies.
-3. On either device, click **Cut signaling**. The devices exchange request/ready/commit messages through their data channel. Each calls `network.disconnectDiscovery()`, closes its monitored WebSockets, and reports isolation to its peer.
-4. Confirm both screens show zero relay sockets and the peer data channel stays open. Signaling disconnection is optional; file sending is available whenever the peer channel is open.
-5. On the phone, select a file and click **Inject payload**. Start with a small file, then test larger files up to 100 MiB.
-6. Confirm **Verified: PASS** on the receiver and **Peer verified: PASS** on the sender. Save the received file and inspect it yourself. These are separate local and peer-reported results.
-7. Wait at least a minute after the cut and repeat with a different file to look for delayed membership/recovery problems. Closing a peer page should cause the channel count to fall; there is no artificial completion animation.
+1. Create a link on the laptop and scan its QR on the phone. Startup activity stays visible.
+2. Once the peer channel is ready, the invitation disappears. Either device can select and send a file up to 100 MiB.
+3. The received bytes must pass per-chunk verification and a full-file SHA-256 comparison. Only then is Save available. Sender progress follows receiver reports.
+4. If the sender sleeps or a request exhausts its retries, keep both pages open, wake the sender, and press Resume missing pieces on the receiver. The SDK rechecks its cached pieces and requests only those missing. Cache is in memory; a reload loses it.
 
-## What is real
+The app requests screen wake lock on both active endpoints when supported and reacquires it when the page becomes visible. Browsers can deny or release this request. This does not guarantee background execution; keep the pages visible.
 
-- Network creation, admission state, peer invitation, messaging, file offers, chunks, and verification run through workspace SDK source.
-- `relay-monitor.js` counts actual browser WebSockets and forbids every future constructor after the cut. `disconnectDiscovery()` closes the core doorway and permanently prevents that core from re-opening it. This operation does not call network close or intentionally tear down existing RTC channels.
-- Latency is application round-trip time measured with `performance.now()`, including both devices' event loops. It is not ICE latency.
-- Matrix cells illuminate only for `fileProgress` emitted after the SDK verifies and stores a chunk. Sender cells reflect receiver acknowledgments, rather than pretending a successful send is successful delivery. More than 1,500 chunks are grouped into cells; the exact piece count is shown separately. At 64 KiB per piece, 100 MiB is 1,600 pieces.
-- Full-file hashes are computed from the selected Blob and the reconstructed received Blob. A peer-supplied hash proves consistency with that peer's announcement, not independent authenticity or trust in file contents.
+## Transfer loop and measurements
 
-## Scope and validation
+The SDK file service defaults to `requestWindow: 8` (configurable 1–8) and `maxAttemptsPerPeer: 2` (1–3). A bounded window replaces one-request-per-peer scheduling. Timeouts can retry that peer; missing or corrupt responses exhaust that peer for that piece. Sender queues remain serialized and bounded; core WebRTC send-buffer backpressure and ordered metadata/binary pairing are retained. Binary payloads are ArrayBuffers, not encoded strings.
 
-This initial version uses **open admission and Nostr discovery**, matching the working canvas setup. It does not use the Cloudflare Worker relay template, developer credentials, or a server connection challenge. Anyone possessing an invitation can join. Cloudflare can host the static app, but does not receive the file payload through this application's transfer path.
+Verification and cache storage finish before `fileProgress` is emitted. Progress includes verified byte count, elapsed milliseconds, aggregate chunk verification/storage milliseconds, and requests in flight. This timing is not CPU profiling and may overlap when checks run concurrently.
 
-Automated checks cover real-core discovery closure/no reopening, socket closure/constructor blocking, and the actual file service transferring verified bytes on a simulated data-channel transport. These checks do **not** prove browser WebRTC survival after the cut. The user reported the laptop/phone demo working, and a screenshot confirms zero local relay sockets with one open peer data channel and continued round-trip replies after both sides cut signaling. Transfer success was user-reported; no independent transfer trace or delayed recovery test was captured. There is no TURN service or guarantee for every network.
+The receiver's rate is average newly verified bytes per second from the start of its current request, including stalls. Sender rate uses receiver reports and elapsed time since the offer (or resume notification); it is not NIC throughput. Preparation time and final full-file hashing are logged separately. Cached pieces do not count as newly transferred bytes on resume. UI acknowledgments are batched every 100 ms or 32 pieces, capped at 64 indexes, and matrix redraws are coalesced to animation frames. Actual request/verification events drive the visualization.
 
-No relay server is shut down: only these clients' signaling sockets are closed. Losing or renegotiating an RTC channel may require a new room. The app keeps files in memory, limits file size to 100 MiB, and automatically requests the received file after injection. Nothing executes the file. Large-file hashing and reassembly may be expensive on mobile.
+The screen shows real verification: a matching peer-announced hash establishes file consistency with that announcement, not trust in file contents. It never executes a received file.
 
-## Interface flow
+## Validation and limits
 
-Numbered steps guide connection, file sending, and verification. Startup activity and live traces stay visible while relays initialize. When a peer data channel opens, the invitation and callsign controls disappear. A compact desktop grid keeps the workflow together on standard laptop displays; narrower or shorter screens can scroll rather than hide controls. The optional signaling disconnect explains the doorway’s connection/recovery role.
+Automated tests exercise bounded pipeline scheduling, dropped-response retry, cached resume requesting only missing pieces, and exact bytes reconstructed through the real SDK file service on simulated transports. A controlled 20 ms request/response-latency fixture measured 677 ms with window 1 versus 94 ms with window 8 for 32 KiB. This is a fixture result, not a browser or 5G throughput guarantee.
+
+Earlier single-request builds were user-tested across home Wi-Fi and phone 5G: a 33,123,443-byte video completed with 506/506 verified pieces and matching full-file hash. Another transfer with signaling closed reached 498/499 pieces before request exhaustion; phone screen timeout was suspected, not established. The pipelined build requires a new real-device measurement with the same file and devices before claiming a real speed improvement.
+
+This is open admission with Nostr discovery, not the restricted Cloudflare Worker. Cloudflare serves the static page. No file bucket is used, no TURN service is configured, and connectivity is not guaranteed on every network. No private file or authority credential is embedded in the build. Large-file hashing and reassembly use browser memory. Desktop layout is compact; phones and short screens may scroll to keep controls usable. SDK diagnostics are available in the inspector.
