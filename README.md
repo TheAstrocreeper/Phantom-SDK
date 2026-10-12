@@ -40,6 +40,10 @@ Run the focused checks with `npm test`.
 
 This repository contains SDK source and focused admission tests, without demo pages or generated test reports. Package names are local workspace names; the SDK is not published on npm.
 
+## Example app
+
+The [shared canvas](examples/shared-canvas/README.md) uses the actual SDK for laptop/phone drawing, QR invitations, peer messaging, and live connection inspection.
+
 ## Relay template
 
 A [Cloudflare doorway template](templates/cloudflare-doorway/README.md) provides proof-preserving WebSocket discovery/signaling with hibernation support and deployment instructions.
