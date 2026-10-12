@@ -51,7 +51,7 @@ async function start(){
  try{
   const next=await openCanvas({invite:joiningInvite,name:$('name').value.trim()||'Sketcher',board,onChange:render,onStatus:status,onTrace:trace,signal:activeController.signal});
   session=next;link=await shareLink(next.network.invite,location.href.split('#')[0]);
-  history.replaceState(null,'',new URL(link).hash); // URL always opens this same room.
+  history.replaceState(null,'',link); // URL always opens this same room.
   $('invite-link').value=link;await QRCode.toCanvas($('qr'),link,{width:230,margin:2,errorCorrectionLevel:'M',color:{dark:'#181523',light:'#ffffff'}});
   $('invite-box').hidden=false;$('start').hidden=true;$('name').disabled=true;
   feedback(joiningInvite?'You joined. Draw with the other screen.':'Room created. Scan the QR with your phone.');status(next.network.getState());
@@ -60,8 +60,8 @@ async function start(){
 }
 $('start').onclick=start;
 $('copy').onclick=async()=>{try{await navigator.clipboard.writeText(link);feedback('Invite copied. Open it on another screen.');}catch{$('invite-link').focus();$('invite-link').select();feedback('Select and copy the invitation above.');}};
-$('leave').onclick=()=>{stop();session?.close();session=null;joiningInvite=null;link='';history.replaceState(null,'',location.pathname+location.search);$('invite-box').hidden=true;$('start').hidden=false;$('start').textContent='Create a room ↗';$('name').disabled=false;feedback('You left. Your local sketch is still here.');status({});};
+$('leave').onclick=()=>{stop();session?.close();session=null;joiningInvite=null;link='';const clean=new URL(location.href);clean.hash='';clean.searchParams.delete('p');clean.searchParams.delete('invite');history.replaceState(null,'',clean.href);$('invite-box').hidden=true;$('start').hidden=false;$('start').textContent='Create a room ↗';$('name').disabled=false;feedback('You left. Your local sketch is still here.');status({});};
 $('inspect').onclick=()=>{const expanded=$('inspect').getAttribute('aria-expanded')!=='true';$('inspect').setAttribute('aria-expanded',String(expanded));$('inspector-body').hidden=!expanded;$('inspect-label').textContent=expanded?'Close inspector −':'Inspect live network +';};
 window.addEventListener('pagehide',()=>{activeController?.abort();session?.close();});
-try{joiningInvite=await readLink(location.hash);if(joiningInvite){$('start').textContent='Join this room ↗';$('share-description').textContent='An invitation is ready. Join to draw with the other screen.';await start();}}catch(e){feedback(e.message);}
+try{joiningInvite=await readLink(location.search,location.hash);if(joiningInvite){$('start').textContent='Join this room ↗';$('share-description').textContent='An invitation is ready. Join to draw with the other screen.';await start();}}catch(e){feedback(e.message);}
 render();

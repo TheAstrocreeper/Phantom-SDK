@@ -17,6 +17,10 @@ test('malformed coordinates and unbounded operation batches are not accepted',()
 });
 test('QR/share link round-trips the actual SDK invitation',async()=>{
  const invite=encodeInvite({networkId:'a'.repeat(64),relays:['wss://relay.example']});
- const url=await shareLink(invite,'https://example.com/canvas');assert.equal(await readLink(new URL(url).hash),invite);
+ const url=await shareLink(invite,'https://example.com/canvas');assert.equal(await readLink(new URL(url).search),invite);
  assert.equal(await readLink('#'),null);
+ assert.equal(new URL(url).hash,'');
+ assert.ok(new URL(url).searchParams.has('p'));
+ assert.equal(await readLink('', '#invite='+encodeURIComponent(invite)),invite);
+ assert.equal(await readLink('?other=value','#invite='+encodeURIComponent(invite)),invite);
 });

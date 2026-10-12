@@ -12,7 +12,7 @@ npm install --prefix examples/shared-canvas
 npm run build --prefix examples/shared-canvas
 ```
 
-Serve `examples/shared-canvas/dist` over HTTPS on a host reachable by both devices. A localhost URL on your laptop is not reachable from your phone. The QR encodes that hosted page plus a compressed, validated SDK invitation; older clients can use the ordinary invite fragment format. QR generation is local.
+Serve `examples/shared-canvas/dist` over HTTPS on a host reachable by both devices. A localhost URL on your laptop is not reachable from your phone. The QR encodes that hosted page plus a compressed, validated SDK invitation in its query string (so sign-in redirects can retain it); older clients can use the ordinary invite fragment format. QR generation is local.
 
 This example imports the workspace SDK source. `src/session.js` shows room creation/joining, peer invitation/acceptance, messaging, event subscription, and cleanup. `src/model.js` supplies bounded drawing operations, duplicate detection, deterministic clear ordering, and late-join synchronization. `src/app.js` binds pointer/touch input and the UI to those functions.
 
