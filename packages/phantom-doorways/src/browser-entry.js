@@ -8,6 +8,7 @@ import {createLegacyDoorway} from './index.js';
 import {adaptLegacyDoorway,validateDoorway} from './interface.js';
 import {createCompositeDoorway} from './composite.js';
 import {createAdmissionCheckpoint, AdmissionError} from '../../phantom-core/src/admission.js';
+import {withAdmissionDoorway} from './admission-doorway.js';
 import {parseInvite, encodeInvite} from '../../phantom-core/src/invite.js';
 /** One entry API; service selection belongs to the adapter composition layer. */
 export function createBrowserPhantom({admission,authorizationTimeoutMs=5000,adminIdentity,adminPublicKey=adminIdentity?.publicKey,controlStore,files,distribution,readAdminOrders,retireGraceMs,relays,doorways,doorwayMode='failover',doorwayAdmissionTimeoutMs=10000,adapters={},storage,WebSocket=globalThis.WebSocket,runtime=globalThis,onRelayProgress=()=>{},onDoorwayStatus=()=>{},relayFinder,relayMaxAgeMs,now,coreFactory}={}) {
@@ -40,11 +41,11 @@ export function createBrowserPhantom({admission,authorizationTimeoutMs=5000,admi
   if(types!==undefined){if(!Array.isArray(types)||types.some(t=>typeof t!=='string'))throw new TypeError('doorwayTypes must be an array of adapter types');specs=specs.filter(s=>types.includes(s.type));if(!specs.length)throw new TypeError('No invited doorway matches doorwayTypes');}
   const identity=sdkIdentity??=createNostrIdentity();
   function build(spec){let adapter;
-   if(access&&spec.type!=='nostr')throw new AdmissionError('Restricted admission currently requires a Nostr doorway');
-   if(spec.type==='nostr')adapter=createNostrDoorway({identity,relays:spec.relays,WebSocket,admission:access});
+   if(spec.type==='nostr')adapter=createNostrDoorway({identity,relays:spec.relays,WebSocket});
    else if(spec.type==='websocket')adapter=adaptLegacyDoorway(createLegacyDoorway({url:spec.url,WebSocket}));
    else adapter=adapters[spec.type]({spec:structuredClone(spec),networkId:context.networkId,identity,WebSocket,runtime});
-   return validateDoorway(adapter);
+   validateDoorway(adapter);
+   return access?withAdmissionDoorway(adapter,{...access,identity,now:now??Date.now}):adapter;
   }
   const initial=specs.map(build);
   const doorway=withNativeEntry(createCompositeDoorway({doorways:initial,mode:doorwayMode,admissionTimeoutMs:doorwayAdmissionTimeoutMs,recover:async index=>{
@@ -62,7 +63,6 @@ export function createBrowserPhantom({admission,authorizationTimeoutMs=5000,admi
   async create(options){
    const networkId=Array.from(runtime.crypto.getRandomValues(new Uint8Array(32)),b=>b.toString(16).padStart(2,'0')).join('');
    const context={networkId,adminPublicKey};const access=await preflight(context,options,'create');
-   if(access&&configuration.some(s=>s.type!=='nostr'))throw new AdmissionError('Restricted admission currently requires a Nostr doorway');
    const selected=await resolve(configuration);if(options?.signal?.aborted)throw new Error('Join aborted');
    const invite=encodeInvite({...context,doorways:selected});
    return createPhantomEntry({openContext:context=>openContext(context,undefined,access),...(coreFactory?{coreFactory}:{})}).startCreated(invite,options);

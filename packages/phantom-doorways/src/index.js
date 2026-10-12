@@ -14,3 +14,4 @@ export function createLegacyDoorway({ url, WebSocket = globalThis.WebSocket }) {
 export { createDoorway, bridgeDoorway, adaptLegacyDoorway, validateDoorway, DoorwayConfigurationError } from './interface.js';
 
 export {createHttpControlStore} from './control-store.js';
+export {withAdmissionDoorway} from './admission-doorway.js';

@@ -58,7 +58,7 @@ export function openNostrBus({roomId,identity,relays,WebSocket=globalThis.WebSoc
  connect();
  return {
   announce(fields={}){announcement={...fields,type:'ANNOUNCEMENT'};if(socket?.readyState===1)return publish(announcement);},
-  sendSignal(target,control,messageId=crypto.randomUUID(),fields={}){return publish({...fields,messageId,type:'SIGNAL',targetNostrKey:target.nostrKey,targetS7pKey:target.s7pPublicKey,control});},
+  sendSignal(target,control,messageId=crypto.randomUUID()){return publish({messageId,type:'SIGNAL',targetNostrKey:target.nostrKey,targetS7pKey:target.s7pPublicKey,control});},
   depart(fields){if(closed)return;if(socket?.readyState!==1){closed=true;generation++;socket?.close();pending.clear();return;}departureId=publish({...fields,type:'ANNOUNCEMENT',departed:true});},
   reconnect(){if(closed)throw new Error('Bus closed');generation++;socket?.close();pending.clear();index=0;connect();},
   close(){if(closed)return;closed=true;generation++;if(socket?.readyState===1)socket.send(JSON.stringify(['CLOSE',subscription]));socket?.close();pending.clear();seen.clear();}
@@ -71,7 +71,7 @@ export function openNostrRelaySet(config) {
  function submit(child,url,publication){
   if(publication.attempted.has(url))return;
   publication.attempted.add(url);
-  try{child.sendSignal(publication.target,publication.control,publication.messageId,publication.fields);}catch(error){publication.attempted.delete(url);config.onError?.(error);}
+  try{child.sendSignal(publication.target,publication.control,publication.messageId);}catch(error){publication.attempted.delete(url);config.onError?.(error);}
  }
  function receive(callback,p){const key=JSON.stringify([p.nostrKey,p.type,p.messageId||p.eventId]);if(closed||seen.has(key))return;seen.add(key);if(seen.size>4096)seen.delete(seen.values().next().value);callback?.(p);}
  for(const url of [...new Set(config.relays)]) {
@@ -88,11 +88,11 @@ export function openNostrRelaySet(config) {
  }
  return {
   announce(p){announced=p;for(const b of children)b.announce(p);},
-  sendSignal(target,control,fields={}){
+  sendSignal(target,control){
    if(closed)throw new Error('Relay set closed');
    if(!open.size)throw new Error('No open relays');
    if(publications.size>=256)throw new Error('Too many unaccepted signaling publications');
-   const p={messageId:crypto.randomUUID(),target:structuredClone(target),control:structuredClone(control),fields:structuredClone(fields),attempted:new Set()};
+   const p={messageId:crypto.randomUUID(),target:structuredClone(target),control:structuredClone(control),attempted:new Set()};
    publications.set(p.messageId,p);
    for(const [i,url] of [...new Set(config.relays)].entries())if(open.has(url))submit(children[i],url,p);
    return p.messageId;
