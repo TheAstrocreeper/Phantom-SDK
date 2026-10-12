@@ -13,13 +13,13 @@ export function createPhantomEntry({openContext, relays, doorways, adminPublicKe
     if(signal?.aborted) throw new Error('Join aborted');
     const config=await openContext(context);
     const retireGraceMs=config.retireGraceMs??30000;if(!Number.isFinite(retireGraceMs)||retireGraceMs<0||retireGraceMs>60000)throw new TypeError('Invalid retirement grace period');
-    let core,files,distribution,retireTimer,adminGate;
-    let retired=false;
+    let core,files,distribution,retireTimer,adminGate,recoveryTimer,recoveryReading=false,recoveryGeneration=0;
+    let retired=false,hasBeenAdmitted=false;
     const lifecycle=await createAdminLifecycle({networkId:context.networkId,adminPublicKey:context.adminPublicKey,
       adminIdentity:config.adminIdentity,store:config.controlStore,crypto:config.runtime?.crypto??globalThis.crypto,
       send:(record,to)=>core?.command('PHANTOM_ADMIN_SEND',{record,to}),
       emit:(type,record)=>{if(type==='revoked'){files?.stop(record.target);distribution?.stop(record.target);}emit(type,record);},
-      onRetire:()=>{retired=true;adminGate?.retire();files?.close();distribution?.close();emit('state',{...core.getState(),state:'retired',reason:'signed_network_retirement',nextAction:'none'});
+      onRetire:()=>{retired=true;recoveryGeneration++;clearTimeout(recoveryTimer);adminGate?.retire();files?.close();distribution?.close();emit('state',{...core.getState(),state:'retired',reason:'signed_network_retirement',nextAction:'none'});
         // SysCon 1 carries the order during the drain window; ordinary peers leave promptly.
         retireTimer=setTimeout(()=>{core?.dispose();},core.getState().role==='syscon1'?retireGraceMs:250);
       }});
@@ -39,7 +39,28 @@ export function createPhantomEntry({openContext, relays, doorways, adminPublicKe
       if(event.type==='INCOMING_MSG'&&!event.payload?.sys&&typeof event.payload?.text==='string') emit('message',{from:event.payload.from,text:event.payload.text});
     });
     const adminContext=()=>{const snapshot=core.snapshot?.(),c=snapshot?.concierge;if(!c)return core.getState();return {peerId:snapshot.self?.hKey,leader:c.syscon1,role:c.localRoleCandidate||c.role};};
-    const offState=core.onState(state=>{adminGate.observe(adminContext());config.onNetworkState?.(state);if(retired)lifecycle?.sync();else emit('state',state);});
+    // A recovering leaf can lose its only path to a retiring successor.
+    // Fetch retained signed controls directly; this never approves leadership.
+    function observeRecovery(state) {
+      if (closed || retired || state.state !== 'recovering') {
+        recoveryGeneration++;clearTimeout(recoveryTimer);recoveryTimer=null;return;
+      }
+      if (!hasBeenAdmitted || state.peerId===state.leader || state.peerId===state.mirror || !lifecycle || typeof config.readAdminOrders !== 'function' || recoveryReading || recoveryTimer) return;
+      const generation=recoveryGeneration,peerId=state.peerId;
+      recoveryReading=true;
+      Promise.resolve().then(()=>config.readAdminOrders({networkId:context.networkId,peerId,reason:'recovery'})).then(async orders=>{
+        if(closed||retired||generation!==recoveryGeneration)return;
+        if(!Array.isArray(orders))throw Error('Admin orders must be an array');
+        for(const order of orders){
+          if(closed||retired||generation!==recoveryGeneration)return;
+          if(!await lifecycle.apply(order))throw Error('Invalid recovery admin order');
+        }
+      }).catch(error=>{if(!closed&&!retired&&generation===recoveryGeneration)emit('controlError',{error:error.message,via:'recovery'});}).finally(()=>{
+        recoveryReading=false;
+        if(!closed&&!retired&&core.getState().state==='recovering')recoveryTimer=setTimeout(()=>{recoveryTimer=null;observeRecovery(core.getState());},1000);
+      });
+    }
+    const offState=core.onState(state=>{if(state.state==='admitted')hasBeenAdmitted=true;adminGate.observe(adminContext());observeRecovery(state);config.onNetworkState?.(state);if(retired)lifecycle?.sync();else emit('state',state);});
     const active=()=>{if(closed)throw new Error('Network closed');if(retired)throw new Error('Network permanently retired');};
     files=createFileDistribution({core,crypto:config.runtime?.crypto??globalThis.crypto,emit,
       allowed:(id,target)=>!retired&&!closed&&!lifecycle?.isRevoked(id)&&(!target||!lifecycle?.isRevoked(target)),...Object.fromEntries(Object.entries(config.files??{}).filter(([key])=>['chunkStore','requestTimeoutMs','requestWindow','maxAttemptsPerPeer','maxFileBytes'].includes(key)))});
@@ -64,7 +85,7 @@ export function createPhantomEntry({openContext, relays, doorways, adminPublicKe
       disconnectDiscovery:()=>{active();core.disconnectDiscovery();},
       getState:()=>retired?{...core.getState(),state:'retired',reason:'signed_network_retirement',nextAction:'none'}:core.getState(),snapshot:()=>core.snapshot(),getPeers:()=>structuredClone(peers),
       invitePeer:id=>{active();return core.invite(id);},acceptPeer:id=>{active();return core.accept(id);},send:(id,text)=>{active();return core.send(id,text);},
-      close(){if(closed)return;closed=true;clearTimeout(retireTimer);distribution?.close();files.close();offEvent();offState();core.dispose();adminGate.close();handlers.clear();}
+      close(){if(closed)return;closed=true;recoveryGeneration++;clearTimeout(recoveryTimer);clearTimeout(retireTimer);distribution?.close();files.close();offEvent();offState();core.dispose();adminGate.close();handlers.clear();}
     };
     try {
       await new Promise((resolve,reject)=>{

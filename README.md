@@ -33,7 +33,9 @@ The default entry uses Nostr relay discovery. Developers can configure other doo
 
 Applications can configure an admission checkpoint before relay discovery and peer admission. The developer owns the access rules; Phantom enforces credential verification and expiry. See [authorization integration](docs/admission.md). Without an `admission` configuration, networks retain open admission.
 
-Run the focused checks with `npm test`.
+Run the regression checks with `npm test`.
+
+The browser entry forwards wake events to the engine. Applications with an isolated authority store can recover retained signed orders through their admin hook. See [browser lifecycle and retained controls](docs/lifecycle.md).
 
 ## Source
 

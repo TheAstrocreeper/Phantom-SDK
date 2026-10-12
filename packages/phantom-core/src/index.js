@@ -31,7 +31,7 @@ function eventSurface() {
 /** Public peer-network facade with injectable transport and runtime. */
 export function createPhantom({ doorway, origin = 'https://phantom.local',
     avatar = null, storage = memoryStorage(), sessionStorage = memoryStorage(),
-    runtime = globalThis, canSendFile = () => true, authorizeSyscon1 = () => true, canAdmitPeer = () => true } = {}) {
+    runtime = globalThis, observeBrowserLifecycle = false, canSendFile = () => true, authorizeSyscon1 = () => true, canAdmitPeer = () => true } = {}) {
   if (['phantom-doorway-v1','phantom-doorway-v2'].includes(doorway?.protocol)) doorway = bridgeDoorway(doorway);
   if (!isConciergeProtocol(doorway?.protocol)) {
     throw new Error('A Phantom concierge doorway is required');
@@ -50,7 +50,7 @@ export function createPhantom({ doorway, origin = 'https://phantom.local',
   let networkState={state:"idle",reason:"not_joined",nextAction:"join",peerId:null};
   let networkSignature=JSON.stringify(networkState);
   const window = eventSurface();
-  const document = { ...eventSurface(), visibilityState: 'visible' };
+  const document = { ...eventSurface(), visibilityState: observeBrowserLifecycle ? runtime.document?.visibilityState ?? 'visible' : 'visible' };
   const timeouts = new Set();
   const intervals = new Set();
   let disposed = false;
@@ -96,6 +96,23 @@ export function createPhantom({ doorway, origin = 'https://phantom.local',
     clearInterval(id) { timers.clearInterval(id); intervals.delete(id); },
   };
   const engine = createNetworkEngine(host);
+  const lifecycleBindings = [];
+  if (observeBrowserLifecycle) {
+    const browserWindow = runtime.window ?? runtime;
+    function bind(target, type, callback) {
+      if (typeof target?.addEventListener !== 'function' || typeof target?.removeEventListener !== 'function') return;
+      target.addEventListener(type, callback);
+      lifecycleBindings.push(() => target.removeEventListener(type, callback));
+    }
+    for (const type of ['online', 'pageshow']) bind(browserWindow, type, () => {
+      if (!disposed) window.dispatchEvent({type});
+    });
+    bind(runtime.document, 'visibilitychange', () => {
+      if (disposed) return;
+      document.visibilityState = runtime.document.visibilityState;
+      document.dispatchEvent({type:'visibilitychange'});
+    });
+  }
   function command(type, payload) {
     if (disposed) throw new Error('Phantom instance disposed');
     engine.command(normalizeCommand(type), payload);
@@ -163,6 +180,7 @@ export function createPhantom({ doorway, origin = 'https://phantom.local',
     command,
     dispose() {
       if (disposed) return;
+      for (const unbind of lifecycleBindings.splice(0)) unbind();
       engine.dispose();
       disposed = true;
       cancelJoin?.();

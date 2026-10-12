@@ -56,7 +56,7 @@ export function createBrowserPhantom({admission,authorizationTimeoutMs=5000,admi
    // Keep original invite coordinates while adding discovered alternatives.
    return build({...spec,relays:expanded});
   }}),{onStatus:onDoorwayStatus});
-  return {identity:{version:1,id:identity.publicKey},runtime,doorway,canAdmitPeer:access?peer=>access.checkpoint.allows(peer):undefined,adminIdentity,controlStore:context.adminPublicKey?(controlStore??createControlStore(storage)):undefined,files,distribution,readAdminOrders,retireGraceMs,onNetworkState:state=>doorway.observeNetworkState(state)};
+  return {identity:{version:1,id:identity.publicKey},runtime,observeBrowserLifecycle:true,doorway,canAdmitPeer:access?peer=>access.checkpoint.allows(peer):undefined,adminIdentity,controlStore:context.adminPublicKey?(controlStore??createControlStore(storage)):undefined,files,distribution,readAdminOrders,retireGraceMs,onNetworkState:state=>doorway.observeNetworkState(state)};
  }
  return {
   async join(invite,options){const context=parseInvite(invite);const access=await preflight(context,options,'join');return createPhantomEntry({openContext:context=>openContext(context,options?.doorwayTypes,access),...(coreFactory?{coreFactory}:{})}).join(invite,options);},
