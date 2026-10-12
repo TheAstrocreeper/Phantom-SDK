@@ -1,5 +1,7 @@
 # Shared canvas
 
+**[Try the live demo](https://phantom-canvas.pages.dev/)** — no account login required.
+
 A small, real application of the Phantom SDK: create a room, scan its QR code on a phone, and draw from either screen. The network inspector reports actual SDK state, peers, open data channels, and application message counts.
 
 ## Build
