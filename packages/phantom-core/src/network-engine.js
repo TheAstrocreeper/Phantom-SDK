@@ -4868,6 +4868,16 @@ export function createNetworkEngine(host) {
     if (role === "syscon1" && self === one && key === two) return "opener";
     if (role === "syscon2" && self === two && key === one) return "acceptor";
 
+    // A candidate mirror has not committed authority yet, but its bootstrap
+    // edge must still have one opener. The advertised leader owns this edge;
+    // treating the candidate as an ordinary peer would make both ends offer.
+    // This selects transport direction only; it does not admit or promote self.
+    if (
+      concierge.bootstrapAdmission === true &&
+      self === phantomShortKey(concierge.cfConciergeSyscon2) &&
+      key === phantomShortKey(concierge.cfConciergeSyscon1)
+    ) return "acceptor";
+
     // Every ordinary peer owns exactly one SYS tether to its authoritative
     // target. No peer may open a SYS edge to another ordinary peer.
     if (role === "peer") {
