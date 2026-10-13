@@ -1,3 +1,4 @@
+import {createCandidateInbox} from './candidate-inbox.js';
 import {waitForChannelDrain} from './channel-drain.js';
 import {createSignalQueue} from './signal-queue.js';
 import {COMPATIBILITY_WIRE} from './compatibility.js';
@@ -480,7 +481,6 @@ export function createNetworkEngine(host) {
     const incomingBootId = String(observation.bootId || "");
     const incomingEndpointId = String(observation.endpointId || "");
     const incomingAttemptId = String(observation.attemptId || "");
-    const signalType = String(observation.signalType || "");
     const bindCurrent = observation.bindCurrent === true;
     const via = String(observation.via || "remote_incarnation");
 
@@ -507,20 +507,12 @@ export function createNetworkEngine(host) {
       !currentPipeOpen
     );
 
-    const offerAttemptChanged = !!(
-      signalType === "rtc_offer" &&
-      incomingAttemptId &&
-      currentAttemptId &&
-      incomingAttemptId !== currentAttemptId &&
-      !currentPipeOpen
-    );
-
     if (incomingBootId) phantomRemoteBootIds.set(key, incomingBootId);
     if (incomingEndpointId) {
       phantomRemoteEndpointIds.set(key, incomingEndpointId);
     }
 
-    const changed = bootChanged || endpointChanged || offerAttemptChanged;
+    const changed = bootChanged || endpointChanged;
     const committed = phantomCommittedMember(key);
 
     if (!changed) {
@@ -8299,6 +8291,7 @@ export function createNetworkEngine(host) {
     dc.onopen = () => {
       const ent = phantomSysPeers.get(key);
       if (!ent || ent.sysdc !== dc) return;
+      phantomEarlyRtcIce.drop("sys:" + key);
       completeSysBirth(ent);
       sdkSysBirthFailures.delete(key);
       if (ent) {
@@ -9068,6 +9061,7 @@ export function createNetworkEngine(host) {
     phantomChatPeers.set(k, ent);
 
     pc.onicecandidate = (ev) => {
+      if (phantomChatPeers.get(k) !== ent) return;
       const c = ev?.candidate;
 
       if (c) {
@@ -9086,6 +9080,7 @@ export function createNetworkEngine(host) {
     };
 
     pc.ondatachannel = (ev) => {
+      if (phantomChatPeers.get(k) !== ent) { ev?.channel?.close(); return; }
       const ch = ev?.channel || null;
       if (!ch || String(ch.label || "") !== COMPATIBILITY_WIRE.chatChannel) return;
 
@@ -9223,6 +9218,7 @@ export function createNetworkEngine(host) {
     phantomSysPeers.set(k, ent);
 
     pc.onicecandidate = (ev) => {
+      if (phantomSysPeers.get(k) !== ent) return;
       const c = ev?.candidate;
 
       if (c) {
@@ -9244,6 +9240,7 @@ export function createNetworkEngine(host) {
     };
 
     pc.ondatachannel = (ev) => {
+      if (phantomSysPeers.get(k) !== ent) { ev?.channel?.close(); return; }
       const ch = ev?.channel || null;
       if (!ch || String(ch.label || "") !== COMPATIBILITY_WIRE.systemChannel) return;
 
@@ -9384,6 +9381,8 @@ export function createNetworkEngine(host) {
     dc.onopen = () => {
       const key = phantomShortKey(remoteHKey);
       const ent = key ? phantomChatPeers.get(key) : null;
+      if (!ent || ent.dc !== dc) return;
+      phantomEarlyRtcIce.drop("chat:" + key);
 
       if (ent) {
         ent.chatState = "open";
@@ -10186,10 +10185,10 @@ export function createNetworkEngine(host) {
   function phantomObservePeerAvailability(status) {
     const notice=status?.detail?.type==='peer_available'?status.detail:status;
     if(notice?.type!=='peer_available'||notice.roomId!==videoId)return false;
-    const key=phantomShortKey(notice.peerId),boot=String(notice.bootId||''),eventId=String(notice.eventId||'');
-    const token=String(notice.availabilityId||eventId);
+    const key=phantomShortKey(notice.peerId),boot=String(notice.bootId||'');
+    const token=String(notice.availabilityId||'');
     if(!key||!phantomCommittedMember(key)||phantomPendingTerminalExits.has(key)||phantomSysReplacementTerminal(key)||
-       !host.canAdmitPeer(key)||!/^[0-9a-f]{64}$/.test(eventId)||!token||token.length>128||
+       !host.canAdmitPeer(key)||notice.verified!==true||!token||token.length>128||
        !boot||boot!==phantomRemoteBootIds.get(key))return false;
     const duplicate=sdkSysRecoveryAvailability.get(key)===token;
     sdkSysRecoveryAvailability.set(key,token);
@@ -10819,6 +10818,7 @@ export function createNetworkEngine(host) {
   }
 
   const phantomInboundRtcQueue = createSignalQueue();
+  const phantomEarlyRtcIce = createCandidateInbox();
   function phantomQueueInboundRtc(fromHKey, meta, kind, apply) {
     const key=phantomShortKey(fromHKey),pipe=phantomRtcPipeFromMeta(meta),label=String(kind||'signal');
     if(!key)return Promise.resolve(false);
@@ -11036,6 +11036,10 @@ export function createNetworkEngine(host) {
       }
     }
 
+    ent.pendingRemoteIce.push(...phantomEarlyRtcIce.take(
+      pipe + ":" + fromKey, String(meta.bootId || ""),
+      String((pipe === "sys" ? meta.sysAttemptId : meta.chatAttemptId) || ""),
+    ));
     await pc.setRemoteDescription(offer);
     await phantomFlushInboundRtcIce(
       fromKey,
@@ -11218,9 +11222,15 @@ export function createNetworkEngine(host) {
       const currentAttemptId = String(ent?.chatAttemptId || "");
       if (
         incomingAttemptId &&
-        currentAttemptId &&
         incomingAttemptId !== currentAttemptId
       ) {
+        if (!phantomOwnsChatPipeOffer(key) && ent.dc?.readyState !== "open" &&
+            phantomRelationshipIsAccepted(phantomRelationshipGet(key)) &&
+            String(meta.bootId || "") === phantomRemoteBootIds.get(key)) {
+          const retained = phantomEarlyRtcIce.put(pipe + ":" + key, String(meta.bootId), incomingAttemptId, cand);
+          emitSnapshot(retained ? "chat_rtc_ice_waiting_for_offer" : "chat_rtc_ice_inbox_full");
+          return retained;
+        }
         emitSnapshot("chat_rtc_ice_ignored_stale_attempt");
         return false;
       }
@@ -11237,6 +11247,16 @@ export function createNetworkEngine(host) {
         currentAttemptId &&
         incomingAttemptId !== currentAttemptId
       ) {
+        // An acceptor can receive candidates before their offer through any
+        // relay. Retain bounded candidate hints until the offer owner is validated; never
+        // attach them to the previous PC or reset membership/retry authority.
+        if (!phantomHasOpenSysPipe(key) && !phantomSysReplacementTerminal(key) &&
+            host.canAdmitPeer(key) && String(meta.bootId || "") &&
+            (!phantomRemoteBootIds.get(key) || String(meta.bootId) === phantomRemoteBootIds.get(key))) {
+          const retained = phantomEarlyRtcIce.put(pipe + ":" + key, String(meta.bootId), incomingAttemptId, cand);
+          emitSnapshot(retained ? "sys_rtc_ice_waiting_for_offer" : "sys_rtc_ice_inbox_full");
+          return retained;
+        }
         emitSnapshot("sys_rtc_ice_ignored_stale_transport_attempt");
         return false;
       }
@@ -11296,8 +11316,16 @@ export function createNetworkEngine(host) {
       t: now(),
       reason: reason || null,
       eventCounts: phantomEventCountRows(20),
-      recoveryResources:{...phantomInboundRtcQueue.snapshot(),availabilityReceipts:sdkSysRecoveryAvailability.size,pendingAvailability:sdkSysRecoveryPending.size},
+      recoveryResources:{...phantomInboundRtcQueue.snapshot(),...phantomEarlyRtcIce.snapshot(),availabilityReceipts:sdkSysRecoveryAvailability.size,pendingAvailability:sdkSysRecoveryPending.size},
 
+      sysPairs: Array.from(phantomSysPeers.values()).map(ent => ({
+        pcState: String(ent.pc?.connectionState || "missing"),
+        iceState: String(ent.pc?.iceConnectionState || "missing"),
+        signalingState: String(ent.pc?.signalingState || "missing"),
+        dcState: String(ent.sysdc?.readyState || "missing"),
+        attemptState: String(ent.attempt?.state || "missing"),
+        pendingRemoteIce: ent.pendingRemoteIce?.length || 0,
+      })),
       chatPairs: Array.from(phantomChatPeers.entries())
         .map(([hKey, ent]) => ({
           hKey: phantomShortKey(hKey),
@@ -13042,6 +13070,7 @@ export function createNetworkEngine(host) {
     phantomPendingSysRelay.clear();
     phantomPendingDm.clear();
     phantomPendingRtcIce.clear();
+    phantomEarlyRtcIce.clear();
     phantomSeenControlCids.clear();
     phantomSeenRtcSignals.clear();
 

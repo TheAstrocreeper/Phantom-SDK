@@ -46,7 +46,7 @@ export function createNostrDoorway({identity,relays,WebSocket=globalThis.WebSock
     if(changed||newlyAvailable)announce();
     // A signed, deduplicated announcement is an availability hint only.
     // The core may rearm its bounded owner attempt; it cannot infer admission.
-    sessionStatus({type:'peer_available',roomId,peerId:key,bootId:row.bootId,availabilityId:availability,eventId:p.eventId});
+    sessionStatus({type:'peer_available',verified:true,roomId,peerId:key,bootId:row.bootId,availabilityId:availability,eventId:p.eventId});
    },
    onSignal:p=>{
     if(closed)return;
