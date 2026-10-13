@@ -3,7 +3,7 @@ import {createAdminIdentity,createAdminController} from '../../packages/phantom-
 
 /** The browser and automated tests run the same SDK scenario. No mock distribution algorithm. */
 export async function runDistributionTest({endpoint='',relays=[],useNostr=true,sdkFactory=createBrowserPhantom,
- WebSocket=globalThis.WebSocket,runtime=globalThis,signal,onUpdate=()=>{},deadlineMs=90000,transportRecoveryGraceMs,large=false,transferDeadlineMs=600000}={}){
+ WebSocket=globalThis.WebSocket,runtime=globalThis,signal,onUpdate=()=>{},deadlineMs=45000,large=false,transferDeadlineMs=600000}={}){
  const report={format:'phantom-distribution-browser-v2',build:'large-distribution-1',startedAt:new Date().toISOString(),passed:false,steps:[],checks:[],metrics:{adminChecks:0,jobs:0,peakConnections:0},scope:'Four SDK clients in one browser. Real browser WebRTC when run in the page; does not verify separate-device NAT or internet-scale performance.'};
  const peers=[];let monitor,progressId;
  const storage=()=>{const m=new Map();return {getItem:k=>m.get(k)??null,setItem:(k,v)=>m.set(k,v)};};
@@ -22,7 +22,7 @@ export async function runDistributionTest({endpoint='',relays=[],useNostr=true,s
  await step('Four peers enter and agree on the roster',async()=>{
   for(let i=0;i<4;i++){
    const p={name:'Peer '+(i+1),completed:new Map(),active:true};peers.push(p);
-   const sdk=sdkFactory({transportRecoveryGraceMs,adminPublicKey:identity.publicKey,doorways,doorwayMode:'parallel',storage:storage(),WebSocket,runtime,
+   const sdk=sdkFactory({adminPublicKey:identity.publicKey,doorways,doorwayMode:'parallel',storage:storage(),WebSocket,runtime,
     distribution:{maxConnections:3,batchSize:large?64:4,intervalMs:100,jobTimeoutMs:large?60000:10000},
     readAdminOrders:async({networkId})=>{report.metrics.adminChecks++;return admin.getOrders(networkId);}});
    const options={name:p.name,signal,timeoutMs:deadlineMs,...(i&&useNostr&&endpoint?{doorwayTypes:i===1?['nostr','websocket']:[i===2?'websocket':'nostr']}:{})};

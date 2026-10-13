@@ -1,3 +1,5 @@
+import {waitForChannelDrain} from './channel-drain.js';
+import {createSignalQueue} from './signal-queue.js';
 import {COMPATIBILITY_WIRE} from './compatibility.js';
 import {acceptsSuccessorStatus} from './successor-status.js';
 import { canCarrySysRecovery } from './recovery-signaling.js';
@@ -1427,7 +1429,8 @@ export function createNetworkEngine(host) {
       phantomSysReplacementWindows.entries(),
     )) {
       if (
-        String(rec?.state || "") === "awaiting_doorway_absence" &&
+        ["awaiting_doorway_absence","awaiting_presence_proof"].includes(String(rec?.state || "")) &&
+        host.doorwayPresence === "live-sockets" &&
         !(host.doorwayPresence === 'live-sockets' && phantomDoorwayAdmittedPeers.has(remoteKey)) &&
         !phantomHasOpenSysPipe(remoteKey)
       ) {
@@ -3000,7 +3003,7 @@ export function createNetworkEngine(host) {
   }
 
   const PHANTOM_SYS_REPLACEMENT_MS = 10000;
-  const PHANTOM_TRANSPORT_RECOVERY_MS = host.transportRecoveryGraceMs;
+  const PHANTOM_TRANSPORT_RECOVERY_MS = 10000;
   const PHANTOM_SYS_BIRTH_RESPONSE_MS = 10000;
   const phantomSysReplacementWindows = new Map(); // hKey -> { state, timer, attemptId, bootId, startedAt, terminalAt, committedAt }
 
@@ -3041,7 +3044,7 @@ export function createNetworkEngine(host) {
     if (
       rec &&
       (String(rec.state || "") === "replacing" ||
-        String(rec.state || "") === "awaiting_doorway_absence")
+        String(rec.state || "") === "awaiting_doorway_absence" || String(rec.state || "") === "awaiting_presence_proof")
     ) {
       try {
         if (rec.timer) clearTimeout(rec.timer);
@@ -3074,7 +3077,7 @@ export function createNetworkEngine(host) {
     const state = String(rec?.state || "");
     if (
       !rec ||
-      (state !== "replacing" && state !== "awaiting_doorway_absence")
+      (state !== "replacing" && state !== "awaiting_doorway_absence" && state !== "awaiting_presence_proof")
     ) {
       return false;
     }
@@ -3109,7 +3112,7 @@ export function createNetworkEngine(host) {
     const state = String(rec?.state || "");
     if (
       !rec ||
-      (state !== "replacing" && state !== "awaiting_doorway_absence")
+      (state !== "replacing" && state !== "awaiting_doorway_absence" && state !== "awaiting_presence_proof")
     ) {
       return false;
     }
@@ -3178,6 +3181,18 @@ export function createNetworkEngine(host) {
 
     const elapsed = now() - Number(rec.startedAt || 0);
     if (elapsed < PHANTOM_TRANSPORT_RECOVERY_MS) return false;
+
+    // A timed-out pipe is not a membership exit. Discovery hints cannot
+    // establish socket absence; keep the committed member until actual
+    // departure evidence reaches the existing authority transaction.
+    if (host.doorwayPresence !== 'live-sockets' || bootstrap.state !== 'open' || ws?.readyState !== WebSocket.OPEN) {
+      if (rec.timer) clearTimeout(rec.timer);
+      rec.timer = null;
+      rec.state = "awaiting_presence_proof";
+      phantomSysReplacementWindows.set(key, rec);
+      emitSnapshot("sys_replacement_waiting_for_presence_proof");
+      return false;
+    }
 
     // Doorway visibility is corroborating liveness only. It never mutates
     // membership; it merely prevents a transient SYS fault from becoming a
@@ -3252,6 +3267,7 @@ export function createNetworkEngine(host) {
     if (
       currentState === "replacing" ||
       currentState === "awaiting_doorway_absence" ||
+      currentState === "awaiting_presence_proof" ||
       currentState === "terminal_staged" ||
       currentState === "committed"
     ) {
@@ -7563,21 +7579,7 @@ export function createNetworkEngine(host) {
   }
 
   function rtcWaitDCDrain(dc) {
-    return new Promise((resolve) => {
-      if (!dc || dc.readyState !== "open") return resolve(false);
-
-      dc.bufferedAmountLowThreshold = 512 * 1024;
-
-      if (dc.bufferedAmount < 2 * 1024 * 1024) return resolve(true);
-
-      const done = () => {
-        dc.removeEventListener("bufferedamountlow", done);
-        resolve(dc.readyState === "open");
-      };
-
-      dc.addEventListener("bufferedamountlow", done, { once: true });
-      setTimeout(done, 5000);
-    });
+    return waitForChannelDrain(dc,{schedule:setTimeout,cancel:clearTimeout});
   }
 
   async function rtcSendRawDC(remoteHKey, buf) {
@@ -9340,6 +9342,7 @@ export function createNetworkEngine(host) {
 
     const dc = ent?.sysdc || null;
     const pc = ent?.pc || null;
+    if(ent)completeSysBirth(ent);
 
     if (ent) {
       ent.sysdc = null;
@@ -10163,6 +10166,47 @@ export function createNetworkEngine(host) {
     return true;
   }
 
+  const sdkSysRecoveryAvailability=new Map(),sdkSysRecoveryPending=new Map();
+  function phantomResumeAvailableSysOwner(key) {
+    const pending=sdkSysRecoveryPending.get(key);
+    if(!pending)return false;
+    sdkSysRecoveryPending.delete(key);
+    if(phantomSessionKilling||!phantomCommittedMember(key)||phantomPendingTerminalExits.has(key)||
+       phantomSysReplacementTerminal(key)||phantomSysBirthRole(key)!=='opener'||phantomHasOpenSysPipe(key)||
+       pending.boot!==phantomRemoteBootIds.get(key))return false;
+    // A new provider availability generation supersedes an older connection
+    // attempt. It cannot change the relationship, incarnation or room owner.
+    phantomTeardownSysPeer(key,"sys_attempt_replaced_peer_available");
+    sdkSysBirthFailures.delete(key);
+    if(phantomOwnsPrimarySysState(key)){concierge.sysAttempt.faultReason='none';concierge.sysLastErr=null;}
+    emitSnapshot("sys_birth_rearmed_peer_availability");
+    void phantomEnsureSysPipe(key,"peer_available_owner_recovery");
+    return true;
+  }
+  function phantomObservePeerAvailability(status) {
+    const notice=status?.detail?.type==='peer_available'?status.detail:status;
+    if(notice?.type!=='peer_available'||notice.roomId!==videoId)return false;
+    const key=phantomShortKey(notice.peerId),boot=String(notice.bootId||''),eventId=String(notice.eventId||'');
+    const token=String(notice.availabilityId||eventId);
+    if(!key||!phantomCommittedMember(key)||phantomPendingTerminalExits.has(key)||phantomSysReplacementTerminal(key)||
+       !host.canAdmitPeer(key)||!/^[0-9a-f]{64}$/.test(eventId)||!token||token.length>128||
+       !boot||boot!==phantomRemoteBootIds.get(key))return false;
+    const duplicate=sdkSysRecoveryAvailability.get(key)===token;
+    sdkSysRecoveryAvailability.set(key,token);
+    if(sdkSysRecoveryAvailability.size>128)sdkSysRecoveryAvailability.delete(sdkSysRecoveryAvailability.keys().next().value);
+    if(duplicate||phantomSysBirthRole(key)!=='opener'||phantomHasOpenSysPipe(key)||
+       (!phantomSysReplacementWindows.has(key)&&!sdkSysBirthFailures.get(key)))return false;
+    if(!sdkSysRecoveryPending.has(key)&&sdkSysRecoveryPending.size>=128)return false;
+    const previous=sdkSysRecoveryPending.get(key);
+    sdkSysRecoveryPending.set(key,{boot,token,waiting:previous?.waiting===true});
+    const flight=sdkSysBirthFlights.get(key);
+    if(flight){
+      if(!previous?.waiting){sdkSysRecoveryPending.get(key).waiting=true;
+        flight.finally(()=>phantomResumeAvailableSysOwner(key)).catch(()=>{});}
+      return true;
+    }
+    return phantomResumeAvailableSysOwner(key);
+  }
   const sdkSysBirthFailures=new Map();
   const sdkSysBirthFlights=new Map();
   function phantomEnsureSysPipe(remoteHKey, reason = "ensure") {
@@ -10774,44 +10818,27 @@ export function createNetworkEngine(host) {
     return { key, pipe, ent };
   }
 
-  const phantomInboundRtcChains = new Map();
+  const phantomInboundRtcQueue = createSignalQueue();
   function phantomQueueInboundRtc(fromHKey, meta, kind, apply) {
-    const edge = phantomRtcEdgeForInbound(fromHKey, meta);
-    if (!edge) return Promise.resolve(false);
-
-    const { key, pipe, ent } = edge;
-    const label = String(kind || "signal");
-
-    // Queue ownership follows the peer edge, not a disposable PC. An offer
-    // can replace that PC while later offers/answers/ICE are already queued.
-    const chainKey = pipe + ":" + key;
-    const queued = Promise.resolve(phantomInboundRtcChains.get(chainKey))
-      .catch(() => {})
-      .then(async () => {
-        if(pipe === "sys") {
-          const birth=sdkSysBirthFlights.get(key);
-          if(birth)await birth.catch(()=>{});
-        }
-        const current =
-          pipe === "sys" ? phantomSysPeers.get(key) : phantomChatPeers.get(key);
-
-        if (!current || !current.pc ||
-            (current !== ent && label !== "offer" && !String(meta?.chatAttemptId || meta?.sysAttemptId || ""))) {
-          emitSnapshot(pipe + "_rtc_inbound_stale_" + label);
-          return false;
-        }
-
-        return await apply();
-      })
-      .catch((e) => {
-        concierge.lastErr =
-          pipe + "_rtc_inbound_" + label + "_failed:" + String(e?.message || e);
-        emitSnapshot(pipe + "_rtc_inbound_" + label + "_failed");
-        return false;
-      });
-
-    phantomInboundRtcChains.set(chainKey, queued);
-    return queued.finally(() => {if (phantomInboundRtcChains.get(chainKey) === queued)phantomInboundRtcChains.delete(chainKey);});
+    const key=phantomShortKey(fromHKey),pipe=phantomRtcPipeFromMeta(meta),label=String(kind||'signal');
+    if(!key)return Promise.resolve(false);
+    const captured=pipe==='sys'?phantomSysPeers.get(key):phantomChatPeers.get(key),boot=phantomBootId;
+    return phantomInboundRtcQueue.enqueue(pipe+':'+key,async()=>{
+      if(phantomSessionKilling||boot!==phantomBootId)return false;
+      if(pipe==='sys'){const birth=sdkSysBirthFlights.get(key);if(birth)await birth.catch(()=>{});}
+      if(phantomSessionKilling||boot!==phantomBootId)return false;
+      const current=pipe==='sys'?phantomSysPeers.get(key):phantomChatPeers.get(key);
+      if(label!=='offer'&&captured&&current!==captured&&!String(meta?.chatAttemptId||meta?.sysAttemptId||'')){
+        emitSnapshot(pipe+'_rtc_inbound_stale_'+label);return false;
+      }
+      // Allocation occurs only after acquiring a bounded queue slot. Offers
+      // may replace a PC; later packets use attempt IDs against that current PC.
+      const edge=phantomRtcEdgeForInbound(key,meta);if(!edge)return false;
+      try{return await apply();}catch(e){
+        concierge.lastErr=pipe+'_rtc_inbound_'+label+'_failed:'+String(e?.message||e);
+        emitSnapshot(pipe+'_rtc_inbound_'+label+'_failed');return false;
+      }
+    });
   }
 
   async function phantomFlushInboundRtcIce(
@@ -11269,6 +11296,7 @@ export function createNetworkEngine(host) {
       t: now(),
       reason: reason || null,
       eventCounts: phantomEventCountRows(20),
+      recoveryResources:{...phantomInboundRtcQueue.snapshot(),availabilityReceipts:sdkSysRecoveryAvailability.size,pendingAvailability:sdkSysRecoveryPending.size},
 
       chatPairs: Array.from(phantomChatPeers.entries())
         .map(([hKey, ent]) => ({
@@ -11436,7 +11464,7 @@ export function createNetworkEngine(host) {
           lastAt: Number(bootstrap.cfHits?.lastAt || 0),
         },
 
-        transportRecoveryGraceMs: PHANTOM_TRANSPORT_RECOVERY_MS,
+
         sysEligible: concierge.sysEligible,
         sysReady: concierge.sysReady,
         sysUnavailableReason: concierge.sysUnavailableReason,
@@ -12122,6 +12150,12 @@ export function createNetworkEngine(host) {
     }
 
     wsArmDoorwayDeadline(sock, attemptId, "connect");
+
+    sock.onstatus = status => {
+      if(ws!==sock||attemptId!==Number(bootstrap.attempts||0))return;
+      // Provider observations grant a transport attempt, never membership.
+      phantomObservePeerAvailability(status);
+    };
 
     ws.onopen = () => {
       if (attemptId !== Number(bootstrap.attempts || 0) || ws !== sock) return;
@@ -14045,6 +14079,7 @@ export function createNetworkEngine(host) {
       phantomSendRoomExitedAndTeardown(true);
       wsClose("sdk_dispose");
       rtcTeardownAll("sdk_dispose");
+      sdkSysRecoveryAvailability.clear();sdkSysRecoveryPending.clear();
     }
   };
 }

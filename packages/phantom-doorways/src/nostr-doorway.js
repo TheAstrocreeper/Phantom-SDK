@@ -7,6 +7,8 @@ export function createNostrDoorway({identity,relays,WebSocket=globalThis.WebSock
   if(blocked)throw new Error('Nostr doorway deliberately offline');
   if(peerId!==identity.publicKey.slice(0,16))throw new Error('Core identity must match Nostr-bound Ed25519 identity');
   let own=null,closed=false,epoch=0,topology='',bus,authorityHint=null;
+  let availabilityId=crypto.randomUUID(),hasOpened=false;
+  const availabilitySeen=new Map();
   const members=new Map(),routes=new Map();
   function roster() {
    if(!own||closed)return;
@@ -15,16 +17,16 @@ export function createNostrDoorway({identity,relays,WebSocket=globalThis.WebSock
    if(fingerprint!==topology){topology=fingerprint;epoch++;}
    onDiscovery({kind:'concierge_route',roomId,epoch,leader:authorityHint?.syscon1??list[0]?.hKey,mirror:authorityHint?.syscon2??list[1]?.hKey??null,peers:list});
   }
-  function announce() {if(own&&!closed)bus.announce({row:own,discoveryEpoch:epoch,...(authorityHint?.from===peerId?{authorityHint}: {})});}
+  function announce() {if(own&&!closed)bus.announce({row:own,availabilityId,discoveryEpoch:epoch,...(authorityHint?.from===peerId?{authorityHint}: {})});}
   bus=busFactory({roomId,identity,relays,WebSocket,onError,
-   onStatus:s=>{if(closed)return;onStatus(s);sessionStatus(s);if(s.type==='publish')onPublication({id:s.messageId??s.eventId,state:s.accepted?'accepted':'rejected',surface:s.url,reason:s.reason});if(s.type==='open')onOpen();if(s.type==='exhausted')onClose({code:1006,reason:'nostr_relays_exhausted',wasClean:false});},
+   onStatus:s=>{if(closed)return;onStatus(s);sessionStatus(s);if(s.type==='publish')onPublication({id:s.messageId??s.eventId,state:s.accepted?'accepted':'rejected',surface:s.url,reason:s.reason});if(s.type==='open'){if(hasOpened){availabilityId=crypto.randomUUID();queueMicrotask(announce);}hasOpened=true;onOpen();}if(s.type==='exhausted')onClose({code:1006,reason:'nostr_relays_exhausted',wasClean:false});},
    onSync:()=>{if(!closed)roster();}, // Open already publishes the cached announcement.
    onAnnouncement:p=>{
     if(closed||!p.row)return;
     const key=p.s7pPublicKey.slice(0,16),row=p.row;
     if(row.hKey!==key||row.hex!==p.s7pPublicKey||typeof row.bootId!=='string'||!Number.isSafeInteger(row.roomJoinedAt))return;
     if(routes.has(key)&&routes.get(key).s7pPublicKey!==p.s7pPublicKey){onError(new Error('Short peer ID collision'));return;}
-    if(p.departed){if(members.get(key)?.bootId===row.bootId){members.delete(key);routes.delete(key);roster();}return;}
+    if(p.departed){if(members.get(key)?.bootId===row.bootId){members.delete(key);routes.delete(key);availabilitySeen.delete(key);roster();}return;}
     const hint=p.authorityHint;
     if(hint && hint.room===roomId && hint.from===key && hint.syscon1===key &&
        Number.isSafeInteger(hint.epoch) && Number.isSafeInteger(hint.rosterSeq) && Array.isArray(hint.roster) &&
@@ -32,9 +34,19 @@ export function createNostrDoorway({identity,relays,WebSocket=globalThis.WebSock
          (hint.epoch===authorityHint.epoch && hint.rosterSeq>authorityHint.rosterSeq))) {
       authorityHint=hint;epoch=Math.max(epoch,hint.epoch);roster();
     }
+    if(!members.has(key)&&members.size>=256)return;
     const changed=members.get(key)?.bootId!==row.bootId;
+    const availability=typeof p.availabilityId==='string'&&p.availabilityId.length<=128?p.availabilityId:row.bootId;
+    const newlyAvailable=availabilitySeen.get(key)!==availability;
+    availabilitySeen.set(key,availability);
     routes.set(key,p);members.set(key,{...row,videoId:roomId});
-    if(changed){roster();announce();}
+    if(changed)roster();
+    // Reply once per remote doorway session, including same-boot returns.
+    // This refreshes the reverse signed route without announcement ping-pong.
+    if(changed||newlyAvailable)announce();
+    // A signed, deduplicated announcement is an availability hint only.
+    // The core may rearm its bounded owner attempt; it cannot infer admission.
+    sessionStatus({type:'peer_available',roomId,peerId:key,bootId:row.bootId,availabilityId:availability,eventId:p.eventId});
    },
    onSignal:p=>{
     if(closed)return;

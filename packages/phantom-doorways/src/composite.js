@@ -4,7 +4,7 @@ export function createCompositeDoorway({doorways,recover,openTimeoutMs=8000,mode
  if(!['parallel','failover'].includes(mode))throw new TypeError('Doorway mode must be parallel or failover');
  if(!Array.isArray(doorways)||!doorways.length)throw new TypeError('At least one doorway required');
  for(const d of doorways){validateDoorway(d);if(d.protocol!=='phantom-doorway-v2')throw new TypeError('Composite requires typed doorway adapters');}
- return createDoorway({discovery:true,presence:'discovery-hints',open(context){
+ return createDoorway({discovery:true,presence:doorways.every(d=>d.presence==='live-sockets')?'live-sockets':'discovery-hints',open(context){
   const slots=doorways.map(adapter=>({adapter,session:null,open:false,ended:false,retried:false,generation:0,hint:null,peers:new Map()}));
   let closed=false,opened=false,admitted=false,own,authority,epoch=0,fingerprint='';const seen=new Set();
   const status=(type,detail={})=>{if(!closed)context.onStatus?.({type,...detail});};

@@ -9,3 +9,8 @@ test('committed member transport loss projects recovery while an uncommitted ret
  assert.equal(projectNetworkState(s).state,'recovering');s.concierge.membershipAudit.topology.committedKeys='';assert.equal(projectNetworkState(s).state,'recovering');
  s.concierge.sysAttempt.faultReason='sys_birth_response_deadline_exhausted';assert.equal(projectNetworkState(s).state,'failed');
 });
+
+test('exhausted SYS attempt retains a committed member in recovery',()=>{
+ const s={self:{hKey:'1234567890abcdef'},concierge:{sysAttempt:{state:'faulted',faultReason:'sys_birth_response_deadline_exhausted'},membershipAudit:{topology:{committedKeys:'12345678'}}}};
+ assert.equal(projectNetworkState(s).state,'recovering');assert.equal(projectNetworkState(s).nextAction,'wait_for_peer_availability');
+});

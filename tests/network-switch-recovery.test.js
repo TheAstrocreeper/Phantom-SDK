@@ -1,37 +1,36 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createBrowserPhantom} from '../packages/phantom-doorways/src/browser-entry.js';
-import {createPhantom} from '../packages/phantom-core/src/index.js';
 import {Socket,RTC,rtc} from './fixtures/native-network.js';
-const delay=ms=>new Promise(r=>setTimeout(r,ms));
-async function until(predicate,label){const end=Date.now()+8000;while(!predicate()){if(Date.now()>end)throw Error(label);await delay(25);}}
-test('discovery-hint transport grace defaults to one minute and rejects invalid configuration',()=>{
- for(const [presence,expected] of [['discovery-hints',60000],['live-sockets',10000]]){
-  const doorway={protocol:'phantom-concierge-v1',presence,url:'ws://fixture/',WebSocket:Socket};
-  const core=createPhantom({doorway});try{assert.equal(core.snapshot().concierge.transportRecoveryGraceMs,expected);}finally{core.dispose();}
-  for(const value of [0,NaN,Infinity,120001])assert.throws(()=>createPhantom({doorway,transportRecoveryGraceMs:value}),/transportRecoveryGraceMs/);
- }
-});
-test('two Nostr peers survive 45 seconds of lost signaling and transfer again after recovery',{timeout:65000},async()=>{
- let blackout=false;const sockets=[],networks=[],events=[];
- class SwitchSocket extends Socket{
-  constructor(url){super(url);sockets.push(this);}
-  send(raw){if(!blackout)super.send(raw);}
-  receive(packet){if(!blackout)super.receive(packet);}
- }
- const runtime={crypto,RTCPeerConnection:RTC,setTimeout,clearTimeout,setInterval,clearInterval};
+import {ManualClock} from './fixtures/manual-clock.js';
+async function scenario(oneSided,outage=90000){
+ const clock=new ManualClock(),actualNow=Date.now;Date.now=()=>clock.now;
+ let paused=false;const sockets=[],networks=[],events=[];
+ class BaseSocket extends Socket{constructor(url){super(url);sockets.push(this);}send(raw){if(!(paused&&(!oneSided||this.phone)))super.send(raw);}receive(packet){if(!(paused&&(!oneSided||this.phone)))super.receive(packet);}}
+ class PhoneSocket extends BaseSocket{phone=true;}
+ const runtime={crypto,RTCPeerConnection:RTC,setTimeout:clock.setTimeout,clearTimeout:clock.clearTimeout,setInterval:clock.setInterval,clearInterval:clock.clearInterval};
  const live=n=>n.snapshot().chatPairs?.some(p=>p.dcState==='open');
- async function transfer(bytes){const [sender,receiver]=networks;let offer;const off=receiver.on('fileOffer',row=>{offer=row;});try{const m=await sender.publishFile(new Blob([bytes]),{chunkSize:1024});await sender.shareFile(receiver.getState().peerId,m.id);await until(()=>offer,'file offer not delivered');const blob=await receiver.requestFile(m.id,{peers:[sender.getState().peerId]});assert.deepEqual(new Uint8Array(await blob.arrayBuffer()),bytes);}finally{off();}}
+ async function until(fn,label){for(let i=0;i<100&&!fn();i++)await clock.settle();assert.ok(fn(),label+JSON.stringify(networks.map(n=>({state:n.getState().state,attempt:n.snapshot().concierge.sysAttempt?.state,fault:n.snapshot().concierge.sysAttempt?.faultReason,resources:n.snapshot().recoveryResources,chat:n.snapshot().chatPairs?.map(p=>({pc:p.pcState,state:p.chatState,fault:p.chatFault}))})))+JSON.stringify(events.slice(-25)));}
+ async function transfer(bytes){const [sender,receiver]=networks;let offer;const off=receiver.on('fileOffer',row=>{offer=row;});try{const m=await sender.publishFile(new Blob([bytes]),{chunkSize:1024});await sender.shareFile(receiver.getState().peerId,m.id);await until(()=>offer,'file offer');const blob=await receiver.requestFile(m.id,{peers:[sender.getState().peerId]});assert.deepEqual(new Uint8Array(await blob.arrayBuffer()),bytes);}finally{off();}}
  try{
-  for(let i=0;i<2;i++){const sdk=createBrowserPhantom({WebSocket:SwitchSocket,runtime,relays:['wss://nostr.fixture/']});const n=i?await sdk.join(networks[0].invite,{name:'Peer '+i}):await sdk.create({name:'Peer '+i});networks.push(n);n.on('event',e=>{if(e.type==='VEIL_INVITE_RECEIVED')n.acceptPeer(e.payload.from);if(e.type==='SNAPSHOT')events.push(e.payload.reason);});}
-  await until(()=>networks.every(n=>n.getState().state==='admitted'),'initial admission failed');networks[0].invitePeer(networks[1].getState().peerId);await until(()=>networks.every(live),'initial chat failed');await transfer(new Uint8Array(2048).fill(7));
-  blackout=true;for(const sock of [...sockets])sock.close();for(const pc of [...rtc.values()])if(pc.connectionState==='connected'){pc.connectionState='failed';pc.iceConnectionState='failed';pc.onconnectionstatechange?.();pc.oniceconnectionstatechange?.();}
-  await delay(45000);
-  for(const n of networks)assert.equal(n.snapshot().concierge.membershipAudit.topology.committedCount,2,'temporary transport loss must preserve room membership');
+  for(let i=0;i<2;i++){const sdk=createBrowserPhantom({WebSocket:i?PhoneSocket:BaseSocket,runtime,relays:['wss://nostr.fixture/'],onDoorwayStatus:s=>{if(s.detail?.type==='peer_available')events.push('available_for_'+i);}});const n=i?await sdk.join(networks[0].invite,{name:'Phone'}):await sdk.create({name:'PC'});networks.push(n);n.on('event',e=>{if(e.type==='VEIL_INVITE_RECEIVED')n.acceptPeer(e.payload.from);if(e.type==='SNAPSHOT')events.push(e.payload.reason);});if(i===0)await clock.advance(1);}
+  await until(()=>networks.every(n=>n.getState().state==='admitted'),'admission');assert.equal(networks[0].getState().role,'syscon1');networks[0].invitePeer(networks[1].getState().peerId);await until(()=>networks.every(live),'initial channels');await transfer(new Uint8Array(2048).fill(7));
+  paused=true;
+  // In the asymmetric case PC signaling remains online and offers get relay OKs.
+  for(const sock of [...sockets])if(!oneSided||sock.phone)sock.close();
+  for(const pc of [...rtc.values()])if(pc.connectionState==='connected'){pc.connectionState='failed';pc.iceConnectionState='failed';pc.onconnectionstatechange?.();pc.oniceconnectionstatechange?.();}
+  await clock.settle();await clock.advance(outage);
+  for(const n of networks){assert.equal(n.snapshot().concierge.membershipAudit.topology.committedCount,2,'no inferred departure after silence');assert.equal(n.getState().state,'recovering');assert.ok(n.snapshot().recoveryResources.queuedSignals<=1024);}
   assert.ok(!events.includes('sys_replacement_terminal_exit_recorded'));
-  blackout=false;for(const sock of [...sockets])sock.close();
-  try{await until(()=>networks.every(n=>n.getState().state==='admitted')&&networks.every(live),'peer channels did not recover after signaling returned');}catch(e){e.message+=JSON.stringify(networks.map(n=>({state:n.getState().state,sys:n.snapshot().concierge.sysAttempt?.state,sysFault:n.snapshot().concierge.sysAttempt?.faultReason,chat:n.snapshot().chatPairs?.map(p=>({state:p.chatState,fault:p.chatFault,pc:p.pcState,signal:p.signalingState}))})))+JSON.stringify(events.slice(-35));throw e;}
+  if(oneSided&&outage>=20000)assert.ok(events.includes('sys_birth_response_deadline_exhausted'),'PC exhausts attempts while phone is offline');
+  paused=false;for(const sock of [...sockets])if(!oneSided||sock.phone)sock.close();await clock.settle();
+  await until(()=>networks.every(n=>n.getState().state==='admitted')&&networks.every(live),'channels recover on peer availability');
+  if(oneSided&&outage>=20000)assert.ok(events.includes('sys_birth_rearmed_peer_availability'));
   await transfer(new Uint8Array(3072).fill(11));
-  for(const n of networks)assert.equal(n.snapshot().concierge.membershipAudit.topology.committedCount,2);
- }finally{networks.forEach(n=>n.close());}
-});
+  for(const n of networks){assert.equal(n.snapshot().concierge.membershipAudit.topology.committedCount,2);assert.equal(n.snapshot().recoveryResources.queuedSignals,0);}
+ }finally{networks.forEach(n=>n.close());await clock.settle();assert.equal(clock.tasks.size,0,'dispose removes all owned timer tasks');Date.now=actualNow;}
+}
+test('discovery silence cannot commit departure; both peers recover after 90 seconds',()=>scenario(false));
+test('PC exhausts retries before phone returns; availability rearms only the SYS owner',()=>scenario(true));
+
+test('phone availability arriving during the second attempt does not get lost',()=>scenario(true,15000));

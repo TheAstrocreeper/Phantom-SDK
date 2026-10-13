@@ -24,7 +24,7 @@ export function rtcGate(runtime){
   return {runtime:{...runtime,RTCPeerConnection:RTC},cut(){offline=true;for(const pc of [...connections])pc.close();},restore(){offline=false;}};
 }
 
-export async function runMixedTest({endpoint,relays,sdkFactory=createBrowserPhantom,WebSocket=globalThis.WebSocket,runtime=globalThis,signal,onUpdate=()=>{},deadlineMs=90000,transportRecoveryGraceMs,lifecycle=false,abrupt=false}={}) {
+export async function runMixedTest({endpoint,relays,sdkFactory=createBrowserPhantom,WebSocket=globalThis.WebSocket,runtime=globalThis,signal,onUpdate=()=>{},deadlineMs=45000,lifecycle=false,abrupt=false}={}) {
   const report={format:'phantom-mixed-test-v2',startedAt:new Date().toISOString(),endpoint,steps:[],events:[],peers:[],passed:false,
     lifecycle,abrupt,checkpoints:[],scope:'Three clients in one browser; public Nostr and CF setup paths; local WebRTC. Optional graceful departures, same-identity cross-doorway returns, and abrupt transport loss without departure notice. Does not test separate-device NAT or a real process crash.'};
   const clients=[],observers=new Set();
@@ -45,7 +45,7 @@ export async function runMixedTest({endpoint,relays,sdkFactory=createBrowserPhan
   }
   function make(name,types){
     const gate=socketGate(WebSocket),rtc=rtcGate(runtime),p={name,gate,rtc,network:null,state:null,lastSnapshot:null,inbox:[]};clients.push(p);
-    const sdk=sdkFactory({transportRecoveryGraceMs,doorwayMode:'parallel',doorways:[{type:'nostr',...(relays?.length?{relays}: {})},{type:'websocket',url:endpoint}],WebSocket:gate.Socket,runtime:rtc.runtime,
+    const sdk=sdkFactory({doorwayMode:'parallel',doorways:[{type:'nostr',...(relays?.length?{relays}: {})},{type:'websocket',url:endpoint}],WebSocket:gate.Socket,runtime:rtc.runtime,
       onDoorwayStatus:detail=>record(name,{type:'DOORWAY_STATUS',payload:detail}),
       onRelayProgress:detail=>record(name,{type:'RELAY_SCAN',payload:detail})});
     p.options={name,doorwayTypes:types,timeoutMs:deadlineMs,signal,

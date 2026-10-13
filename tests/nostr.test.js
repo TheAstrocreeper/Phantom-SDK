@@ -98,3 +98,23 @@ test('new relay receives cached presence before retained setup',async()=>{
  bus.sendSignal({nostrKey:target.nostrKey,s7pPublicKey:target.publicKey},{type:'rtc_offer'});
  two.readyState=1;two.onopen();assert.deepEqual(two.sent.filter(p=>p[0]==='EVENT').map(p=>JSON.parse(p[1].content).type),['ANNOUNCEMENT','SIGNAL']);bus.close();
 });
+
+test('same-boot doorway return refreshes the reverse route once per availability generation',async()=>{
+ const {createNostrDoorway}=await import('../packages/phantom-doorways/src/nostr-doorway.js');
+ const identity=createNostrIdentity(),remote=createNostrIdentity();let callbacks,published=0;const notices=[];
+ const d=createNostrDoorway({identity,relays:['ws://one'],busFactory:c=>{callbacks=c;return{announce(){published++;},sendSignal(){},close(){}};}});
+ const session=d.open({roomId:'room',peerId:identity.publicKey.slice(0,16),onOpen(){},onDiscovery(){},onSignal(){},onClose(){},onError(e){throw e;},onStatus:s=>notices.push(s)});
+ session.announce({roomId:'room',peerId:identity.publicKey.slice(0,16),bootId:'local',t:1});
+ const row={hKey:remote.publicKey.slice(0,16),hex:remote.publicKey,bootId:'same-boot',roomJoinedAt:2};
+ const packet={row,s7pPublicKey:remote.publicKey,eventId:'a'.repeat(64),availabilityId:'first'};
+ callbacks.onAnnouncement(packet);assert.equal(published,2);
+ callbacks.onAnnouncement({...packet,eventId:'b'.repeat(64)});assert.equal(published,2,'duplicate session cannot cause announcement ping-pong');
+ callbacks.onAnnouncement({...packet,eventId:'c'.repeat(64),availabilityId:'returned'});assert.equal(published,3);assert.equal(notices.at(-1).availabilityId,'returned');session.close();
+});
+test('provider reopen rotates local availability without changing peer incarnation',async()=>{
+ const {createNostrDoorway}=await import('../packages/phantom-doorways/src/nostr-doorway.js');
+ const identity=createNostrIdentity();let callbacks,published;
+ const d=createNostrDoorway({identity,relays:['ws://one'],busFactory:c=>{callbacks=c;return{announce:p=>{published=p;},sendSignal(){},close(){}};}});
+ const s=d.open({roomId:'room',peerId:identity.publicKey.slice(0,16),onOpen(){},onDiscovery(){},onSignal(){},onClose(){},onError(e){throw e;}});
+ s.announce({roomId:'room',peerId:identity.publicKey.slice(0,16),bootId:'unchanged',t:1});callbacks.onStatus({type:'open'});const previous=published.availabilityId;callbacks.onStatus({type:'open'});await new Promise(r=>setImmediate(r));assert.notEqual(published.availabilityId,previous);assert.equal(published.row.bootId,'unchanged');s.close();
+});

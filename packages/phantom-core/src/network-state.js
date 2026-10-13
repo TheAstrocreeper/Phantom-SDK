@@ -4,7 +4,7 @@ export function projectNetworkState(snapshot={}) {
  const admitted=!!snapshot.self?.hKey && String(t.committedKeys??'').split(',').includes(snapshot.self.hKey.slice(0,8));
  let state,reason,nextAction;
  if(admitted&&c.sysReady){state='admitted';reason='committed_membership_and_system_ready';nextAction='none';}
- else if(c.sysAttempt?.faultReason==='sys_birth_response_deadline_exhausted'||c.sysLastErr==='sys_birth_response_deadline_exhausted') {state='failed';reason='sys_birth_response_deadline_exhausted';nextAction='inspect_diagnostics';}
+ else if(c.sysAttempt?.faultReason==='sys_birth_response_deadline_exhausted'||c.sysLastErr==='sys_birth_response_deadline_exhausted') {state=admitted?'recovering':'failed';reason='sys_birth_response_deadline_exhausted';nextAction=admitted?'wait_for_peer_availability':'inspect_diagnostics';}
  else if(c.sysAttempt?.state==='faulted'||b.doorwayState==='failed') {state='recovering';reason=c.sysAttempt?.faultReason??b.doorwayFault??'transport_fault';nextAction='observe_core_recovery';}
  else if(admitted){state='recovering';reason=c.sysUnavailableReason??'system_unavailable';nextAction='wait_for_system_proof';}
  else if(['connecting','creating','offer_sent','open'].includes(c.sysAttempt?.state)||c.sysPipeState==='connecting'){state='connecting';reason=c.sysUnavailableReason??'waiting_for_system_proof';nextAction='wait_for_peer_response';}

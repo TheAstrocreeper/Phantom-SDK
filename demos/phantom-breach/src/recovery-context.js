@@ -7,8 +7,9 @@ export function createRecoveryProjector(codes=[]) {
   const c=snapshot.concierge??{},b=snapshot.bootstrap??{},a=c.sysAttempt??{},m=c.membershipAudit?.topology??{};
   return {
    state:code(state.state),reason:code(state.reason),nextAction:code(state.nextAction),role:code(state.role),admitted:state.admitted===true,
+   resources:{queuedSignals:number(snapshot.recoveryResources?.queuedSignals),activeQueues:number(snapshot.recoveryResources?.activeQueues),availabilityReceipts:number(snapshot.recoveryResources?.availabilityReceipts),pendingAvailability:number(snapshot.recoveryResources?.pendingAvailability),ownedTimeouts:number(snapshot.runtimeResources?.ownedTimeouts),ownedIntervals:number(snapshot.runtimeResources?.ownedIntervals)},
    coreEvent:code(snapshot.reason),doorway:{state:code(b.doorwayState),fault:code(b.doorwayFault),attempts:number(b.attempts),phase:code(b.doorwayDeadlinePhase)},
-   system:{recoveryGraceMs:number(c.transportRecoveryGraceMs),ready:c.sysReady===true,pipe:code(c.sysPipeState),unavailable:code(c.sysUnavailableReason),fault:code(c.sysLastErr),attempt:{state:code(a.state),event:code(a.lastEvent),fault:code(a.faultReason),recoveryCount:number(a.recoveryCount),ageMs:a.startedAt?Math.max(0,now-a.startedAt):0}},
+   system:{ready:c.sysReady===true,pipe:code(c.sysPipeState),unavailable:code(c.sysUnavailableReason),fault:code(c.sysLastErr),attempt:{state:code(a.state),event:code(a.lastEvent),fault:code(a.faultReason),recoveryCount:number(a.recoveryCount),ageMs:a.startedAt?Math.max(0,now-a.startedAt):0}},
    membership:{committedCount:number(m.committedCount),pendingCount:number(m.pendingCount),terminalCount:String(m.terminalKeys??'').split(',').filter(k=>k&&k!=='none').length,epoch:number(m.committedEpoch),stage:code(c.membershipAudit?.stage)},
    chat:(snapshot.chatPairs??[]).slice(0,8).map(p=>({relationship:code(p.relationship),owner:p.offerOwner===true,pc:code(p.pcState),ice:code(p.iceState),signaling:code(p.signalingState),channel:code(p.dcState),state:code(p.chatState),fault:code(p.chatFault),reconnecting:p.reconnecting===true}))
   };

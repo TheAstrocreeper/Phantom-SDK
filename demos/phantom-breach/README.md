@@ -57,6 +57,6 @@ Reports now include the latest recovery context and a bounded history of context
 
 A two-peer simulated Nostr outage with both RTC paths failed and signaling withheld for 25 seconds produced terminal replacement events after the ten-second replacement window and divergent solo membership. This is a candidate mechanism for the user-observed network-switch failure, not a confirmed native-browser diagnosis. Recovery policy is unchanged in this diagnostic update.
 
-### Network-switch recovery policy
+### Network-switch recovery control
 
-The SDK now gives discovery-hint transports a 60-second membership recovery grace instead of treating ten seconds of lost transport as departure. Individual connection attempts still expire after ten seconds. Validated peer status can restart an exhausted chat attempt after signaling returns. The 45-second simulated network-switch test preserves membership and verifies file transfer after recovery. Actual phone/laptop confirmation remains necessary.
+Discovery silence no longer commits departure. Failed attempts wait for peer availability; the existing designated SYS opener consumes a new provider availability generation and retries. A bounded reciprocal announcement refreshes the reverse signaling route. Connection readiness still requires SDP and SYS_CONTROL proof. Manual-clock tests cover an offline phone returning after the PC exhausts its retries, including a return during an in-flight attempt, and verify another file after recovery. Runtime resource counters are included in reports. Native phone/laptop confirmation remains outstanding.
