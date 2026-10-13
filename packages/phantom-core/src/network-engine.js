@@ -10844,6 +10844,9 @@ export function createNetworkEngine(host) {
 
   function rtcOnOffer(fromHKey, offer, meta = {}) {
     if (!host.canAdmitPeer(phantomShortKey(fromHKey))) return;
+    // Replace the old SYS incarnation before any work captures its queue.
+    // Following ICE then binds to the same connection as the incoming offer.
+    if (!phantomPrepareSysOffer(fromHKey, meta)) return;
     return phantomQueueInboundRtc(fromHKey, meta, "offer", () =>
       phantomApplyRtcOffer(fromHKey, offer, meta),
     );
@@ -10863,10 +10866,10 @@ export function createNetworkEngine(host) {
     );
   }
 
-  async function phantomApplyRtcOffer(fromHKey, offer, meta = {}) {
+  function phantomPrepareSysOffer(fromHKey, meta = {}, replace = true) {
     const fromKey = phantomShortKey(fromHKey);
     const selfKey = phantomShortKey(selfHKey);
-    if (!fromKey || fromKey === selfKey) return;
+    if (!fromKey || fromKey === selfKey) return false;
 
     const pipe = phantomRtcPipeFromMeta(meta);
 
@@ -10877,14 +10880,14 @@ export function createNetworkEngine(host) {
         concierge.lastErr =
           "sys_offer_rejected_terminal_exit_pending:" + fromKey;
         emitSnapshot("sys_offer_rejected_terminal_exit_pending");
-        return;
+        return false;
       }
 
       if (meta?.sysTemporary === true) {
         if (!phantomBindInboundTemporarySysTransaction(fromKey, meta)) {
           concierge.lastErr =
             "sys_offer_rejected_invalid_temporary_transaction:" + fromKey;
-          return;
+          return false;
         }
       }
 
@@ -10902,11 +10905,11 @@ export function createNetworkEngine(host) {
         concierge.lastErr =
           "sys_offer_rejected_non_owner:" + sysBirthRole + ":" + fromKey;
         emitSnapshot("sys_offer_rejected_non_owner");
-        return;
+        return false;
       }
     }
 
-    if(pipe==='sys') {
+    if(pipe==='sys' && replace) {
       // Validate the offer owner before an incoming attempt can retire a pipe.
       phantomObserveRemoteIncarnation(fromKey,{bootId:String(meta.bootId||''),attemptId:String(meta.sysAttemptId||''),signalType:'rtc_offer',via:'rtc_offer',bindCurrent:meta.recoveryPeerPipe===true});
       const incoming=String(meta.sysAttemptId||''),current=phantomSysPeers.get(fromKey);
@@ -10915,6 +10918,17 @@ export function createNetworkEngine(host) {
         emitSnapshot("sys_attempt_superseded_by_remote_offer");
       }
     }
+
+    return true;
+  }
+
+  async function phantomApplyRtcOffer(fromHKey, offer, meta = {}) {
+    // Roles can change while a queued offer waits. Recheck without replacing
+    // the connection that now owns this offer and its queued ICE candidates.
+    if (!phantomPrepareSysOffer(fromHKey, meta, false)) return;
+    const fromKey = phantomShortKey(fromHKey);
+    const selfKey = phantomShortKey(selfHKey);
+    const pipe = phantomRtcPipeFromMeta(meta);
 
     if (pipe === "chat") {
       const incomingAttemptId = String(meta?.chatAttemptId || "");
