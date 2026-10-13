@@ -10924,26 +10924,28 @@ export function createNetworkEngine(host) {
 
     if (!pending.length) return true;
 
+    let applied=0,failed=0;
     for (const cand of pending) {
       try {
         await ent.pc.addIceCandidate(cand);
-      rtcDebug("candidate_applied",key,pipe,ent,meta,cand);
+        applied++;
+        rtcDebug("candidate_applied_from_queue",key,pipe,ent,{},cand);
       } catch (e) {
-        concierge.lastErr =
-          pipe + "_rtc_ice_apply_failed:" + String(e?.message || e);
+        failed++;
+        concierge.lastErr = pipe + "_rtc_ice_apply_failed:" + String(e?.message || e);
+        rtcDiagnostics.record("queued_candidate_apply_failed",{
+          ...rtcDebug("queued_candidate_failed_context",key,pipe,ent,{},cand),
+          errorName:e?.name,errorMessage:e?.message,
+        });
         emitSnapshot(pipe + "_rtc_ice_apply_failed");
-        return false;
       }
     }
-
-    emitSnapshot(
-      pipe +
-        "_rtc_ice_flushed_" +
-        pending.length +
-        "_" +
-        String(reason || "remote_description_applied"),
-    );
-    return true;
+    rtcDiagnostics.record("candidate_queue_flushed",{
+      ...rtcDebug("candidate_queue_flush_context",key,pipe,ent),reason,
+      pendingCandidates:pending.length,appliedCandidates:applied,failedCandidates:failed,
+    });
+    emitSnapshot(pipe + "_rtc_ice_flushed_" + applied + "_" + String(reason));
+    return failed === 0;
   }
 
   function rtcOnOffer(fromHKey, offer, meta = {}) {

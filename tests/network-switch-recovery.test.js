@@ -12,8 +12,9 @@ async function scenario(oneSided,outage=90000,custom=false){
  let paused=false;const sockets=[],networks=[],events=[];
  class BaseSocket extends Socket{constructor(url){super(url);sockets.push(this);}send(raw){if(!(paused&&(!oneSided||this.phone)))super.send(raw);}receive(packet){if(!(paused&&(!oneSided||this.phone)))super.receive(packet);}}
  class PhoneSocket extends BaseSocket{phone=true;}
+ class DualIceRTC extends CandidateRTC{async setLocalDescription(d){await super.setLocalDescription(d);this.onicecandidate?.({candidate:{candidate:this.id,sdpMLineIndex:1}});}}
  class DelayedOpenRTC extends CandidateRTC{asymmetricOpen=true;}
- const runtime={crypto,RTCPeerConnection:custom===4?DelayedOpenRTC:CandidateRTC,setTimeout:clock.setTimeout,clearTimeout:clock.clearTimeout,setInterval:clock.setInterval,clearInterval:clock.clearInterval};
+ const runtime={crypto,RTCPeerConnection:custom===4?DelayedOpenRTC:custom===5?DualIceRTC:CandidateRTC,setTimeout:clock.setTimeout,clearTimeout:clock.clearTimeout,setInterval:clock.setInterval,clearInterval:clock.clearInterval};
  const live=n=>n.snapshot().chatPairs?.some(p=>p.dcState==='open');
  async function until(fn,label){for(let i=0;i<100&&!fn();i++)await clock.settle();assert.ok(fn(),label+JSON.stringify(networks.map(n=>({state:n.getState().state,attempt:n.snapshot().concierge.sysAttempt?.state,fault:n.snapshot().concierge.sysAttempt?.faultReason,resources:n.snapshot().recoveryResources,chat:n.snapshot().chatPairs?.map(p=>({pc:p.pcState,state:p.chatState,fault:p.chatFault}))})))+JSON.stringify(events.slice(-25)));}
  async function transfer(bytes){const [sender,receiver]=networks;let offer;const off=receiver.on('fileOffer',row=>{offer=row;});try{const m=await sender.publishFile(new Blob([bytes]),{chunkSize:1024});await sender.shareFile(receiver.getState().peerId,m.id);await until(()=>offer,'file offer');const blob=await receiver.requestFile(m.id,{peers:[sender.getState().peerId]});assert.deepEqual(new Uint8Array(await blob.arrayBuffer()),bytes);}finally{off();}}
@@ -33,6 +34,8 @@ async function scenario(oneSided,outage=90000,custom=false){
   await until(()=>networks.every(n=>n.getState().state==='admitted')&&networks.every(live),'channels recover on peer availability');
   if(oneSided&&outage>=20000)assert.ok(events.includes('sys_birth_rearmed_peer_availability'));
   await transfer(new Uint8Array(3072).fill(11));
+  for(const n of networks)assert.ok(!n.snapshot().rtcDiagnostics.events.some(e=>e.errorMessage?.includes('meta is not defined')),'queued candidate tracing cannot throw or stop ICE flush');
+  if(custom===5)assert.ok(networks.some(n=>n.snapshot().rtcDiagnostics.events.some(e=>e.event==='candidate_queue_flushed'&&e.pendingCandidates>=2&&e.appliedCandidates===e.pendingCandidates&&e.failedCandidates===0)),'all queued candidates are applied');
   if(custom===3)for(const [id,pc]of rtc)if(!previousPcs.has(id))assert.ok((pc.offerApplications||0)<=1,'duplicate delivery must not renegotiate the same attempt');
   for(const n of networks){assert.equal(n.snapshot().concierge.membershipAudit.topology.committedCount,2);assert.equal(n.snapshot().recoveryResources.queuedSignals,0);assert.equal(n.snapshot().recoveryResources.earlyIceCandidates,0);}
  }finally{networks.forEach(n=>n.close());await clock.settle();assert.equal(clock.tasks.size,0,'dispose removes all owned timer tasks');Date.now=actualNow;}
@@ -47,3 +50,5 @@ test('developer doorway recovers with early ICE and opaque availability IDs',()=
 test('duplicate relay offers apply once per transport attempt',()=>scenario(false,90000,3));
 
 test('admission received before local channel-open is applied after transport proof',()=>scenario(false,90000,4));
+
+test('multiple candidates queued before SDP all survive the diagnostic flush',()=>scenario(false,90000,5));
