@@ -9,6 +9,7 @@ const applied=[],instances=[];
 class RTC {
  constructor(){instances.push(this);this.connectionState='new';this.iceConnectionState='new';this.signalingState='stable';}
  createDataChannel(label){return {label,readyState:'connecting',bufferedAmount:0,close(){},send(){}};}
+ async getStats(){assert.notEqual(this.connectionState,'closed');return new Map([['pair',{id:'pair',type:'candidate-pair',state:'in-progress',requestsSent:2,responsesReceived:0}]]);}
  async addIceCandidate(c){assert.notEqual(this.connectionState,'closed');applied.push(c.candidate);}
  async createOffer(){return {type:'offer',sdp:'stub-offer'};}
  async createAnswer(){return {type:'answer',sdp:'stub-answer'};}
@@ -77,4 +78,11 @@ test('a non-owner offer cannot replace an existing SYS connection',async()=>{
   a.wire.onSignal({...offer,from:mirror,to:leader,bootId:'rogue-boot',sysAttemptId:'rogue-attempt'});
   await settle();assert.equal(instances.length,before);assert.equal(instances.filter(p=>p.connectionState==='closed').length,closed);
  }finally{a.core.dispose();b.core.dispose();}
+});
+
+test('core snapshot preserves native state and stats after SDK teardown',async()=>{
+ const f=await fixture(leader);f.core.dispose();await settle();
+ const records=f.core.snapshot().rtcDiagnostics.connections;
+ assert(records.length>0);assert(records.every(r=>r.retired));
+ const r=records.find(r=>r.pipe==='sys');assert.equal(r.state.connectionState,'new');assert(r.lastReason.startsWith('before_close:'));assert.equal(r.stats.rows[0].responsesReceived,0);assert.equal(r.statsError,undefined);
 });

@@ -1,13 +1,13 @@
-# Main SDK connection test
+# SDK connection test
 
-Minimal browser demo using the repository's createBrowserPhantom entry API, getState, snapshot, onEvent and onDoorwayStatus. No SDK changes or custom transport/runtime wrappers. No automatic app retry or recovery loop.
+This demo uses createBrowserPhantom, state, snapshots, SDK events and doorway callbacks. Create on one device and open its invitation on the other. Connect peer invites a chat channel after admission; incoming invitations are accepted. Leave cancels startup or closes the network. Diagnostics remain available after failure and Leave.
 
-Build: npm install in this directory, then npm run build. Deploy only dist.
+Build with npm install and npm run build in this directory. Deploy only dist. Set SDK_SOURCE_COMMIT to the source commit being built to embed its exact revision.
 
-Create a room, open its generated invitation on another device. If the SDK admits both and a discovered peer has no chat channel, use Connect peer; incoming invitations are accepted through the SDK. Leave aborts pending startup or closes the returned network. Reports remain available afterward. Record SDK snapshot takes an explicit current observation without polling.
+Download full report or Copy full report includes native RTC state transitions, bounded getStats candidate, candidate-pair, transport, SCTP and data-channel rows, connection retirement reasons, ICE username fragments, SDK states and nested relay status. The SDK captures stats on events and invokes getStats before native close; completion is asynchronous and retrieval errors are recorded. No polling or app recovery loop is used.
 
-Reports include the SDK baseline commit, build, selected adapter, state, snapshots and full nested doorway events. Event history is bounded at 256 records, arrays at 256 items, depth at 12, strings at 16000 characters. Older events are counted as dropped. Credentials, invitation bodies and SDP fields are redacted. Reports contain peer IDs and diagnostic network metadata.
+Limits: 256 app events; 32 retained connections; 32 transitions and 128 stats per connection. Dropped records are counted. The SDK permits one live stats request and one terminal request per connection, coalescing other state changes. SDP, passwords, credentials and invitations are redacted; reports retain peer IDs and IP/port diagnostic metadata.
 
-These observations do not include native RTC candidate-pair statistics: current main does not expose them. An open doorway is not an open peer connection. Successful compilation and app control checks do not prove cross-device connection or recovery.
+An open relay is not an open peer channel. Automated tests validate ownership, candidate queueing and evidence retention, not connectivity between physical devices.
 
-SDK package baseline: 007a99affb99bb8055648fc5be3deb3a0408779e. All 38 package files were verified byte-for-byte against that commit when this demo was built.
+See docs/six7-connection-lifecycle.md for the source comparison and known differences.

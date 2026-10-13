@@ -1,3 +1,4 @@
+import {createRtcDiagnostics} from './rtc-diagnostics.js';
 import {COMPATIBILITY_WIRE} from './compatibility.js';
 import {acceptsSuccessorStatus} from './successor-status.js';
 import { canCarrySysRecovery } from './recovery-signaling.js';
@@ -12,6 +13,7 @@ export function createNetworkEngine(host) {
 
   "use strict";
   const CORE_DEBUG = false;
+  const rtcDiagnostics = createRtcDiagnostics({now:()=>Date.now(),emit:detail=>post("RTC_DIAGNOSTICS",detail)});
 
   const TAG = "[phantom][CORE]";
 
@@ -428,6 +430,7 @@ export function createNetworkEngine(host) {
     if (oldChatEnt) {
       oldChatEnt.dc = null;
       try {
+        rtcDiagnostics.retire(oldChatEnt.pc,reason);
         oldChatEnt.pc?.close();
       } catch {}
     }
@@ -438,6 +441,7 @@ export function createNetworkEngine(host) {
       oldSysEnt.ownerAttemptId = null;
       oldSysEnt.sysCarrier = false;
       try {
+        rtcDiagnostics.retire(oldSysEnt.pc,reason);
         oldSysEnt.pc?.close();
       } catch {}
     }
@@ -8293,6 +8297,8 @@ export function createNetworkEngine(host) {
     );
 
     dc.onopen = () => {
+      const diagnosticEntry=phantomSysPeers.get(phantomShortKey(remoteHKey));
+      if(diagnosticEntry?.sysdc===dc)rtcDiagnostics.capture(diagnosticEntry.pc,"datachannel_open");
       const ent = phantomSysPeers.get(key);
       if (!ent || ent.sysdc !== dc) return;
       completeSysBirth(ent);
@@ -8452,6 +8458,8 @@ export function createNetworkEngine(host) {
     };
 
     dc.onclose = () => {
+      const diagnosticEntry=phantomSysPeers.get(phantomShortKey(remoteHKey));
+      if(diagnosticEntry?.sysdc===dc)rtcDiagnostics.capture(diagnosticEntry.pc,"datachannel_close");
       const ent = phantomSysPeers.get(key);
 
       // A retired SYS channel cannot mutate its successor attempt.
@@ -9062,8 +9070,13 @@ export function createNetworkEngine(host) {
       chatAttemptRecoveryCount: 0,
     };
     phantomChatPeers.set(k, ent);
+    rtcDiagnostics.track(pc,{peer:k,pipe:'chat',context:()=>({attemptId:ent.sysAttemptId??ent.chatAttemptId??ent.attempt?.id??null,channelState:ent.sysdc?.readyState??ent.dc?.readyState??null,pendingIce:ent.pendingRemoteIce?.length??0})});
+    pc.onsignalingstatechange=()=>rtcDiagnostics.capture(pc,'signaling_state');
+    pc.onicegatheringstatechange=()=>rtcDiagnostics.capture(pc,'ice_gathering_state');
+    pc.onicecandidateerror=ev=>rtcDiagnostics.capture(pc,'ice_candidate_error',true,{errorCode:ev.errorCode,errorText:String(ev.errorText??'').slice(0,512),url:String(ev.url??'').slice(0,512),address:ev.address,port:ev.port});
 
     pc.onicecandidate = (ev) => {
+      rtcDiagnostics.capture(pc,ev?.candidate?"local_candidate":"local_candidates_complete",!ev?.candidate);
       const c = ev?.candidate;
 
       if (c) {
@@ -9120,6 +9133,7 @@ export function createNetworkEngine(host) {
     };
 
     pc.onconnectionstatechange = () => {
+      rtcDiagnostics.capture(pc,"connection_state");
       const current = phantomChatPeers.get(k);
       if (!current || current.pc !== pc || rtcClosing.has(k)) {
         emitSnapshot("stale_chat_pc_state_ignored");
@@ -9147,6 +9161,7 @@ export function createNetworkEngine(host) {
     };
 
     pc.oniceconnectionstatechange = () => {
+      rtcDiagnostics.capture(pc,"ice_connection_state");
       const current = phantomChatPeers.get(k);
       if (!current || current.pc !== pc || rtcClosing.has(k)) {
         emitSnapshot("stale_chat_ice_state_ignored");
@@ -9217,8 +9232,13 @@ export function createNetworkEngine(host) {
       },
     };
     phantomSysPeers.set(k, ent);
+    rtcDiagnostics.track(pc,{peer:k,pipe:'sys',context:()=>({attemptId:ent.sysAttemptId??ent.chatAttemptId??ent.attempt?.id??null,channelState:ent.sysdc?.readyState??ent.dc?.readyState??null,pendingIce:ent.pendingRemoteIce?.length??0})});
+    pc.onsignalingstatechange=()=>rtcDiagnostics.capture(pc,'signaling_state');
+    pc.onicegatheringstatechange=()=>rtcDiagnostics.capture(pc,'ice_gathering_state');
+    pc.onicecandidateerror=ev=>rtcDiagnostics.capture(pc,'ice_candidate_error',true,{errorCode:ev.errorCode,errorText:String(ev.errorText??'').slice(0,512),url:String(ev.url??'').slice(0,512),address:ev.address,port:ev.port});
 
     pc.onicecandidate = (ev) => {
+      rtcDiagnostics.capture(pc,ev?.candidate?"local_candidate":"local_candidates_complete",!ev?.candidate);
       const c = ev?.candidate;
 
       if (c) {
@@ -9261,6 +9281,7 @@ export function createNetworkEngine(host) {
     };
 
     pc.onconnectionstatechange = () => {
+      rtcDiagnostics.capture(pc,"connection_state");
       const current = phantomSysPeers.get(k);
       if (!current || current.pc !== pc) {
         emitSnapshot("stale_sys_pc_state_ignored");
@@ -9278,6 +9299,7 @@ export function createNetworkEngine(host) {
     };
 
     pc.oniceconnectionstatechange = () => {
+      rtcDiagnostics.capture(pc,"ice_connection_state");
       const current = phantomSysPeers.get(k);
       if (!current || current.pc !== pc) {
         emitSnapshot("stale_sys_ice_state_ignored");
@@ -9316,6 +9338,7 @@ export function createNetworkEngine(host) {
       ent?.dc?.close();
     } catch {}
     try {
+      rtcDiagnostics.retire(ent?.pc,reason);
       ent?.pc?.close();
     } catch {}
 
@@ -9350,6 +9373,7 @@ export function createNetworkEngine(host) {
       dc?.close();
     } catch {}
     try {
+      rtcDiagnostics.retire(pc,reason);
       pc?.close();
     } catch {}
 
@@ -9377,6 +9401,8 @@ export function createNetworkEngine(host) {
       dc.binaryType = "arraybuffer";
     } catch {}
     dc.onopen = () => {
+      const diagnosticEntry=phantomChatPeers.get(phantomShortKey(remoteHKey));
+      if(diagnosticEntry?.dc===dc)rtcDiagnostics.capture(diagnosticEntry.pc,"datachannel_open");
       const key = phantomShortKey(remoteHKey);
       const ent = key ? phantomChatPeers.get(key) : null;
 
@@ -9413,6 +9439,8 @@ export function createNetworkEngine(host) {
     };
 
     dc.onclose = () => {
+      const diagnosticEntry=phantomChatPeers.get(phantomShortKey(remoteHKey));
+      if(diagnosticEntry?.dc===dc)rtcDiagnostics.capture(diagnosticEntry.pc,"datachannel_close");
       const key = phantomShortKey(remoteHKey);
       if (!key) return;
 
@@ -10299,6 +10327,7 @@ export function createNetworkEngine(host) {
         } catch {}
 
         try {
+          rtcDiagnostics.retire(failedPc,"sys_birth_failure:"+fault);
           failedPc?.close();
         } catch {}
       }
@@ -11275,6 +11304,7 @@ export function createNetworkEngine(host) {
       t: now(),
       reason: reason || null,
       eventCounts: phantomEventCountRows(20),
+      rtcDiagnostics: rtcDiagnostics.snapshot(),
 
       chatPairs: Array.from(phantomChatPeers.entries())
         .map(([hKey, ent]) => ({
@@ -12499,6 +12529,7 @@ export function createNetworkEngine(host) {
           } catch {}
 
           try {
+            rtcDiagnostics.retire(failedPc,"rtc_undeliverable");
             failedPc?.close();
           } catch {}
         }
