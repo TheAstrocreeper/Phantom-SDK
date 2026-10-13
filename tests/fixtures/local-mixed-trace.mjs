@@ -45,7 +45,7 @@ const sdkFactory=options=>{
  const sdk=createBrowserPhantom({...options,doorways:options.doorways.filter(d=>d.type==='websocket')});
  return {...sdk,join:(invite,joinOptions)=>sdk.join(invite,{...joinOptions,doorwayTypes:['websocket']})};
 };
-const report=await runMixedTest({lifecycle:process.env.PHANTOM_LIFECYCLE==='1',abrupt:process.env.PHANTOM_ABRUPT==='1',sdkFactory,endpoint:'wss://cf.fixture/',relays:['wss://nostr.fixture/'],WebSocket:Socket,runtime:{crypto:globalThis.crypto,RTCPeerConnection:RTC,setTimeout,clearTimeout,setInterval,clearInterval},deadlineMs:process.env.PHANTOM_ABRUPT==='1'?30000:5000,onUpdate:r=>console.log(r.steps.at(-1)?.label,r.steps.at(-1)?.status)});
+const report=await runMixedTest({transportRecoveryGraceMs:10000,lifecycle:process.env.PHANTOM_LIFECYCLE==='1',abrupt:process.env.PHANTOM_ABRUPT==='1',sdkFactory,endpoint:'wss://cf.fixture/',relays:['wss://nostr.fixture/'],WebSocket:Socket,runtime:{crypto:globalThis.crypto,RTCPeerConnection:RTC,setTimeout,clearTimeout,setInterval,clearInterval},deadlineMs:process.env.PHANTOM_ABRUPT==='1'?30000:5000,onUpdate:r=>console.log(r.steps.at(-1)?.label,r.steps.at(-1)?.status)});
 const customPackets=trace.filter(p=>p.type.startsWith('phantom_entry'));
 console.log(report.passed,report.error);process.exitCode=report.passed&&!customPackets.length?0:1;console.log(trace.filter(p=>p.type.startsWith('phantom_entry')));console.log(report.events.filter(e=>e.type==='DOORWAY_STATUS'&&e.payload.type.startsWith('entry_')));
 if(process.env.PHANTOM_TRACE_OUTPUT)await writeFile(process.env.PHANTOM_TRACE_OUTPUT,JSON.stringify({report,trace},null,2));

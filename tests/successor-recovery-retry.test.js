@@ -20,7 +20,7 @@ async function scenario(mode){
   async function watch(network){if(index===3){leaf=network;network.on('event',event=>{const r=event.type==='SNAPSHOT'?event.payload?.gossipRecovery:null;if(r?.targets.length&&r.index>=r.targets.length)sawExhausted=true;});}return network;}
   return {...sdk,create:async options=>watch(await sdk.create(options)),join:async(invite,options)=>watch(await sdk.join(invite,options))};
  }
- const report=await runDistributionTest({relays:['wss://nostr.fixture/'],WebSocket:Socket,runtime,sdkFactory,deadlineMs:12000,
+ const report=await runDistributionTest({transportRecoveryGraceMs:10000,relays:['wss://nostr.fixture/'],WebSocket:Socket,runtime,sdkFactory,deadlineMs:12000,
   onUpdate:r=>{if(r.steps.some(s=>s.label.startsWith('Original leader leaves')&&s.status==='running'))armed=true;}});
  assert.equal(failures,2,'exercise repeated successor transport failures');
  assert.equal(sawExhausted,true,'reproduce exhausted recovery target and missing system route');

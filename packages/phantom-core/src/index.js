@@ -31,11 +31,13 @@ function eventSurface() {
 /** Public peer-network facade with injectable transport and runtime. */
 export function createPhantom({ doorway, origin = 'https://phantom.local',
     avatar = null, storage = memoryStorage(), sessionStorage = memoryStorage(),
-    runtime = globalThis, observeBrowserLifecycle = false, canSendFile = () => true, authorizeSyscon1 = () => true, canAdmitPeer = () => true } = {}) {
+    runtime = globalThis, observeBrowserLifecycle = false, transportRecoveryGraceMs, canSendFile = () => true, authorizeSyscon1 = () => true, canAdmitPeer = () => true } = {}) {
   if (['phantom-doorway-v1','phantom-doorway-v2'].includes(doorway?.protocol)) doorway = bridgeDoorway(doorway);
   if (!isConciergeProtocol(doorway?.protocol)) {
     throw new Error('A Phantom concierge doorway is required');
   }
+  transportRecoveryGraceMs ??= doorway.presence === 'discovery-hints' ? 60000 : 10000;
+  if(!Number.isFinite(transportRecoveryGraceMs)||transportRecoveryGraceMs<1000||transportRecoveryGraceMs>120000)throw new TypeError('transportRecoveryGraceMs must be between 1000 and 120000');
   migrateStorage(storage);
   migrateStorage(sessionStorage);
   // Browser timer functions require their Window receiver, even when
@@ -61,7 +63,7 @@ export function createPhantom({ doorway, origin = 'https://phantom.local',
   const host = {
     window, document, origin, avatar, allowDisplayNames: true, localStorage: storage, sessionStorage,
     location: { href: origin }, doorwayUrl: doorway.url,
-    doorwayPresence: doorway.presence ?? 'live-sockets',
+    doorwayPresence: doorway.presence ?? 'live-sockets', transportRecoveryGraceMs,
     WebSocket: doorway.WebSocket, RTCPeerConnection: runtime.RTCPeerConnection,
     crypto: runtime.crypto, canSendFile, authorizeSyscon1,
     canAdmitPeer: peer => { try { return canAdmitPeer(peer) === true; } catch { return false; } },

@@ -3000,6 +3000,8 @@ export function createNetworkEngine(host) {
   }
 
   const PHANTOM_SYS_REPLACEMENT_MS = 10000;
+  const PHANTOM_TRANSPORT_RECOVERY_MS = host.transportRecoveryGraceMs;
+  const PHANTOM_SYS_BIRTH_RESPONSE_MS = 10000;
   const phantomSysReplacementWindows = new Map(); // hKey -> { state, timer, attemptId, bootId, startedAt, terminalAt, committedAt }
 
   function phantomSysReplacementState(remoteHKey) {
@@ -3175,7 +3177,7 @@ export function createNetworkEngine(host) {
     }
 
     const elapsed = now() - Number(rec.startedAt || 0);
-    if (elapsed < PHANTOM_SYS_REPLACEMENT_MS) return false;
+    if (elapsed < PHANTOM_TRANSPORT_RECOVERY_MS) return false;
 
     // Doorway visibility is corroborating liveness only. It never mutates
     // membership; it merely prevents a transient SYS fault from becoming a
@@ -3310,7 +3312,7 @@ export function createNetworkEngine(host) {
     const bootId = String(phantomRemoteBootIds.get(key) || "");
     const timer = setTimeout(() => {
       phantomCompleteFailedSysReplacement(key, "replacement_window_expired");
-    }, PHANTOM_SYS_REPLACEMENT_MS);
+    }, PHANTOM_TRANSPORT_RECOVERY_MS);
 
     phantomSysReplacementWindows.set(key, {
       state: "replacing",
@@ -4266,7 +4268,7 @@ export function createNetworkEngine(host) {
         );
       }
 
-      phantomRequestChatPipe(from, "relationship_status_reconcile");
+      phantomRequestChatPipe(from, "relationship_status_peer_proof");
       return true;
     }
 
@@ -4468,6 +4470,15 @@ export function createNetworkEngine(host) {
     ) {
       rtcTeardown(key, "relationship_cycle_superseded");
       ent = null;
+    }
+    // A validated status from the same accepted relationship proves the peer
+    // returned. Retire its exhausted transport attempt before creating one
+    // fresh attempt; local polling alone cannot reset the retry budget.
+    if (ent?.chatAttemptState === "terminal" &&
+        reason === "relationship_status_peer_proof" && phantomOwnsChatPipeOffer(key)) {
+      rtcTeardown(key, "chat_expired_attempt_peer_returned");
+      ent = null;
+      emitSnapshot("chat_expired_attempt_peer_proof_restarts_owner");
     }
     if (ent) ent.relationshipCycleId = relationship.cycleId;
     const pc = ent?.pc || null;
@@ -10540,7 +10551,7 @@ export function createNetworkEngine(host) {
 
       // A bounded response deadline detects silence, never elects authority.
       const sentEntry=ent;
-      armSysBirthDeadline(sentEntry,{schedule:setTimeout,cancel:clearTimeout},PHANTOM_SYS_REPLACEMENT_MS,()=>{
+      armSysBirthDeadline(sentEntry,{schedule:setTimeout,cancel:clearTimeout},PHANTOM_SYS_BIRTH_RESPONSE_MS,()=>{
         if(!isCurrentSysBirth(phantomSysPeers,key,sentEntry))return;
         if(phantomHasOpenSysPipe(key)){sdkSysBirthFailures.delete(key);return;}
         // A committed member can arrive before its historical mirror promotes.
@@ -10763,6 +10774,7 @@ export function createNetworkEngine(host) {
     return { key, pipe, ent };
   }
 
+  const phantomInboundRtcChains = new Map();
   function phantomQueueInboundRtc(fromHKey, meta, kind, apply) {
     const edge = phantomRtcEdgeForInbound(fromHKey, meta);
     if (!edge) return Promise.resolve(false);
@@ -10770,7 +10782,10 @@ export function createNetworkEngine(host) {
     const { key, pipe, ent } = edge;
     const label = String(kind || "signal");
 
-    ent.rtcInboundChain = Promise.resolve(ent.rtcInboundChain)
+    // Queue ownership follows the peer edge, not a disposable PC. An offer
+    // can replace that PC while later offers/answers/ICE are already queued.
+    const chainKey = pipe + ":" + key;
+    const queued = Promise.resolve(phantomInboundRtcChains.get(chainKey))
       .catch(() => {})
       .then(async () => {
         if(pipe === "sys") {
@@ -10780,7 +10795,8 @@ export function createNetworkEngine(host) {
         const current =
           pipe === "sys" ? phantomSysPeers.get(key) : phantomChatPeers.get(key);
 
-        if (!current || current !== ent || !ent.pc) {
+        if (!current || !current.pc ||
+            (current !== ent && label !== "offer" && !String(meta?.chatAttemptId || meta?.sysAttemptId || ""))) {
           emitSnapshot(pipe + "_rtc_inbound_stale_" + label);
           return false;
         }
@@ -10794,7 +10810,8 @@ export function createNetworkEngine(host) {
         return false;
       });
 
-    return ent.rtcInboundChain;
+    phantomInboundRtcChains.set(chainKey, queued);
+    return queued.finally(() => {if (phantomInboundRtcChains.get(chainKey) === queued)phantomInboundRtcChains.delete(chainKey);});
   }
 
   async function phantomFlushInboundRtcIce(
@@ -11419,6 +11436,7 @@ export function createNetworkEngine(host) {
           lastAt: Number(bootstrap.cfHits?.lastAt || 0),
         },
 
+        transportRecoveryGraceMs: PHANTOM_TRANSPORT_RECOVERY_MS,
         sysEligible: concierge.sysEligible,
         sysReady: concierge.sysReady,
         sysUnavailableReason: concierge.sysUnavailableReason,

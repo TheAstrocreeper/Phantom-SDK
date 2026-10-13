@@ -56,3 +56,7 @@ Loss of an established peer channel shows recovery instructions while keeping th
 Reports now include the latest recovery context and a bounded history of context changes: system attempt state/fault/retry count/age, doorway deadline phase, committed and pending membership counts, terminal-exit count, and each chat channel's RTC/ICE/signaling state and fault. Peer keys, handles, attempt IDs, raw audit traces, packets, and free-form errors are omitted. Build-time extraction supplies a vocabulary of static SDK diagnostic codes; unknown text is labeled unrecognized.
 
 A two-peer simulated Nostr outage with both RTC paths failed and signaling withheld for 25 seconds produced terminal replacement events after the ten-second replacement window and divergent solo membership. This is a candidate mechanism for the user-observed network-switch failure, not a confirmed native-browser diagnosis. Recovery policy is unchanged in this diagnostic update.
+
+### Network-switch recovery policy
+
+The SDK now gives discovery-hint transports a 60-second membership recovery grace instead of treating ten seconds of lost transport as departure. Individual connection attempts still expire after ten seconds. Validated peer status can restart an exhausted chat attempt after signaling returns. The 45-second simulated network-switch test preserves membership and verifies file transfer after recovery. Actual phone/laptop confirmation remains necessary.
