@@ -50,3 +50,9 @@ Compact steel/charcoal and amber console with system Arial typography. At deskto
 ## Recovery status and diagnostics
 
 Loss of an established peer channel shows recovery instructions while keeping the room open. Channel return restores the active transfer message or prompts the receiver to resume missing pieces. A recovered channel does not itself claim that a file transfer completed. Copy, download, and share report controls are visible outside the inspector. Reports record channel loss/return, browser online/offline/visibility events, and allowlisted SDK reasons/actions without raw packets or identities. Test network switching on the actual phone and laptop; automated fixtures cannot establish real NAT connectivity.
+
+### Detailed recovery reports
+
+Reports now include the latest recovery context and a bounded history of context changes: system attempt state/fault/retry count/age, doorway deadline phase, committed and pending membership counts, terminal-exit count, and each chat channel's RTC/ICE/signaling state and fault. Peer keys, handles, attempt IDs, raw audit traces, packets, and free-form errors are omitted. Build-time extraction supplies a vocabulary of static SDK diagnostic codes; unknown text is labeled unrecognized.
+
+A two-peer simulated Nostr outage with both RTC paths failed and signaling withheld for 25 seconds produced terminal replacement events after the ten-second replacement window and divergent solo membership. This is a candidate mechanism for the user-observed network-switch failure, not a confirmed native-browser diagnosis. Recovery policy is unchanged in this diagnostic update.
