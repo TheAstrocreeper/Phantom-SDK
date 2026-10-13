@@ -13,3 +13,5 @@ An open relay is not an open peer channel. Automated tests validate ownership, c
 See docs/six7-connection-lifecycle.md for the source comparison and known differences.
 
 Default startup has no forced SYS birth deadline or admission deadline. Join remains pending until SDK admission/failure/closure or Leave cancellation. SDK consumers may explicitly request timeoutMs for their own cancellation policy.
+
+Candidate tracing records generated, gathering complete, local route submission, received, buffered, applied and rejected/discarded candidates with exact candidate tuple, peer, native connection ID and attempt metadata. Submission means the SDK accepted routing locally; it does not assert remote relay publication or delivery. Remote receipt and browser application provide separate evidence. ICE_TRACE has a dedicated 512-event report buffer alongside snapshot.iceTrace; native stats remain event-driven. Browser acceptance does not prove mDNS resolution or connectivity; compare candidate-pair stats separately.

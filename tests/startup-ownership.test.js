@@ -53,6 +53,8 @@ test('queued ICE survives the incoming owner offer',async()=>{
   b.wire.onSignal({...offer,type:'rtc_ice',sdp:undefined,cand:candidate});
   await settle();
   assert(applied.includes(candidate.candidate));
+  const trace=b.core.snapshot().iceTrace.events.filter(e=>e.candidate.candidate===candidate.candidate);
+  assert.deepEqual(trace.map(e=>e.stage),['received','applied']);assert(trace.every(e=>e.connectionId!==null));
  }finally{a.core.dispose();b.core.dispose();}
 });
 
@@ -102,4 +104,15 @@ test('elapsed time does not retire a checking SYS birth; native failure initiate
   assert.equal(original.connectionState,'closed');assert(f.packets.filter(p=>p.type==='rtc_offer').length>1);
  }finally{f.core.dispose();}
  assert.equal(c.pending(),0,'disposal clears scheduled work');
+});
+
+test('candidate trace correlates generation, local route submission and remote application',async()=>{
+ const before=instances.length,a=await fixture(leader),b=await fixture(mirror);try{
+  b.wire.onSignal(a.packets.find(p=>p.type==='rtc_offer'&&p.to===mirror));await settle();
+  const candidate={candidate:'candidate:1 1 udp 2113937151 pc-example.local 2345 typ host ufrag test',sdpMid:'0',sdpMLineIndex:0,usernameFragment:'test'};
+  instances[before].onicecandidate({candidate});await settle();
+  const packet=a.packets.find(p=>p.type==='rtc_ice');assert(packet);b.wire.onSignal(packet);await settle();
+  const tx=a.core.snapshot().iceTrace.events.filter(e=>e.candidate.candidate===candidate.candidate),rx=b.core.snapshot().iceTrace.events.filter(e=>e.candidate.candidate===candidate.candidate);
+  assert.deepEqual(tx.map(e=>e.stage),['generated','route_submission']);assert.deepEqual(rx.map(e=>e.stage),['received','applied']);assert(tx.every(e=>e.key===rx[0].key));assert.equal(tx[0].candidate.address,'pc-example.local');assert.equal(tx[1].submitted,true);
+ }finally{a.core.dispose();b.core.dispose();}
 });

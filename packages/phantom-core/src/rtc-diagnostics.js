@@ -40,5 +40,5 @@ export function createRtcDiagnostics({now=Date.now,emit=()=>{},maxConnections=32
   announce(r);if(withStats){item.requestedAt=now();stats(pc,item);}
  }
  function retire(pc,reason){if(!pc)return;const item=tracked.get(pc);if(!item||item.record.retired)return;capture(pc,'before_close:'+reason,false);item.record.retired=true;item.record.retirementReason=reason;stats(pc,item,true);}
- return {track,capture,retire,snapshot:()=>structuredClone({limits:{connections:maxConnections,eventsPerConnection:maxEvents,statsPerConnection:maxStats},droppedConnections,connections:records})};
+ return {track,capture,retire,connectionId:pc=>tracked.get(pc)?.record.id??null,snapshot:()=>structuredClone({limits:{connections:maxConnections,eventsPerConnection:maxEvents,statsPerConnection:maxStats},droppedConnections,connections:records})};
 }
