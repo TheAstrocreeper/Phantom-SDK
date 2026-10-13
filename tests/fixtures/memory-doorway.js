@@ -1,7 +1,7 @@
 import {createDoorway} from '../../packages/phantom-doorways/src/interface.js';
 // A developer adapter with no Nostr envelope or CF socket protocol. Discovery
 // cannot prove absence. Delivery deliberately allows ICE ahead of offers.
-export function memoryDoorway() {
+export function memoryDoorway({copies=1}={}) {
  const sessions=new Map(),identities=new Map();let generation=0,paused=false;
  function roster(){
   const rows=[...sessions.values()].filter(s=>s.row).map(s=>s.row);
@@ -15,7 +15,7 @@ export function memoryDoorway() {
    announce(value){s.row={...value,hKey:c.peerId,from:c.peerId,videoId:c.roomId,hex:identities.get(c.peerId),roomJoinedAt:value.t};roster();},
    reconcile(){roster();},
    sendSignal(packet){const target=sessions.get(packet.to);if(paused||!target)return;
-    if(packet.type==='rtc_offer')setImmediate(()=>{if(!paused)target.c.onSignal(packet);});
+    if(packet.type==='rtc_offer')setImmediate(()=>{if(!paused)for(let i=0;i<copies;i++)target.c.onSignal(packet);});
     else queueMicrotask(()=>{if(!paused)target.c.onSignal(packet);});},
    close(){sessions.delete(c.peerId);}
   };

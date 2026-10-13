@@ -6453,6 +6453,24 @@ export function createNetworkEngine(host) {
               transportIncarnationBound
             );
 
+            // The remote end may send before our local open notification.
+            // Keep one bounded admission on this exact transport; only its
+            // open event can replay it through every admission gate above.
+            const admissionEntry = phantomSysPeers.get(key);
+            if (!alreadyCommitted && doorwayAdmitted && directTransport &&
+                explicitAdmission && freshIncarnation && transportIncarnationBound &&
+                !sourcePipeProven && admissionEntry?.sysdc?.readyState === "connecting" &&
+                admissionEntry.temporary !== true && incomingBootId.length <= 256 &&
+                admissionEntry.remoteBootId === incomingBootId && !blocked && !blockedBy) {
+              admissionEntry.pendingOpenAdmission = {
+                from: fromKey, bootId: incomingBootId, admit: true,
+                videoId, roomJoinedAt: Number(inner.roomJoinedAt || 0),
+                epoch: Number(inner.epoch || 0),
+              };
+              emitSnapshot("sys_admission_waiting_for_local_pipe_open");
+              return;
+            }
+
             if (freshDirectAdmission && phantomSysAuthority.pending) {
               sdkDeferredAdmissions.set(fromKey,{key,inner:structuredClone(inner),entry:phantomSysPeers.get(key)});
               emitSnapshot("sys_admission_deferred_pending_commit");
@@ -8396,6 +8414,12 @@ export function createNetworkEngine(host) {
             emitSnapshot("relationship_pending_sys_send_failed_" + relType);
           }
         }
+      }
+
+      const pendingAdmission = ent.pendingOpenAdmission;
+      delete ent.pendingOpenAdmission;
+      if (!temporary && pendingAdmission && phantomSysPeers.get(key) === ent) {
+        sdkApplySysAdmission(key, pendingAdmission);
       }
 
       emitSnapshot(temporary ? "temporary_sysdc_open" : "sysdc_open");

@@ -9,7 +9,7 @@ export class CandidateRTC extends RTC {
   this.maybeConnect();
  }
  async setRemoteDescription(d){
-  if(d.type==='offer')await super.setRemoteDescription(d);
+  if(d.type==='offer'){this.offerApplications=(this.offerApplications||0)+1;await super.setRemoteDescription(d);}
   else{this.remoteDescription=d;this.signalingState='stable';this.remote=rtc.get(d.sdp);}
   this.maybeConnect();
  }
@@ -25,7 +25,7 @@ export class CandidateRTC extends RTC {
   for(const pc of [this,peer]){
    if(pc.connectionState==='connected')continue;
    pc.connectionState='connected';pc.iceConnectionState='connected';
-   for(const c of pc.channels){c.readyState='open';queueMicrotask(()=>c.onopen?.());}
+   for(const c of pc.channels){if(pc.asymmetricOpen&&pc.localDescription.type==='offer')setImmediate(()=>{if(pc.signalingState!=='closed'){c.readyState='open';c.onopen?.();}});else{c.readyState='open';queueMicrotask(()=>c.onopen?.());}}
    pc.onconnectionstatechange?.();
   }
  }

@@ -46,3 +46,14 @@ The manual-clock integration tests advance 90 seconds without sleep: membership 
 A new RTC attempt ID within the same boot replaces only that pipe, not the peer incarnation. Late ICE/datachannel callbacks from retired PCs are ignored. ICE may arrive before an offer on any relay: a core inbox holds at most 64 candidates per peer pipe, 128 peer pipes, and 1,024 candidates in total. It retains only RTC candidate fields; candidate strings are capped at 4,096 characters and optional text fields at 256 characters. A validated offer consumes only matching boot/attempt candidates and clears the obsolete candidates for that pipe. The inbox owns no timers and is cleared on disposal. Unknown SYS attempt candidates are bounded hints until offer ownership is validated; they cannot open a pipe or change authority.
 
 The recovery fixture now requires both peers to apply current-generation ICE before channels can open. A developer-defined in-memory doorway also reorders ICE ahead of offers and uses opaque availability generations, without Nostr or Cloudflare. This extends simulation coverage; native cross-device recovery remains to be verified.
+
+An explicit, direct admission can arrive on a current SYS transport while the local channel still reports `connecting`. If all incarnation, authorization and doorway gates pass, that transport retains one bounded admission until its own `open` event. The core then reapplies every admission gate; replacing/closing the transport cannot move its request to another PC. There is no retry timer, and receipt alone does not grant membership.
+
+Optional real transport check (werift 0.25.0; ICE, DTLS and SCTP over loopback):
+
+```bash
+npm install --prefix /tmp/phantom-real-rtc werift@0.25.0 --no-audit --no-fund
+PHANTOM_REAL_RTC_ROOT=/tmp/phantom-real-rtc npm run test:rtc:loopback
+```
+
+The check first verifies a bare RTC connection independently, then verifies SDK admission and two-member mirror commitment through a developer doorway. It does not exercise external STUN/TURN, phone/laptop NAT, or public relay reachability. A deterministic delayed-open fixture reproduces admission arriving before local channel-open; the previous core times out, while deferred admission completes and a second transfer succeeds.
