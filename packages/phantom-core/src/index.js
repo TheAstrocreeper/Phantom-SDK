@@ -29,7 +29,7 @@ function eventSurface() {
 }
 
 /** Public peer-network facade with injectable transport and runtime. */
-export function createPhantom({ doorway, origin = 'https://phantom.local',
+export function createPhantom({ transportDiagnostics=false, doorway, origin = 'https://phantom.local',
     avatar = null, storage = memoryStorage(), sessionStorage = memoryStorage(),
     runtime = globalThis, observeBrowserLifecycle = false, canSendFile = () => true, authorizeSyscon1 = () => true, canAdmitPeer = () => true } = {}) {
   if (['phantom-doorway-v1','phantom-doorway-v2'].includes(doorway?.protocol)) doorway = bridgeDoorway(doorway);
@@ -61,6 +61,7 @@ export function createPhantom({ doorway, origin = 'https://phantom.local',
   const host = {
     window, document, origin, avatar, allowDisplayNames: true, localStorage: storage, sessionStorage,
     location: { href: origin }, doorwayUrl: doorway.url,
+    transportDiagnostics,
     doorwayPresence: doorway.presence ?? 'live-sockets',
     WebSocket: doorway.WebSocket, RTCPeerConnection: runtime.RTCPeerConnection,
     crypto: runtime.crypto, canSendFile, authorizeSyscon1,

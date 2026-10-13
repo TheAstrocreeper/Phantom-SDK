@@ -11,7 +11,7 @@ import {createAdmissionCheckpoint, AdmissionError} from '../../phantom-core/src/
 import {withAdmissionDoorway} from './admission-doorway.js';
 import {parseInvite, encodeInvite} from '../../phantom-core/src/invite.js';
 /** One entry API; service selection belongs to the adapter composition layer. */
-export function createBrowserPhantom({admission,authorizationTimeoutMs=5000,adminIdentity,adminPublicKey=adminIdentity?.publicKey,controlStore,files,distribution,readAdminOrders,retireGraceMs,relays,doorways,doorwayMode='failover',doorwayAdmissionTimeoutMs=10000,adapters={},storage,WebSocket=globalThis.WebSocket,runtime=globalThis,onRelayProgress=()=>{},onDoorwayStatus=()=>{},relayFinder,relayMaxAgeMs,now,coreFactory}={}) {
+export function createBrowserPhantom({transportDiagnostics=false,admission,authorizationTimeoutMs=5000,adminIdentity,adminPublicKey=adminIdentity?.publicKey,controlStore,files,distribution,readAdminOrders,retireGraceMs,relays,doorways,doorwayMode='failover',doorwayAdmissionTimeoutMs=10000,adapters={},storage,WebSocket=globalThis.WebSocket,runtime=globalThis,onRelayProgress=()=>{},onDoorwayStatus=()=>{},relayFinder,relayMaxAgeMs,now,coreFactory}={}) {
  if(admission!==undefined&&(!admission||typeof admission.authorize!=='function'||typeof admission.verify!=='function'))throw new TypeError('admission requires authorize and verify functions');
  if(relays!==undefined&&doorways!==undefined)throw new TypeError('Use relays or doorways, not both');
  try{storage??=runtime.localStorage;}catch{}
@@ -56,7 +56,7 @@ export function createBrowserPhantom({admission,authorizationTimeoutMs=5000,admi
    // Keep original invite coordinates while adding discovered alternatives.
    return build({...spec,relays:expanded});
   }}),{onStatus:onDoorwayStatus});
-  return {identity:{version:1,id:identity.publicKey},runtime,observeBrowserLifecycle:true,doorway,canAdmitPeer:access?peer=>access.checkpoint.allows(peer):undefined,adminIdentity,controlStore:context.adminPublicKey?(controlStore??createControlStore(storage)):undefined,files,distribution,readAdminOrders,retireGraceMs,onNetworkState:state=>doorway.observeNetworkState(state)};
+  return {transportDiagnostics,identity:{version:1,id:identity.publicKey},runtime,observeBrowserLifecycle:true,doorway,canAdmitPeer:access?peer=>access.checkpoint.allows(peer):undefined,adminIdentity,controlStore:context.adminPublicKey?(controlStore??createControlStore(storage)):undefined,files,distribution,readAdminOrders,retireGraceMs,onNetworkState:state=>doorway.observeNetworkState(state)};
  }
  return {
   async join(invite,options){const context=parseInvite(invite);const access=await preflight(context,options,'join');return createPhantomEntry({openContext:context=>openContext(context,options?.doorwayTypes,access),...(coreFactory?{coreFactory}:{})}).join(invite,options);},

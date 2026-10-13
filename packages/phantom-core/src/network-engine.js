@@ -1,3 +1,4 @@
+import {createRtcDiagnostics,iceDetails} from './rtc-diagnostics.js';
 import {createCandidateInbox} from './candidate-inbox.js';
 import {waitForChannelDrain} from './channel-drain.js';
 import {createSignalQueue} from './signal-queue.js';
@@ -9084,9 +9085,19 @@ export function createNetworkEngine(host) {
     };
     phantomChatPeers.set(k, ent);
 
+    pc.onicecandidateerror = error => {
+      if (phantomChatPeers.get(k) !== ent) return;
+      rtcDiagnostics.record('ice_candidate_error',{...rtcDebug('ice_candidate_error_context',k,'chat',ent),errorCode:error.errorCode,errorMessage:error.errorText});
+    };
+    pc.onicegatheringstatechange = () => {
+      if (phantomChatPeers.get(k) !== ent) return;
+      const detail=rtcDebug('ice_gathering_state',k,'chat',ent);
+      rtcStats(pc,detail);
+    };
     pc.onicecandidate = (ev) => {
       if (phantomChatPeers.get(k) !== ent) return;
       const c = ev?.candidate;
+      rtcDebug(c ? "local_candidate" : "local_candidates_complete",k,"chat",ent,{},c);
 
       if (c) {
         concierge.lastRtcIceCandidateAt = now();
@@ -9241,9 +9252,19 @@ export function createNetworkEngine(host) {
     };
     phantomSysPeers.set(k, ent);
 
+    pc.onicecandidateerror = error => {
+      if (phantomSysPeers.get(k) !== ent) return;
+      rtcDiagnostics.record('ice_candidate_error',{...rtcDebug('ice_candidate_error_context',k,'sys',ent),errorCode:error.errorCode,errorMessage:error.errorText});
+    };
+    pc.onicegatheringstatechange = () => {
+      if (phantomSysPeers.get(k) !== ent) return;
+      const detail=rtcDebug('ice_gathering_state',k,'sys',ent);
+      rtcStats(pc,detail);
+    };
     pc.onicecandidate = (ev) => {
       if (phantomSysPeers.get(k) !== ent) return;
       const c = ev?.candidate;
+      rtcDebug(c ? "local_candidate" : "local_candidates_complete",k,"sys",ent,{},c);
 
       if (c) {
         concierge.lastRtcIceCandidateAt = now();
@@ -9292,6 +9313,8 @@ export function createNetworkEngine(host) {
         return;
       }
 
+      const detail=rtcDebug("connectionState",k,"sys",current);
+      rtcStats(pc,detail);
       const st = pc.connectionState;
       if (st === "failed" || st === "closed") {
         if (current.temporary === true || phantomTemporarySysTransactions.has(k)) {
@@ -9309,6 +9332,8 @@ export function createNetworkEngine(host) {
         return;
       }
 
+      const detail=rtcDebug("iceConnectionState",k,"sys",current);
+      rtcStats(pc,detail);
       const st = pc.iceConnectionState;
       if (st === "failed" || st === "closed") {
         if (current.temporary === true || phantomTemporarySysTransactions.has(k)) {
@@ -9352,6 +9377,7 @@ export function createNetworkEngine(host) {
     if (!key) return;
 
     const ent = phantomSysPeers.get(key);
+    rtcStats(ent?.pc,rtcDebug("transport_retiring",key,"sys",ent,{}));
     const temporary = phantomTemporarySysTransactions.get(key);
     try {
       if (temporary?.deadlineTimer) clearTimeout(temporary.deadlineTimer);
@@ -10841,6 +10867,23 @@ export function createNetworkEngine(host) {
     return { key, pipe, ent };
   }
 
+  const rtcDiagnostics = host.transportDiagnostics === true ? createRtcDiagnostics({now}) : {record(){},stats:async()=>{},snapshot:()=>null};
+  function rtcDebug(event,key,pipe,ent,meta={},candidate) {
+    if(host.transportDiagnostics !== true)return {};
+    const values={peer:key,pipe,attempt:String(pipe==='sys'?(ent?.attempt?.id||ent?.sysAttemptId||''):(ent?.chatAttemptId||'')),
+      incomingAttempt:String(meta.sysAttemptId||meta.chatAttemptId||''),boot:String(ent?.remoteBootId||phantomRemoteBootIds.get(key)||''),incomingBoot:String(meta.bootId||''),incomingUfrag:String(meta.incomingUfrag||''),
+      owner:pipe==='sys'?phantomSysBirthRole(key):(phantomOwnsChatPipeOffer(key)?'opener':'acceptor'),
+      pc:String(ent?.pc?.connectionState||''),ice:String(ent?.pc?.iceConnectionState||''),signaling:String(ent?.pc?.signalingState||''),gathering:String(ent?.pc?.iceGatheringState||''),
+      channel:String((pipe==='sys'?ent?.sysdc:ent?.dc)?.readyState||'missing'),...iceDetails(candidate,ent?.pc)};
+    if (event === "local_candidate") {
+      delete values.generationMatches;
+      if (values.candidateUfrag && values.localUfrag) values.generationMatches=values.candidateUfrag===values.localUfrag;
+    }
+    rtcDiagnostics.record(event,values);return values;
+  }
+  function rtcStats(pc,detail) {
+    if(host.transportDiagnostics === true && typeof pc?.getStats === "function")void rtcDiagnostics.stats(pc,detail).then(()=>emitSnapshot("rtc_stats_updated"));
+  }
   const phantomInboundRtcQueue = createSignalQueue();
   const phantomEarlyRtcIce = createCandidateInbox();
   function phantomQueueInboundRtc(fromHKey, meta, kind, apply) {
@@ -10859,6 +10902,7 @@ export function createNetworkEngine(host) {
       // may replace a PC; later packets use attempt IDs against that current PC.
       const edge=phantomRtcEdgeForInbound(key,meta);if(!edge)return false;
       try{return await apply();}catch(e){
+        rtcDiagnostics.record('rtc_operation_failed',{...rtcDebug(label+'_failed',key,pipe,pipe==='sys'?phantomSysPeers.get(key):phantomChatPeers.get(key),meta),errorName:e?.name,errorMessage:e?.message});
         concierge.lastErr=pipe+'_rtc_inbound_'+label+'_failed:'+String(e?.message||e);
         emitSnapshot(pipe+'_rtc_inbound_'+label+'_failed');return false;
       }
@@ -10883,6 +10927,7 @@ export function createNetworkEngine(host) {
     for (const cand of pending) {
       try {
         await ent.pc.addIceCandidate(cand);
+      rtcDebug("candidate_applied",key,pipe,ent,meta,cand);
       } catch (e) {
         concierge.lastErr =
           pipe + "_rtc_ice_apply_failed:" + String(e?.message || e);
@@ -10928,6 +10973,7 @@ export function createNetworkEngine(host) {
     if (!fromKey || fromKey === selfKey) return;
 
     const pipe = phantomRtcPipeFromMeta(meta);
+    rtcDebug("offer_received",fromKey,pipe,pipe==='sys'?phantomSysPeers.get(fromKey):phantomChatPeers.get(fromKey),{...meta,incomingUfrag:String(offer?.sdp||'').match(/(?:^|\r?\n)a=ice-ufrag:([^\r\n]+)/)?.[1]||''},undefined);
 
     let sysBirthRole = "";
 
@@ -11065,6 +11111,7 @@ export function createNetworkEngine(host) {
       String((pipe === "sys" ? meta.sysAttemptId : meta.chatAttemptId) || ""),
     ));
     await pc.setRemoteDescription(offer);
+    rtcDebug("remote_offer_applied",fromKey,pipe,ent,meta);
     await phantomFlushInboundRtcIce(
       fromKey,
       pipe,
@@ -11114,6 +11161,7 @@ export function createNetworkEngine(host) {
     if (!key) return;
 
     const pipe = phantomRtcPipeFromMeta(meta);
+    rtcDebug("answer_received",key,pipe,pipe==='sys'?phantomSysPeers.get(key):phantomChatPeers.get(key),{...meta,incomingUfrag:String(answer?.sdp||'').match(/(?:^|\r?\n)a=ice-ufrag:([^\r\n]+)/)?.[1]||''},undefined);
     const ent = pipe === "sys" ? phantomSysPeers.get(key) : phantomChatPeers.get(key);
     if (!ent?.pc) return;
 
@@ -11178,6 +11226,7 @@ export function createNetworkEngine(host) {
 
     try {
       await pc.setRemoteDescription(answer);
+      rtcDebug("remote_answer_applied",key,pipe,ent,meta);
       await phantomFlushInboundRtcIce(key, pipe, ent, "answer_remote_description");
       emitSnapshot(pipe + "_rtc_answer_applied");
     } catch (e) {
@@ -11238,6 +11287,7 @@ export function createNetworkEngine(host) {
     if (!key) return;
 
     const pipe = phantomRtcPipeFromMeta(meta);
+    rtcDebug("candidate_received",key,pipe,pipe==='sys'?phantomSysPeers.get(key):phantomChatPeers.get(key),meta,cand);
     const ent = pipe === "sys" ? phantomSysPeers.get(key) : phantomChatPeers.get(key);
     if (!ent?.pc) return;
 
@@ -11318,9 +11368,11 @@ export function createNetworkEngine(host) {
 
     try {
       await ent.pc.addIceCandidate(cand);
+      rtcDebug("candidate_applied",key,pipe,ent,meta,cand);
       emitSnapshot(pipe + "_rtc_ice_applied");
       return true;
     } catch (e) {
+      rtcDiagnostics.record("candidate_apply_failed",{...rtcDebug("candidate_apply_failed_context",key,pipe,ent,meta,cand),errorName:e?.name,errorMessage:e?.message});
       concierge.lastErr =
         pipe + "_rtc_ice_apply_failed:" + String(e?.message || e);
       emitSnapshot(pipe + "_rtc_ice_apply_failed");
@@ -11340,6 +11392,7 @@ export function createNetworkEngine(host) {
       t: now(),
       reason: reason || null,
       eventCounts: phantomEventCountRows(20),
+      rtcDiagnostics:rtcDiagnostics.snapshot(),
       recoveryResources:{...phantomInboundRtcQueue.snapshot(),...phantomEarlyRtcIce.snapshot(),availabilityReceipts:sdkSysRecoveryAvailability.size,pendingAvailability:sdkSysRecoveryPending.size},
 
       sysPairs: Array.from(phantomSysPeers.values()).map(ent => ({
@@ -11692,6 +11745,9 @@ export function createNetworkEngine(host) {
   }
 
   function emitSnapshot(reason) {
+    if (/(rtc_|sys_.*(?:birth|preflight|attempt|transport|pipe|admission))/.test(String(reason))) {
+      rtcDiagnostics.record("core_event",{reason:String(reason||''),errorMessage:String(concierge.lastErr||concierge.sysLastErr||''),owner:String(concierge.localRoleCandidate||concierge.role||'')});
+    }
     try {
       const why = String(reason || "snapshot");
       phantomCountEvent("snapshot:" + why);

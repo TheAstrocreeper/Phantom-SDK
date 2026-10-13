@@ -30,7 +30,7 @@ try{
  const memory=memoryDoorway({copies:3}),reasons=[];
  const runtime={crypto,RTCPeerConnection:RTC,setTimeout,clearTimeout,setInterval,clearInterval};
  for(let i=0;i<2;i++){
-  const sdk=createBrowserPhantom({runtime,doorways:[{type:'memory'}],adapters:{memory:({identity})=>memory.register(identity)}});
+  const sdk=createBrowserPhantom({transportDiagnostics:true,runtime,doorways:[{type:'memory'}],adapters:{memory:({identity})=>memory.register(identity)}});
   const options={name:i?'Phone':'PC',timeoutMs:10000,onEvent:e=>{if(e.type==='SNAPSHOT')reasons.push(e.payload.reason);}};
   const n=i?await sdk.join(networks[0].invite,options):await sdk.create(options);networks.push(n);
  }
