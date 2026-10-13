@@ -1,0 +1,621 @@
+diff --git a/demos/phantom-breach/src/app.js b/demos/phantom-breach/src/app.js
+index 8edb901..801993d 100644
+--- a/demos/phantom-breach/src/app.js
++++ b/demos/phantom-breach/src/app.js
+@@ -1,6 +1,8 @@
++import {createStartupRecovery} from './startup-recovery.js';
+ import {connectionNotice} from './connection-status.js';
+ import {createDiagnostics} from './diagnostics.js';
+ const diagnostics=createDiagnostics({build:__PHANTOM_BUILD__,codes:__PHANTOM_DIAGNOSTIC_CODES__});
++const startupRecovery=createStartupRecovery(diagnostics);
+ import QRCode from 'qrcode';
+ import {createBrowserPhantom} from '../../../packages/phantom-doorways/src/browser-entry.js';
+ import {shareLink,readLink} from '../../shared-canvas/src/link.js';
+@@ -18,7 +20,7 @@ async function wake(active){wakeWanted=active;if(!active){await wakeSentinel?.re
+ document.addEventListener('visibilitychange',()=>{if(wakeWanted&&document.visibilityState==='visible')void wake(true);});
+ function update(){if(network)diagnostics.recovery(network.snapshot(),network.getState());const live=channels();if(live.length!==lastChannels)diagnostics.record('channels',{channels:live.length,relaySockets:monitor?.count()??0});const restored=live.some(id=>!lastLivePeers.has(id));if(lastChannels&&!live.length){ready.clear();pings.clear();diagnostics.record('peerChannelLost');log('PEER CHANNEL','Lost; keeping this room open for recovery.');}if(restored){diagnostics.record(hadPeer?'peerChannelRestored':'peerChannelReady');log('PEER CHANNEL',hadPeer?'Restored':'Ready');hadPeer=true;if(!busy)status(!$('resume').hidden?'Peer reconnected. Resume missing pieces on this screen.':$('result').textContent.toLowerCase().includes('verified')?'Peer connected. Previous file remains verified; you can send another.':'Connected. Choose a file on either screen.');}lastLivePeers=new Set(live);lastChannels=live.length;renderStatus();$('channels').textContent=live.length;$('connection').textContent=live.length?'PEER CONNECTED':network?(hadPeer?'RECOVERING':'CONNECTING'):'OFFLINE';$('sockets').textContent=`${monitor?.count()??0} relay sockets`;$('file').disabled=!live.length||busy;$('inject').disabled=!live.length||busy||!$('file').files.length;$('leave').disabled=!network;$('resume').disabled=!live.length||busy;$('connected').classList.toggle('offline',!live.length);$('peerTitle').textContent=live.length?'Peer online':'Peer offline';if(!live.length)$('ping').textContent='—';if(live.length){clearInterval(connectTimer);$('connectElapsed').hidden=true;$('setup').hidden=true;$('invitePanel').hidden=true;$('connected').hidden=false;$('step1').className='done';if(!$('result').textContent.includes('verified'))$('step2').className='active';}}
+ function connect(){if(!network)return;const self=network.getState().peerId;for(const p of network.getPeers())if(p.hKey!==self&&self<p.hKey&&!channels().includes(p.hKey)&&Date.now()-(invited.get(p.hKey)??0)>4000){invited.set(p.hKey,Date.now());network.invitePeer(p.hKey);}}
+-function event(e){if(!network){if(pending.length<200)pending.push(e);return;}if(e.type==='VEIL_INVITE_RECEIVED')network.acceptPeer(e.payload.from);if(e.type==='P2P_CHAT_READY'){ready.add(e.payload.from);update();}if(e.type==='SNAPSHOT')diagnostics.recovery(e.payload,network.getState());if(e.type==='PRESENCE_ROSTER')connect();}
++function event(e){if(e.type==='SNAPSHOT'){if(network)diagnostics.recovery(e.payload,network.getState());else startupRecovery.snapshot(e.payload);return;}if(!network){if(pending.length<200)pending.push(e);return;}if(e.type==='VEIL_INVITE_RECEIVED')network.acceptPeer(e.payload.from);if(e.type==='P2P_CHAT_READY'){ready.add(e.payload.from);update();}if(e.type==='PRESENCE_ROSTER')connect();}
+ function reset(m,id){diagnostics.record('transferManifest',m);manifest=m;currentId=id;verified=new Set();remoteVerified=new Set();transferStart=performance.now();transferBytes=0;averageElapsed=0;$('resume').hidden=true;$('download').hidden=true;$('step2').className='active';$('step3').className='';$('payloadInfo').textContent=`${m.name} · ${(m.size/1048576).toFixed(1)} MiB · ${m.total} pieces`;draw();}
+ function draw(){if(drawPending)return;drawPending=true;requestAnimationFrame(()=>{drawPending=false;const ctx=$('matrix').getContext('2d'),total=manifest?.total??0,active=offers.has(currentId)?verified:remoteVerified,pct=total?active.size/total:0;ctx.clearRect(0,0,1200,180);ctx.strokeStyle='#303b44';ctx.lineWidth=1;for(const x of [70,1130]){ctx.beginPath();ctx.arc(x,90,7,0,Math.PI*2);ctx.stroke();}ctx.beginPath();ctx.moveTo(80,90);ctx.lineTo(515,90);ctx.moveTo(685,90);ctx.lineTo(1120,90);ctx.stroke();ctx.lineWidth=5;ctx.beginPath();ctx.arc(600,90,62,0,Math.PI*2);ctx.stroke();if(pct){ctx.strokeStyle='#ffae54';ctx.beginPath();ctx.arc(600,90,62,-Math.PI/2,-Math.PI/2+pct*Math.PI*2);ctx.stroke();ctx.strokeStyle='#b9d8e5';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(80,90);ctx.lineTo(80+435*pct,90);ctx.moveTo(685,90);ctx.lineTo(685+435*pct,90);ctx.stroke();}ctx.textAlign='center';ctx.fillStyle='#eef3f5';ctx.font='bold 28px Arial';ctx.fillText(`${Math.floor(pct*100)}%`,600,92);ctx.font='11px monospace';ctx.fillStyle='#8295a3';ctx.fillText('VERIFIED',600,113);ctx.textAlign='left';ctx.fillText('SOURCE',80,72);ctx.textAlign='right';ctx.fillText('RECEIVER',1120,72);$('progress').textContent=`${active.size} / ${total}`;$('bar').style.width=`${pct*100}%`;});}
+ function metrics(){if(!transferStart)return;const elapsed=busy?performance.now()-transferStart:averageElapsed;const rate=elapsed>0?transferBytes/(elapsed/1000):0;$('rate').textContent=rate>=1048576?`${(rate/1048576).toFixed(2)} MiB/s`:`${(rate/1024).toFixed(0)} KiB/s`;$('elapsed').textContent=`${(elapsed/1000).toFixed(1)} s`;}
+@@ -32,7 +34,7 @@ async function message({from,text}){if(text.length>16000||!channels().includes(f
+  if(p.type==='paused'){busy=false;averageElapsed=performance.now()-transferStart;void wake(false);status('Peer paused. Keep this screen open while the receiver resumes.');$('result').textContent='Peer interrupted';update();}
+  if(p.type==='complete'){if(p.hash!==hashes.get(currentId)){failed(Error('Peer hash mismatch'));return;}busy=false;averageElapsed=performance.now()-transferStart;void wake(false);$('result').textContent='Peer verified';$('step2').className='done';$('step3').className='active';status('Your peer verified the received file.');diagnostics.record('complete',{role:'sender',result:'peer_verified',durationMs:averageElapsed,size:manifest.size});log('PEER VERIFIED',`${p.hash} · ${averageElapsed.toFixed(0)} ms`);update();metrics();}
+ }
+-async function open(invite){connectStarted=performance.now();$('connectElapsed').hidden=false;clearInterval(connectTimer);connectTimer=setInterval(()=>{$('connectElapsed').textContent=`${Math.floor((performance.now()-connectStarted)/1000)}s · waiting for peer`;},250);$('deploy').classList.add('working');$('deploy').disabled=true;$('deploy').textContent='Connecting…';status('Finding signaling relays and opening the room…',true);monitor=createRelayMonitor(WebSocket);const sdk=createBrowserPhantom({WebSocket:monitor.WebSocket,files:{maxFileBytes:100*1048576,requestWindow:8},onRelayProgress:()=>{if(!peer()&&!hadPeer)status('Discovering available relays…',true);},onDoorwayStatus:s=>{const kind=s.detail?.type??s.type??'status';diagnostics.record('doorway',{state:kind});log('DOORWAY',kind);if(!peer()&&!hadPeer)status(`Signaling: ${kind.replaceAll('_',' ')}. Establishing the room…`,true);}});const options={name:$('name').value||'Operator',onEvent:event,onState:s=>{diagnostics.record('networkState',{state:s.state,reason:s.reason,nextAction:s.nextAction});log('STATE',`${s.state} · ${s.reason??'unspecified'} · ${s.nextAction??'none'}`);if(!peer()&&!hadPeer)status(`Network ${s.state}. Waiting for the peer connection…`,true);renderStatus();connect();}};network=await(invite?sdk.join(invite,options):sdk.create(options));network.on('message',m=>void message(m).catch(e=>failed(e)));network.on('fileOffer',row=>{if(offers.size>=8&&!offers.has(row.manifest.id))return;offers.set(row.manifest.id,row);void receive(row.manifest.id);});network.on('filePreparationProgress',p=>{diagnostics.record('preparation',p);status(`Preparing integrity manifest: ${p.processed}/${p.total} pieces…`,true);$('timing').textContent=`File reads ${p.readMs.toFixed(0)} ms · chunk hashes ${p.hashMs.toFixed(0)} ms`;if(p.processed===p.total)log('MANIFEST PREP',`${p.total} pieces · reads ${p.readMs.toFixed(0)} ms · hashes ${p.hashMs.toFixed(0)} ms`);});network.on('fileProgress',p=>{diagnostics.record('verifiedProgress',p);if(p.id!==currentId)return;verified.add(p.index);transferBytes=p.verifiedBytes;averageElapsed=p.elapsedMs;ackIndexes.push(p.index);if(ackIndexes.length>=32)flushAck();else if(!ackTimer)ackTimer=setTimeout(flushAck,100);draw();metrics();$('timing').textContent=`8 requests/peer · ${p.inFlight} in flight · ${p.verificationMs.toFixed(0)} ms aggregate chunk verification/storage`;});network.on('fileRetry',p=>(diagnostics.record('retry',p),log('RETRY',`piece ${p.index} · timeout attempt ${p.attempt}`)));network.on('fileError',p=>log('SDK FILE',p.error));for(const e of pending.splice(0))event(e);connect();const link=await shareLink(network.invite,location.href);$('link').value=link;await QRCode.toCanvas($('qr'),link,{width:166,margin:2,errorCorrectionLevel:'M'});$('setup').hidden=true;$('invitePanel').hidden=!!peer();if(!peer())status(invite?'Joining. Establishing the peer channel…':'Link ready. Scan the QR on your other device.',!!invite);timer=setInterval(()=>{connect();update();metrics();const to=peer();if(to){const nonce=crypto.randomUUID();pings.set(nonce,performance.now());while(pings.size>8)pings.delete(pings.keys().next().value);try{send('ping',{nonce},to);flushAck();}catch{pings.delete(nonce);update();}}},1000);update();}
++async function open(invite){pending.length=0;startupRecovery.reset();connectStarted=performance.now();$('connectElapsed').hidden=false;clearInterval(connectTimer);connectTimer=setInterval(()=>{$('connectElapsed').textContent=`${Math.floor((performance.now()-connectStarted)/1000)}s · waiting for peer`;},250);$('deploy').classList.add('working');$('deploy').disabled=true;$('deploy').textContent='Connecting…';status('Finding signaling relays and opening the room…',true);monitor=createRelayMonitor(WebSocket);const sdk=createBrowserPhantom({transportDiagnostics:true,WebSocket:monitor.WebSocket,files:{maxFileBytes:100*1048576,requestWindow:8},onRelayProgress:()=>{if(!peer()&&!hadPeer)status('Discovering available relays…',true);},onDoorwayStatus:s=>{const kind=s.detail?.type??s.type??'status';diagnostics.record('doorway',{state:kind});log('DOORWAY',kind);if(!peer()&&!hadPeer)status(`Signaling: ${kind.replaceAll('_',' ')}. Establishing the room…`,true);}});const options={name:$('name').value||'Operator',onEvent:event,onState:s=>{startupRecovery.state(s);diagnostics.record('networkState',{state:s.state,reason:s.reason,nextAction:s.nextAction});log('STATE',`${s.state} · ${s.reason??'unspecified'} · ${s.nextAction??'none'}`);if(!peer()&&!hadPeer)status(`Network ${s.state}. Waiting for the peer connection…`,true);renderStatus();connect();}};network=await(invite?sdk.join(invite,options):sdk.create(options));network.on('message',m=>void message(m).catch(e=>failed(e)));network.on('fileOffer',row=>{if(offers.size>=8&&!offers.has(row.manifest.id))return;offers.set(row.manifest.id,row);void receive(row.manifest.id);});network.on('filePreparationProgress',p=>{diagnostics.record('preparation',p);status(`Preparing integrity manifest: ${p.processed}/${p.total} pieces…`,true);$('timing').textContent=`File reads ${p.readMs.toFixed(0)} ms · chunk hashes ${p.hashMs.toFixed(0)} ms`;if(p.processed===p.total)log('MANIFEST PREP',`${p.total} pieces · reads ${p.readMs.toFixed(0)} ms · hashes ${p.hashMs.toFixed(0)} ms`);});network.on('fileProgress',p=>{diagnostics.record('verifiedProgress',p);if(p.id!==currentId)return;verified.add(p.index);transferBytes=p.verifiedBytes;averageElapsed=p.elapsedMs;ackIndexes.push(p.index);if(ackIndexes.length>=32)flushAck();else if(!ackTimer)ackTimer=setTimeout(flushAck,100);draw();metrics();$('timing').textContent=`8 requests/peer · ${p.inFlight} in flight · ${p.verificationMs.toFixed(0)} ms aggregate chunk verification/storage`;});network.on('fileRetry',p=>(diagnostics.record('retry',p),log('RETRY',`piece ${p.index} · timeout attempt ${p.attempt}`)));network.on('fileError',p=>log('SDK FILE',p.error));for(const e of pending.splice(0))event(e);connect();const link=await shareLink(network.invite,location.href);$('link').value=link;await QRCode.toCanvas($('qr'),link,{width:166,margin:2,errorCorrectionLevel:'M'});$('setup').hidden=true;$('invitePanel').hidden=!!peer();if(!peer())status(invite?'Joining. Establishing the peer channel…':'Link ready. Scan the QR on your other device.',!!invite);timer=setInterval(()=>{connect();update();metrics();const to=peer();if(to){const nonce=crypto.randomUUID();pings.set(nonce,performance.now());while(pings.size>8)pings.delete(pings.keys().next().value);try{send('ping',{nonce},to);flushAck();}catch{pings.delete(nonce);update();}}},1000);update();}
+ async function inject(){const file=$('file').files[0];if(!file||!peer()||busy)return;if(file.size>100*1048576)throw Error('Demo limit: 100 MiB');busy=true;void wake(true);update();startedFileAt=performance.now();status('Preparing your file and its integrity manifest…',true);$('result').textContent='Preparing';const hashStarted=performance.now();const expected=await sha(file);diagnostics.record('fullHash',{durationMs:performance.now()-hashStarted});log('FULL HASH',`${(performance.now()-hashStarted).toFixed(0)} ms`);const m=await network.publishFile(file,{chunkSize:65536});diagnostics.record('prepared',{durationMs:performance.now()-startedFileAt,size:file.size});log('PREPARED',`${file.name} · ${(performance.now()-startedFileAt).toFixed(0)} ms`);reset(m,m.id);hashes.set(m.id,expected);$('hash').textContent=expected;send('file-hash',{id:m.id,hash:expected});await network.shareFile(peer(),m.id);$('result').textContent='Sending';status('Sending through the peer channel. Progress follows receiver verification.',true);}
+ function startupError(e){diagnostics.record('error',{result:'operation_failed'});clearInterval(connectTimer);$('connectElapsed').hidden=true;$('deploy').classList.remove('working');log('ERROR',e.message);status(e.message);busy=false;void wake(false);if(!network){$('deploy').disabled=false;$('deploy').textContent='Retry connection';}update();}
+ $('deploy').onclick=()=>void open().catch(startupError);$('inject').onclick=()=>void inject().catch(startupError);$('resume').onclick=()=>void receive(currentId,true);$('file').onchange=()=>{const file=$('file').files[0];$('fileLabel').textContent=file?.name??'Choose a file to send';update();};$('copy').onclick=async()=>{try{await navigator.clipboard.writeText($('link').value);status('Link copied. Open it on your other device.');}catch{$('link').select();status('Copy the displayed invitation.');}};$('leave').onclick=()=>{network?.close();void wake(false);location.href=location.pathname;};window.addEventListener('pagehide',()=>{clearInterval(timer);clearInterval(connectTimer);clearTimeout(ackTimer);network?.close();void wake(false);if(downloadUrl)URL.revokeObjectURL(downloadUrl);});for(const type of ['online','offline','pageshow'])window.addEventListener(type,()=>{diagnostics.record('browserLifecycle',{state:type});log('BROWSER',type);update();});document.addEventListener('visibilitychange',()=>diagnostics.record('browserLifecycle',{state:document.visibilityState}));log('IDLE','Real peer transfer. No relay disconnect ceremony.');readLink(location.search,location.hash).then(invite=>{if(invite)return open(invite);}).catch(startupError);
+diff --git a/demos/phantom-breach/src/diagnostics.js b/demos/phantom-breach/src/diagnostics.js
+index ce92cf6..d026dc1 100644
+--- a/demos/phantom-breach/src/diagnostics.js
++++ b/demos/phantom-breach/src/diagnostics.js
+@@ -2,9 +2,9 @@ import {createRecoveryProjector} from './recovery-context.js';
+ // Deliberately copy only measurements; never serialize packets, invitations or credentials.
+ const fields=['size','chunkSize','total','processed','received','index','bytes','verifiedBytes','elapsedMs','verificationMs','readMs','hashMs','inFlight','attempt','durationMs','channels','relaySockets','roundTripMs','state','result','role'];
+ export function createDiagnostics({build,now=()=>performance.now(),wall=()=>new Date().toISOString(),limit=10000,codes=[]}){
+- const startedAt=wall(),origin=now(),events=[];let dropped=0,latestRecovery=null,lastRecoverySignature="";const projectRecovery=createRecoveryProjector(codes);
++ const startedAt=wall(),origin=now(),events=[];let transportTrace=null;let dropped=0,latestRecovery=null,lastRecoverySignature="";const projectRecovery=createRecoveryProjector(codes);
+  function record(type,data={}){const measurements={};for(const key of fields){const value=data[key];if(typeof value==='number'&&Number.isFinite(value)||typeof value==='string'&&['state','result','role'].includes(key))measurements[key]=value;}for(const key of ['reason','nextAction']){const allowed=key==='reason'?['committed_membership_and_system_ready','sys_birth_response_deadline_exhausted','transport_fault','system_unavailable','waiting_for_system_proof','waiting_for_admission','waiting_for_doorway','disposed','signed_network_retirement']:['none','inspect_diagnostics','observe_core_recovery','wait_for_system_proof','wait_for_peer_response','wait_for_system_connection','wait_for_doorway','create_instance','wait_for_peer_availability'];if(allowed.includes(data[key]))measurements[key]=data[key];}events.push({at:wall(),sessionElapsedMs:Math.round(now()-origin),type,...measurements});if(events.length>limit){events.shift();dropped++;}}
+- function recovery(snapshot,state){const previousEvent=latestRecovery?.coreEvent;latestRecovery=projectRecovery(snapshot,state);if(!snapshot?.reason&&previousEvent)latestRecovery.coreEvent=previousEvent;const stable=structuredClone(latestRecovery);delete stable.system.attempt.ageMs;delete stable.coreEvent;const signature=JSON.stringify(stable);if(signature!==lastRecoverySignature){lastRecoverySignature=signature;events.push({at:wall(),sessionElapsedMs:Math.round(now()-origin),type:'recoveryContext',context:structuredClone(latestRecovery)});if(events.length>limit){events.shift();dropped++;}}}
+- function report(){return {latestRecovery:structuredClone(latestRecovery),schema:'phantom-diagnostics-v1',build,startedAt,exportedAt:wall(),droppedEvents:dropped,measurementNotes:{throughput:'Receiver-verified bytes over measured elapsed time; not link capacity.',preparation:'Batch read and hash times are measured separately; hash time includes concurrent work.',connection:'Network state and channel counts do not establish the selected ICE route.',privacy:'No file contents, filenames, invitation URLs, peer identities or raw signaling packets.'},events:structuredClone(events)};}
++ function recovery(snapshot,state){if(snapshot?.rtcDiagnostics)transportTrace=structuredClone(snapshot.rtcDiagnostics);const previousEvent=latestRecovery?.coreEvent;latestRecovery=projectRecovery(snapshot,state);if(!snapshot?.reason&&previousEvent)latestRecovery.coreEvent=previousEvent;const stable=structuredClone(latestRecovery);delete stable.system.attempt.ageMs;delete stable.coreEvent;const signature=JSON.stringify(stable);if(signature!==lastRecoverySignature){lastRecoverySignature=signature;events.push({at:wall(),sessionElapsedMs:Math.round(now()-origin),type:'recoveryContext',context:structuredClone(latestRecovery)});if(events.length>limit){events.shift();dropped++;}}}
++ function report(){return {transportTrace:structuredClone(transportTrace),latestRecovery:structuredClone(latestRecovery),schema:'phantom-diagnostics-v1',build,startedAt,exportedAt:wall(),droppedEvents:dropped,measurementNotes:{throughput:'Receiver-verified bytes over measured elapsed time; not link capacity.',preparation:'Batch read and hash times are measured separately; hash time includes concurrent work.',connection:'Network state and channel counts do not establish the selected ICE route.',privacy:'Transport trace includes peer/boot/attempt correlation IDs, ICE ufrags and candidate network addresses for debugging. No file contents, invitation URLs, SDP passwords or raw SDP.'},events:structuredClone(events)};}
+  return {record,recovery,report,text:()=>JSON.stringify(report(),null,2)};
+ }
+diff --git a/demos/phantom-breach/src/recovery-context.js b/demos/phantom-breach/src/recovery-context.js
+index 0b0f6b5..1c33b7c 100644
+--- a/demos/phantom-breach/src/recovery-context.js
++++ b/demos/phantom-breach/src/recovery-context.js
+@@ -1,15 +1,16 @@
+ // Code vocabulary is derived from SDK source at build time. Never export raw text.
+ export function createRecoveryProjector(codes=[]) {
+- const known=new Set(codes),prefixes=[...known].filter(c=>c.endsWith('_')).sort((a,b)=>b.length-a.length);
++ const known=new Set([...codes,"new","checking","connected","completed","disconnected","failed","closed","stable","have-local-offer","have-remote-offer","have-local-pranswer","have-remote-pranswer"]),prefixes=[...known].filter(c=>c.endsWith('_')).sort((a,b)=>b.length-a.length);
+  function code(value){if(value==null||value==='')return 'none';const text=String(value);if(known.has(text))return text;const head=text.split(/[: |]/)[0];if(known.has(head))return head;const prefix=prefixes.find(p=>text.startsWith(p));return prefix?prefix+'[detail omitted]':'unrecognized';}
+  const number=value=>Number.isFinite(value)?value:0;
+  return function project(snapshot={},state={},now=Date.now()){
+   const c=snapshot.concierge??{},b=snapshot.bootstrap??{},a=c.sysAttempt??{},m=c.membershipAudit?.topology??{};
+   return {
+    state:code(state.state),reason:code(state.reason),nextAction:code(state.nextAction),role:code(state.role),admitted:state.admitted===true,
+-   resources:{queuedSignals:number(snapshot.recoveryResources?.queuedSignals),activeQueues:number(snapshot.recoveryResources?.activeQueues),availabilityReceipts:number(snapshot.recoveryResources?.availabilityReceipts),pendingAvailability:number(snapshot.recoveryResources?.pendingAvailability),ownedTimeouts:number(snapshot.runtimeResources?.ownedTimeouts),ownedIntervals:number(snapshot.runtimeResources?.ownedIntervals)},
++   resources:{earlyIceCandidates:number(snapshot.recoveryResources?.earlyIceCandidates),earlyIcePeers:number(snapshot.recoveryResources?.earlyIcePeers),queuedSignals:number(snapshot.recoveryResources?.queuedSignals),activeQueues:number(snapshot.recoveryResources?.activeQueues),availabilityReceipts:number(snapshot.recoveryResources?.availabilityReceipts),pendingAvailability:number(snapshot.recoveryResources?.pendingAvailability),ownedTimeouts:number(snapshot.runtimeResources?.ownedTimeouts),ownedIntervals:number(snapshot.runtimeResources?.ownedIntervals)},
+    coreEvent:code(snapshot.reason),doorway:{state:code(b.doorwayState),fault:code(b.doorwayFault),attempts:number(b.attempts),phase:code(b.doorwayDeadlinePhase)},
+    system:{ready:c.sysReady===true,pipe:code(c.sysPipeState),unavailable:code(c.sysUnavailableReason),fault:code(c.sysLastErr),attempt:{state:code(a.state),event:code(a.lastEvent),fault:code(a.faultReason),recoveryCount:number(a.recoveryCount),ageMs:a.startedAt?Math.max(0,now-a.startedAt):0}},
++   systemTransports:(snapshot.sysPairs??[]).slice(0,8).map(p=>({pc:code(p.pcState),ice:code(p.iceState),signaling:code(p.signalingState),channel:code(p.dcState),attempt:code(p.attemptState),pendingRemoteIce:number(p.pendingRemoteIce)})),
+    membership:{committedCount:number(m.committedCount),pendingCount:number(m.pendingCount),terminalCount:String(m.terminalKeys??'').split(',').filter(k=>k&&k!=='none').length,epoch:number(m.committedEpoch),stage:code(c.membershipAudit?.stage)},
+    chat:(snapshot.chatPairs??[]).slice(0,8).map(p=>({relationship:code(p.relationship),owner:p.offerOwner===true,pc:code(p.pcState),ice:code(p.iceState),signaling:code(p.signalingState),channel:code(p.dcState),state:code(p.chatState),fault:code(p.chatFault),reconnecting:p.reconnecting===true}))
+   };
+diff --git a/demos/phantom-breach/src/startup-recovery.js b/demos/phantom-breach/src/startup-recovery.js
+new file mode 100644
+index 0000000..ae78854
+--- /dev/null
++++ b/demos/phantom-breach/src/startup-recovery.js
+@@ -0,0 +1,10 @@
++// The join promise may reject. Capture its snapshots before a network handle
++// exists, without retaining raw events or waiting for admission.
++export function createStartupRecovery(diagnostics) {
++  let state={};
++  return {
++    state(value){state=value;},
++    snapshot(value){diagnostics.recovery(value,state);},
++    reset(){state={};},
++  };
++}
+diff --git a/packages/phantom-core/src/candidate-inbox.js b/packages/phantom-core/src/candidate-inbox.js
+new file mode 100644
+index 0000000..35ebd0f
+--- /dev/null
++++ b/packages/phantom-core/src/candidate-inbox.js
+@@ -0,0 +1,33 @@
++// Candidates may precede their offer. No timers or transport allocation here.
++export function createCandidateInbox({maxPeers=128,perPeer=64,total=1024}={}) {
++  const peers=new Map();let count=0;
++  return {
++    put(peer,boot,attempt,candidate) {
++      if(!peer||!boot||boot.length>256||!attempt||attempt.length>256||
++         typeof candidate?.candidate!=="string"||candidate.candidate.length>4096)return false;
++      const value={candidate:candidate.candidate};
++      for(const field of ["sdpMid","usernameFragment"]) {
++        const text=candidate[field];
++        if(text!=null&&(typeof text!=="string"||text.length>256))return false;
++        if(text!==undefined)value[field]=text;
++      }
++      if(candidate.sdpMLineIndex!==undefined) {
++        const index=candidate.sdpMLineIndex;
++        if(index!==null&&(!Number.isInteger(index)||index<0||index>65535))return false;
++        value.sdpMLineIndex=index;
++      }
++      const rows=peers.get(peer);
++      if(count>=total||(rows?.length||0)>=perPeer||(!rows&&peers.size>=maxPeers))return false;
++      if(!rows)peers.set(peer,[]);
++      peers.get(peer).push({boot,attempt,candidate:value});count++;return true;
++    },
++    take(peer,boot,attempt) {
++      const rows=peers.get(peer)||[];
++      peers.delete(peer);count-=rows.length;
++      return rows.filter(row=>row.boot===boot&&row.attempt===attempt).map(row=>row.candidate);
++    },
++    drop(peer){const rows=peers.get(peer)||[];peers.delete(peer);count-=rows.length;},
++    clear(){peers.clear();count=0;},
++    snapshot(){return {earlyIceCandidates:count,earlyIcePeers:peers.size,earlyIceLimit:total};}
++  };
++}
+diff --git a/packages/phantom-core/src/index.js b/packages/phantom-core/src/index.js
+index 052728a..992b2fc 100644
+--- a/packages/phantom-core/src/index.js
++++ b/packages/phantom-core/src/index.js
+@@ -29,7 +29,7 @@ function eventSurface() {
+ }
+ 
+ /** Public peer-network facade with injectable transport and runtime. */
+-export function createPhantom({ doorway, origin = 'https://phantom.local',
++export function createPhantom({ transportDiagnostics=false, doorway, origin = 'https://phantom.local',
+     avatar = null, storage = memoryStorage(), sessionStorage = memoryStorage(),
+     runtime = globalThis, observeBrowserLifecycle = false, canSendFile = () => true, authorizeSyscon1 = () => true, canAdmitPeer = () => true } = {}) {
+   if (['phantom-doorway-v1','phantom-doorway-v2'].includes(doorway?.protocol)) doorway = bridgeDoorway(doorway);
+@@ -61,6 +61,7 @@ export function createPhantom({ doorway, origin = 'https://phantom.local',
+   const host = {
+     window, document, origin, avatar, allowDisplayNames: true, localStorage: storage, sessionStorage,
+     location: { href: origin }, doorwayUrl: doorway.url,
++    transportDiagnostics,
+     doorwayPresence: doorway.presence ?? 'live-sockets',
+     WebSocket: doorway.WebSocket, RTCPeerConnection: runtime.RTCPeerConnection,
+     crypto: runtime.crypto, canSendFile, authorizeSyscon1,
+diff --git a/packages/phantom-core/src/network-engine.js b/packages/phantom-core/src/network-engine.js
+index 09f19c8..e2c702d 100644
+--- a/packages/phantom-core/src/network-engine.js
++++ b/packages/phantom-core/src/network-engine.js
+@@ -1,3 +1,5 @@
++import {createRtcDiagnostics,iceDetails} from './rtc-diagnostics.js';
++import {createCandidateInbox} from './candidate-inbox.js';
+ import {waitForChannelDrain} from './channel-drain.js';
+ import {createSignalQueue} from './signal-queue.js';
+ import {COMPATIBILITY_WIRE} from './compatibility.js';
+@@ -480,7 +482,6 @@ export function createNetworkEngine(host) {
+     const incomingBootId = String(observation.bootId || "");
+     const incomingEndpointId = String(observation.endpointId || "");
+     const incomingAttemptId = String(observation.attemptId || "");
+-    const signalType = String(observation.signalType || "");
+     const bindCurrent = observation.bindCurrent === true;
+     const via = String(observation.via || "remote_incarnation");
+ 
+@@ -507,20 +508,12 @@ export function createNetworkEngine(host) {
+       !currentPipeOpen
+     );
+ 
+-    const offerAttemptChanged = !!(
+-      signalType === "rtc_offer" &&
+-      incomingAttemptId &&
+-      currentAttemptId &&
+-      incomingAttemptId !== currentAttemptId &&
+-      !currentPipeOpen
+-    );
+-
+     if (incomingBootId) phantomRemoteBootIds.set(key, incomingBootId);
+     if (incomingEndpointId) {
+       phantomRemoteEndpointIds.set(key, incomingEndpointId);
+     }
+ 
+-    const changed = bootChanged || endpointChanged || offerAttemptChanged;
++    const changed = bootChanged || endpointChanged;
+     const committed = phantomCommittedMember(key);
+ 
+     if (!changed) {
+@@ -6461,6 +6454,24 @@ export function createNetworkEngine(host) {
+               transportIncarnationBound
+             );
+ 
++            // The remote end may send before our local open notification.
++            // Keep one bounded admission on this exact transport; only its
++            // open event can replay it through every admission gate above.
++            const admissionEntry = phantomSysPeers.get(key);
++            if (!alreadyCommitted && doorwayAdmitted && directTransport &&
++                explicitAdmission && freshIncarnation && transportIncarnationBound &&
++                !sourcePipeProven && admissionEntry?.sysdc?.readyState === "connecting" &&
++                admissionEntry.temporary !== true && incomingBootId.length <= 256 &&
++                admissionEntry.remoteBootId === incomingBootId && !blocked && !blockedBy) {
++              admissionEntry.pendingOpenAdmission = {
++                from: fromKey, bootId: incomingBootId, admit: true,
++                videoId, roomJoinedAt: Number(inner.roomJoinedAt || 0),
++                epoch: Number(inner.epoch || 0),
++              };
++              emitSnapshot("sys_admission_waiting_for_local_pipe_open");
++              return;
++            }
++
+             if (freshDirectAdmission && phantomSysAuthority.pending) {
+               sdkDeferredAdmissions.set(fromKey,{key,inner:structuredClone(inner),entry:phantomSysPeers.get(key)});
+               emitSnapshot("sys_admission_deferred_pending_commit");
+@@ -8299,6 +8310,7 @@ export function createNetworkEngine(host) {
+     dc.onopen = () => {
+       const ent = phantomSysPeers.get(key);
+       if (!ent || ent.sysdc !== dc) return;
++      phantomEarlyRtcIce.drop("sys:" + key);
+       completeSysBirth(ent);
+       sdkSysBirthFailures.delete(key);
+       if (ent) {
+@@ -8405,6 +8417,12 @@ export function createNetworkEngine(host) {
+         }
+       }
+ 
++      const pendingAdmission = ent.pendingOpenAdmission;
++      delete ent.pendingOpenAdmission;
++      if (!temporary && pendingAdmission && phantomSysPeers.get(key) === ent) {
++        sdkApplySysAdmission(key, pendingAdmission);
++      }
++
+       emitSnapshot(temporary ? "temporary_sysdc_open" : "sysdc_open");
+ 
+       if (temporary) {
+@@ -9067,8 +9085,19 @@ export function createNetworkEngine(host) {
+     };
+     phantomChatPeers.set(k, ent);
+ 
++    pc.onicecandidateerror = error => {
++      if (phantomChatPeers.get(k) !== ent) return;
++      rtcDiagnostics.record('ice_candidate_error',{...rtcDebug('ice_candidate_error_context',k,'chat',ent),errorCode:error.errorCode,errorMessage:error.errorText});
++    };
++    pc.onicegatheringstatechange = () => {
++      if (phantomChatPeers.get(k) !== ent) return;
++      const detail=rtcDebug('ice_gathering_state',k,'chat',ent);
++      rtcStats(pc,detail);
++    };
+     pc.onicecandidate = (ev) => {
++      if (phantomChatPeers.get(k) !== ent) return;
+       const c = ev?.candidate;
++      rtcDebug(c ? "local_candidate" : "local_candidates_complete",k,"chat",ent,{},c);
+ 
+       if (c) {
+         concierge.lastRtcIceCandidateAt = now();
+@@ -9086,6 +9115,7 @@ export function createNetworkEngine(host) {
+     };
+ 
+     pc.ondatachannel = (ev) => {
++      if (phantomChatPeers.get(k) !== ent) { ev?.channel?.close(); return; }
+       const ch = ev?.channel || null;
+       if (!ch || String(ch.label || "") !== COMPATIBILITY_WIRE.chatChannel) return;
+ 
+@@ -9222,8 +9252,19 @@ export function createNetworkEngine(host) {
+     };
+     phantomSysPeers.set(k, ent);
+ 
++    pc.onicecandidateerror = error => {
++      if (phantomSysPeers.get(k) !== ent) return;
++      rtcDiagnostics.record('ice_candidate_error',{...rtcDebug('ice_candidate_error_context',k,'sys',ent),errorCode:error.errorCode,errorMessage:error.errorText});
++    };
++    pc.onicegatheringstatechange = () => {
++      if (phantomSysPeers.get(k) !== ent) return;
++      const detail=rtcDebug('ice_gathering_state',k,'sys',ent);
++      rtcStats(pc,detail);
++    };
+     pc.onicecandidate = (ev) => {
++      if (phantomSysPeers.get(k) !== ent) return;
+       const c = ev?.candidate;
++      rtcDebug(c ? "local_candidate" : "local_candidates_complete",k,"sys",ent,{},c);
+ 
+       if (c) {
+         concierge.lastRtcIceCandidateAt = now();
+@@ -9244,6 +9285,7 @@ export function createNetworkEngine(host) {
+     };
+ 
+     pc.ondatachannel = (ev) => {
++      if (phantomSysPeers.get(k) !== ent) { ev?.channel?.close(); return; }
+       const ch = ev?.channel || null;
+       if (!ch || String(ch.label || "") !== COMPATIBILITY_WIRE.systemChannel) return;
+ 
+@@ -9271,6 +9313,8 @@ export function createNetworkEngine(host) {
+         return;
+       }
+ 
++      const detail=rtcDebug("connectionState",k,"sys",current);
++      rtcStats(pc,detail);
+       const st = pc.connectionState;
+       if (st === "failed" || st === "closed") {
+         if (current.temporary === true || phantomTemporarySysTransactions.has(k)) {
+@@ -9288,6 +9332,8 @@ export function createNetworkEngine(host) {
+         return;
+       }
+ 
++      const detail=rtcDebug("iceConnectionState",k,"sys",current);
++      rtcStats(pc,detail);
+       const st = pc.iceConnectionState;
+       if (st === "failed" || st === "closed") {
+         if (current.temporary === true || phantomTemporarySysTransactions.has(k)) {
+@@ -9331,6 +9377,7 @@ export function createNetworkEngine(host) {
+     if (!key) return;
+ 
+     const ent = phantomSysPeers.get(key);
++    rtcStats(ent?.pc,rtcDebug("transport_retiring",key,"sys",ent,{}));
+     const temporary = phantomTemporarySysTransactions.get(key);
+     try {
+       if (temporary?.deadlineTimer) clearTimeout(temporary.deadlineTimer);
+@@ -9384,6 +9431,8 @@ export function createNetworkEngine(host) {
+     dc.onopen = () => {
+       const key = phantomShortKey(remoteHKey);
+       const ent = key ? phantomChatPeers.get(key) : null;
++      if (!ent || ent.dc !== dc) return;
++      phantomEarlyRtcIce.drop("chat:" + key);
+ 
+       if (ent) {
+         ent.chatState = "open";
+@@ -10186,10 +10235,10 @@ export function createNetworkEngine(host) {
+   function phantomObservePeerAvailability(status) {
+     const notice=status?.detail?.type==='peer_available'?status.detail:status;
+     if(notice?.type!=='peer_available'||notice.roomId!==videoId)return false;
+-    const key=phantomShortKey(notice.peerId),boot=String(notice.bootId||''),eventId=String(notice.eventId||'');
+-    const token=String(notice.availabilityId||eventId);
++    const key=phantomShortKey(notice.peerId),boot=String(notice.bootId||'');
++    const token=String(notice.availabilityId||'');
+     if(!key||!phantomCommittedMember(key)||phantomPendingTerminalExits.has(key)||phantomSysReplacementTerminal(key)||
+-       !host.canAdmitPeer(key)||!/^[0-9a-f]{64}$/.test(eventId)||!token||token.length>128||
++       !host.canAdmitPeer(key)||notice.verified!==true||!token||token.length>128||
+        !boot||boot!==phantomRemoteBootIds.get(key))return false;
+     const duplicate=sdkSysRecoveryAvailability.get(key)===token;
+     sdkSysRecoveryAvailability.set(key,token);
+@@ -10818,7 +10867,25 @@ export function createNetworkEngine(host) {
+     return { key, pipe, ent };
+   }
+ 
++  const rtcDiagnostics = host.transportDiagnostics === true ? createRtcDiagnostics({now}) : {record(){},stats:async()=>{},snapshot:()=>null};
++  function rtcDebug(event,key,pipe,ent,meta={},candidate) {
++    if(host.transportDiagnostics !== true)return {};
++    const values={peer:key,pipe,attempt:String(pipe==='sys'?(ent?.attempt?.id||ent?.sysAttemptId||''):(ent?.chatAttemptId||'')),
++      incomingAttempt:String(meta.sysAttemptId||meta.chatAttemptId||''),boot:String(ent?.remoteBootId||phantomRemoteBootIds.get(key)||''),incomingBoot:String(meta.bootId||''),incomingUfrag:String(meta.incomingUfrag||''),
++      owner:pipe==='sys'?phantomSysBirthRole(key):(phantomOwnsChatPipeOffer(key)?'opener':'acceptor'),
++      pc:String(ent?.pc?.connectionState||''),ice:String(ent?.pc?.iceConnectionState||''),signaling:String(ent?.pc?.signalingState||''),gathering:String(ent?.pc?.iceGatheringState||''),
++      channel:String((pipe==='sys'?ent?.sysdc:ent?.dc)?.readyState||'missing'),...iceDetails(candidate,ent?.pc)};
++    if (event === "local_candidate") {
++      delete values.generationMatches;
++      if (values.candidateUfrag && values.localUfrag) values.generationMatches=values.candidateUfrag===values.localUfrag;
++    }
++    rtcDiagnostics.record(event,values);return values;
++  }
++  function rtcStats(pc,detail) {
++    if(host.transportDiagnostics === true && typeof pc?.getStats === "function")void rtcDiagnostics.stats(pc,detail).then(()=>emitSnapshot("rtc_stats_updated"));
++  }
+   const phantomInboundRtcQueue = createSignalQueue();
++  const phantomEarlyRtcIce = createCandidateInbox();
+   function phantomQueueInboundRtc(fromHKey, meta, kind, apply) {
+     const key=phantomShortKey(fromHKey),pipe=phantomRtcPipeFromMeta(meta),label=String(kind||'signal');
+     if(!key)return Promise.resolve(false);
+@@ -10835,6 +10902,7 @@ export function createNetworkEngine(host) {
+       // may replace a PC; later packets use attempt IDs against that current PC.
+       const edge=phantomRtcEdgeForInbound(key,meta);if(!edge)return false;
+       try{return await apply();}catch(e){
++        rtcDiagnostics.record('rtc_operation_failed',{...rtcDebug(label+'_failed',key,pipe,pipe==='sys'?phantomSysPeers.get(key):phantomChatPeers.get(key),meta),errorName:e?.name,errorMessage:e?.message});
+         concierge.lastErr=pipe+'_rtc_inbound_'+label+'_failed:'+String(e?.message||e);
+         emitSnapshot(pipe+'_rtc_inbound_'+label+'_failed');return false;
+       }
+@@ -10856,25 +10924,28 @@ export function createNetworkEngine(host) {
+ 
+     if (!pending.length) return true;
+ 
++    let applied=0,failed=0;
+     for (const cand of pending) {
+       try {
+         await ent.pc.addIceCandidate(cand);
++        applied++;
++        rtcDebug("candidate_applied_from_queue",key,pipe,ent,{},cand);
+       } catch (e) {
+-        concierge.lastErr =
+-          pipe + "_rtc_ice_apply_failed:" + String(e?.message || e);
++        failed++;
++        concierge.lastErr = pipe + "_rtc_ice_apply_failed:" + String(e?.message || e);
++        rtcDiagnostics.record("queued_candidate_apply_failed",{
++          ...rtcDebug("queued_candidate_failed_context",key,pipe,ent,{},cand),
++          errorName:e?.name,errorMessage:e?.message,
++        });
+         emitSnapshot(pipe + "_rtc_ice_apply_failed");
+-        return false;
+       }
+     }
+-
+-    emitSnapshot(
+-      pipe +
+-        "_rtc_ice_flushed_" +
+-        pending.length +
+-        "_" +
+-        String(reason || "remote_description_applied"),
+-    );
+-    return true;
++    rtcDiagnostics.record("candidate_queue_flushed",{
++      ...rtcDebug("candidate_queue_flush_context",key,pipe,ent),reason,
++      pendingCandidates:pending.length,appliedCandidates:applied,failedCandidates:failed,
++    });
++    emitSnapshot(pipe + "_rtc_ice_flushed_" + applied + "_" + String(reason));
++    return failed === 0;
+   }
+ 
+   function rtcOnOffer(fromHKey, offer, meta = {}) {
+@@ -10904,6 +10975,7 @@ export function createNetworkEngine(host) {
+     if (!fromKey || fromKey === selfKey) return;
+ 
+     const pipe = phantomRtcPipeFromMeta(meta);
++    rtcDebug("offer_received",fromKey,pipe,pipe==='sys'?phantomSysPeers.get(fromKey):phantomChatPeers.get(fromKey),{...meta,incomingUfrag:String(offer?.sdp||'').match(/(?:^|\r?\n)a=ice-ufrag:([^\r\n]+)/)?.[1]||''},undefined);
+ 
+     let sysBirthRole = "";
+ 
+@@ -11036,7 +11108,12 @@ export function createNetworkEngine(host) {
+       }
+     }
+ 
++    ent.pendingRemoteIce.push(...phantomEarlyRtcIce.take(
++      pipe + ":" + fromKey, String(meta.bootId || ""),
++      String((pipe === "sys" ? meta.sysAttemptId : meta.chatAttemptId) || ""),
++    ));
+     await pc.setRemoteDescription(offer);
++    rtcDebug("remote_offer_applied",fromKey,pipe,ent,meta);
+     await phantomFlushInboundRtcIce(
+       fromKey,
+       pipe,
+@@ -11086,6 +11163,7 @@ export function createNetworkEngine(host) {
+     if (!key) return;
+ 
+     const pipe = phantomRtcPipeFromMeta(meta);
++    rtcDebug("answer_received",key,pipe,pipe==='sys'?phantomSysPeers.get(key):phantomChatPeers.get(key),{...meta,incomingUfrag:String(answer?.sdp||'').match(/(?:^|\r?\n)a=ice-ufrag:([^\r\n]+)/)?.[1]||''},undefined);
+     const ent = pipe === "sys" ? phantomSysPeers.get(key) : phantomChatPeers.get(key);
+     if (!ent?.pc) return;
+ 
+@@ -11150,6 +11228,7 @@ export function createNetworkEngine(host) {
+ 
+     try {
+       await pc.setRemoteDescription(answer);
++      rtcDebug("remote_answer_applied",key,pipe,ent,meta);
+       await phantomFlushInboundRtcIce(key, pipe, ent, "answer_remote_description");
+       emitSnapshot(pipe + "_rtc_answer_applied");
+     } catch (e) {
+@@ -11210,6 +11289,7 @@ export function createNetworkEngine(host) {
+     if (!key) return;
+ 
+     const pipe = phantomRtcPipeFromMeta(meta);
++    rtcDebug("candidate_received",key,pipe,pipe==='sys'?phantomSysPeers.get(key):phantomChatPeers.get(key),meta,cand);
+     const ent = pipe === "sys" ? phantomSysPeers.get(key) : phantomChatPeers.get(key);
+     if (!ent?.pc) return;
+ 
+@@ -11218,9 +11298,15 @@ export function createNetworkEngine(host) {
+       const currentAttemptId = String(ent?.chatAttemptId || "");
+       if (
+         incomingAttemptId &&
+-        currentAttemptId &&
+         incomingAttemptId !== currentAttemptId
+       ) {
++        if (!phantomOwnsChatPipeOffer(key) && ent.dc?.readyState !== "open" &&
++            phantomRelationshipIsAccepted(phantomRelationshipGet(key)) &&
++            String(meta.bootId || "") === phantomRemoteBootIds.get(key)) {
++          const retained = phantomEarlyRtcIce.put(pipe + ":" + key, String(meta.bootId), incomingAttemptId, cand);
++          emitSnapshot(retained ? "chat_rtc_ice_waiting_for_offer" : "chat_rtc_ice_inbox_full");
++          return retained;
++        }
+         emitSnapshot("chat_rtc_ice_ignored_stale_attempt");
+         return false;
+       }
+@@ -11237,6 +11323,16 @@ export function createNetworkEngine(host) {
+         currentAttemptId &&
+         incomingAttemptId !== currentAttemptId
+       ) {
++        // An acceptor can receive candidates before their offer through any
++        // relay. Retain bounded candidate hints until the offer owner is validated; never
++        // attach them to the previous PC or reset membership/retry authority.
++        if (!phantomHasOpenSysPipe(key) && !phantomSysReplacementTerminal(key) &&
++            host.canAdmitPeer(key) && String(meta.bootId || "") &&
++            (!phantomRemoteBootIds.get(key) || String(meta.bootId) === phantomRemoteBootIds.get(key))) {
++          const retained = phantomEarlyRtcIce.put(pipe + ":" + key, String(meta.bootId), incomingAttemptId, cand);
++          emitSnapshot(retained ? "sys_rtc_ice_waiting_for_offer" : "sys_rtc_ice_inbox_full");
++          return retained;
++        }
+         emitSnapshot("sys_rtc_ice_ignored_stale_transport_attempt");
+         return false;
+       }
+@@ -11274,9 +11370,11 @@ export function createNetworkEngine(host) {
+ 
+     try {
+       await ent.pc.addIceCandidate(cand);
++      rtcDebug("candidate_applied",key,pipe,ent,meta,cand);
+       emitSnapshot(pipe + "_rtc_ice_applied");
+       return true;
+     } catch (e) {
++      rtcDiagnostics.record("candidate_apply_failed",{...rtcDebug("candidate_apply_failed_context",key,pipe,ent,meta,cand),errorName:e?.name,errorMessage:e?.message});
+       concierge.lastErr =
+         pipe + "_rtc_ice_apply_failed:" + String(e?.message || e);
+       emitSnapshot(pipe + "_rtc_ice_apply_failed");
+@@ -11296,8 +11394,17 @@ export function createNetworkEngine(host) {
+       t: now(),
+       reason: reason || null,
+       eventCounts: phantomEventCountRows(20),
+-      recoveryResources:{...phantomInboundRtcQueue.snapshot(),availabilityReceipts:sdkSysRecoveryAvailability.size,pendingAvailability:sdkSysRecoveryPending.size},
+-
++      rtcDiagnostics:rtcDiagnostics.snapshot(),
++      recoveryResources:{...phantomInboundRtcQueue.snapshot(),...phantomEarlyRtcIce.snapshot(),availabilityReceipts:sdkSysRecoveryAvailability.size,pendingAvailability:sdkSysRecoveryPending.size},
++
++      sysPairs: Array.from(phantomSysPeers.values()).map(ent => ({
++        pcState: String(ent.pc?.connectionState || "missing"),
++        iceState: String(ent.pc?.iceConnectionState || "missing"),
++        signalingState: String(ent.pc?.signalingState || "missing"),
++        dcState: String(ent.sysdc?.readyState || "missing"),
++        attemptState: String(ent.attempt?.state || "missing"),
++        pendingRemoteIce: ent.pendingRemoteIce?.length || 0,
++      })),
+       chatPairs: Array.from(phantomChatPeers.entries())
+         .map(([hKey, ent]) => ({
+           hKey: phantomShortKey(hKey),
+@@ -11640,6 +11747,9 @@ export function createNetworkEngine(host) {
+   }
+ 
+   function emitSnapshot(reason) {
++    if (/(rtc_|sys_.*(?:birth|preflight|attempt|transport|pipe|admission))/.test(String(reason))) {
++      rtcDiagnostics.record("core_event",{reason:String(reason||''),errorMessage:String(concierge.lastErr||concierge.sysLastErr||''),owner:String(concierge.localRoleCandidate||concierge.role||'')});
++    }
+     try {
+       const why = String(reason || "snapshot");
+       phantomCountEvent("snapshot:" + why);
+@@ -13042,6 +13152,7 @@ export function createNetworkEngine(host) {
+     phantomPendingSysRelay.clear();
+     phantomPendingDm.clear();
+     phantomPendingRtcIce.clear();
++    phantomEarlyRtcIce.clear();
+     phantomSeenControlCids.clear();
+     phantomSeenRtcSignals.clear();
+ 
+diff --git a/packages/phantom-core/src/rtc-diagnostics.js b/packages/phantom-core/src/rtc-diagnostics.js
+new file mode 100644
+index 0000000..2538aa4
+--- /dev/null
++++ b/packages/phantom-core/src/rtc-diagnostics.js
+@@ -0,0 +1,38 @@
++const fields=['peer','pipe','attempt','incomingAttempt','boot','incomingBoot','incomingUfrag','owner','pc','ice','signaling','gathering','channel','candidate','candidateType','protocol','candidateUfrag','localUfrag','remoteUfrag','generationMatches','errorName','errorMessage','errorCode','result','reason','state','pairId','localAddress','localPort','remoteAddress','remotePort','selected','nominated','writable','bytesSent','bytesReceived','requestsSent','requestsReceived','responsesSent','responsesReceived','localCandidateType','remoteCandidateType','currentRoundTripTime','pendingCandidates','appliedCandidates','failedCandidates'];
++export function createRtcDiagnostics({limit=256,now=Date.now}={}) {
++ const rows=[];let sequence=0,dropped=0;const flights=new WeakSet();
++ function record(event,values={}){
++  const row={sequence:++sequence,at:now(),event:String(event).slice(0,256)};
++  let remaining=4096;row.truncatedFields=[];
++  for(const field of fields){const value=values[field];if(typeof value==='string'){
++    const cap=Math.min(field==='errorMessage'||field==='reason'||field==='candidate'?2048:256,remaining);
++    row[field]=value.slice(0,cap);remaining-=row[field].length;
++    if(value.length>cap)row.truncatedFields.push(field);
++   }else if(typeof value==='boolean'||typeof value==='number'&&Number.isFinite(value))row[field]=value;}
++
++  rows.push(row);if(rows.length>limit){rows.shift();dropped++;}
++ }
++ async function stats(pc,context={}){
++  if(typeof pc?.getStats!=='function'||flights.has(pc))return;
++  flights.add(pc);
++  try{
++   const report=await pc.getStats(),all=[];report.forEach(row=>all.push(row));
++   const byId=new Map(all.map(row=>[row.id,row]));
++   const selected=new Set(all.filter(row=>row.type==='transport').map(row=>row.selectedCandidatePairId));
++   const pairs=all.filter(row=>row.type==='candidate-pair').sort((a,b)=>Number(selected.has(b.id))-Number(selected.has(a.id))||Number(!!b.nominated)-Number(!!a.nominated)||(b.requestsSent||0)-(a.requestsSent||0)).slice(0,16);
++   if(!pairs.length)record('candidate_pairs_empty',context);
++   for(const pair of pairs){const local=byId.get(pair.localCandidateId),remote=byId.get(pair.remoteCandidateId);
++    record('candidate_pair',{...context,...pair,pairId:String(pair.id||''),localAddress:local?.address||local?.ip,localPort:local?.port,remoteAddress:remote?.address||remote?.ip,remotePort:remote?.port,selected:selected.has(pair.id)||pair.selected===true,localCandidateType:local?.candidateType,remoteCandidateType:remote?.candidateType,protocol:local?.protocol});}
++  }catch(error){record('get_stats_failed',{...context,errorName:error?.name,errorMessage:error?.message});}
++  finally{flights.delete(pc);}
++ }
++ return {record,stats,snapshot:()=>({limit,dropped,events:structuredClone(rows)})};
++}
++export function iceDetails(candidate,pc){
++ const line=String(candidate?.candidate||'');
++ const candidateUfrag=String(candidate?.usernameFragment||line.match(/\bufrag\s+(\S+)/)?.[1]||'');
++ const ufrag=description=>String(description?.sdp||'').match(/(?:^|\r?\n)a=ice-ufrag:([^\r\n]+)/)?.[1]||'';
++ const remoteUfrag=ufrag(pc?.remoteDescription);
++ return {candidate:line,candidateType:line.match(/\btyp\s+(\S+)/)?.[1]||'',protocol:line.split(/\s+/)[2]||'',candidateUfrag,localUfrag:ufrag(pc?.localDescription),remoteUfrag,
++  ...(candidateUfrag&&remoteUfrag?{generationMatches:candidateUfrag===remoteUfrag}:{})};
++}
+diff --git a/packages/phantom-doorways/src/browser-entry.js b/packages/phantom-doorways/src/browser-entry.js
+index dc1eaad..e6cee76 100644
+--- a/packages/phantom-doorways/src/browser-entry.js
++++ b/packages/phantom-doorways/src/browser-entry.js
+@@ -11,7 +11,7 @@ import {createAdmissionCheckpoint, AdmissionError} from '../../phantom-core/src/
+ import {withAdmissionDoorway} from './admission-doorway.js';
+ import {parseInvite, encodeInvite} from '../../phantom-core/src/invite.js';
+ /** One entry API; service selection belongs to the adapter composition layer. */
+-export function createBrowserPhantom({admission,authorizationTimeoutMs=5000,adminIdentity,adminPublicKey=adminIdentity?.publicKey,controlStore,files,distribution,readAdminOrders,retireGraceMs,relays,doorways,doorwayMode='failover',doorwayAdmissionTimeoutMs=10000,adapters={},storage,WebSocket=globalThis.WebSocket,runtime=globalThis,onRelayProgress=()=>{},onDoorwayStatus=()=>{},relayFinder,relayMaxAgeMs,now,coreFactory}={}) {
++export function createBrowserPhantom({transportDiagnostics=false,admission,authorizationTimeoutMs=5000,adminIdentity,adminPublicKey=adminIdentity?.publicKey,controlStore,files,distribution,readAdminOrders,retireGraceMs,relays,doorways,doorwayMode='failover',doorwayAdmissionTimeoutMs=10000,adapters={},storage,WebSocket=globalThis.WebSocket,runtime=globalThis,onRelayProgress=()=>{},onDoorwayStatus=()=>{},relayFinder,relayMaxAgeMs,now,coreFactory}={}) {
+  if(admission!==undefined&&(!admission||typeof admission.authorize!=='function'||typeof admission.verify!=='function'))throw new TypeError('admission requires authorize and verify functions');
+  if(relays!==undefined&&doorways!==undefined)throw new TypeError('Use relays or doorways, not both');
+  try{storage??=runtime.localStorage;}catch{}
+@@ -56,7 +56,7 @@ export function createBrowserPhantom({admission,authorizationTimeoutMs=5000,admi
+    // Keep original invite coordinates while adding discovered alternatives.
+    return build({...spec,relays:expanded});
+   }}),{onStatus:onDoorwayStatus});
+-  return {identity:{version:1,id:identity.publicKey},runtime,observeBrowserLifecycle:true,doorway,canAdmitPeer:access?peer=>access.checkpoint.allows(peer):undefined,adminIdentity,controlStore:context.adminPublicKey?(controlStore??createControlStore(storage)):undefined,files,distribution,readAdminOrders,retireGraceMs,onNetworkState:state=>doorway.observeNetworkState(state)};
++  return {transportDiagnostics,identity:{version:1,id:identity.publicKey},runtime,observeBrowserLifecycle:true,doorway,canAdmitPeer:access?peer=>access.checkpoint.allows(peer):undefined,adminIdentity,controlStore:context.adminPublicKey?(controlStore??createControlStore(storage)):undefined,files,distribution,readAdminOrders,retireGraceMs,onNetworkState:state=>doorway.observeNetworkState(state)};
+  }
+  return {
+   async join(invite,options){const context=parseInvite(invite);const access=await preflight(context,options,'join');return createPhantomEntry({openContext:context=>openContext(context,options?.doorwayTypes,access),...(coreFactory?{coreFactory}:{})}).join(invite,options);},
+diff --git a/packages/phantom-doorways/src/nostr-doorway.js b/packages/phantom-doorways/src/nostr-doorway.js
+index 2a04e5c..0ea97e6 100644
+--- a/packages/phantom-doorways/src/nostr-doorway.js
++++ b/packages/phantom-doorways/src/nostr-doorway.js
+@@ -46,7 +46,7 @@ export function createNostrDoorway({identity,relays,WebSocket=globalThis.WebSock
+     if(changed||newlyAvailable)announce();
+     // A signed, deduplicated announcement is an availability hint only.
+     // The core may rearm its bounded owner attempt; it cannot infer admission.
+-    sessionStatus({type:'peer_available',roomId,peerId:key,bootId:row.bootId,availabilityId:availability,eventId:p.eventId});
++    sessionStatus({type:'peer_available',verified:true,roomId,peerId:key,bootId:row.bootId,availabilityId:availability,eventId:p.eventId});
+    },
+    onSignal:p=>{
+     if(closed)return;

@@ -1,0 +1,1148 @@
+diff --git a/packages/phantom-core/src/candidate-inbox.js b/packages/phantom-core/src/candidate-inbox.js
+new file mode 100644
+index 0000000..35ebd0f
+--- /dev/null
++++ b/packages/phantom-core/src/candidate-inbox.js
+@@ -0,0 +1,33 @@
++// Candidates may precede their offer. No timers or transport allocation here.
++export function createCandidateInbox({maxPeers=128,perPeer=64,total=1024}={}) {
++  const peers=new Map();let count=0;
++  return {
++    put(peer,boot,attempt,candidate) {
++      if(!peer||!boot||boot.length>256||!attempt||attempt.length>256||
++         typeof candidate?.candidate!=="string"||candidate.candidate.length>4096)return false;
++      const value={candidate:candidate.candidate};
++      for(const field of ["sdpMid","usernameFragment"]) {
++        const text=candidate[field];
++        if(text!=null&&(typeof text!=="string"||text.length>256))return false;
++        if(text!==undefined)value[field]=text;
++      }
++      if(candidate.sdpMLineIndex!==undefined) {
++        const index=candidate.sdpMLineIndex;
++        if(index!==null&&(!Number.isInteger(index)||index<0||index>65535))return false;
++        value.sdpMLineIndex=index;
++      }
++      const rows=peers.get(peer);
++      if(count>=total||(rows?.length||0)>=perPeer||(!rows&&peers.size>=maxPeers))return false;
++      if(!rows)peers.set(peer,[]);
++      peers.get(peer).push({boot,attempt,candidate:value});count++;return true;
++    },
++    take(peer,boot,attempt) {
++      const rows=peers.get(peer)||[];
++      peers.delete(peer);count-=rows.length;
++      return rows.filter(row=>row.boot===boot&&row.attempt===attempt).map(row=>row.candidate);
++    },
++    drop(peer){const rows=peers.get(peer)||[];peers.delete(peer);count-=rows.length;},
++    clear(){peers.clear();count=0;},
++    snapshot(){return {earlyIceCandidates:count,earlyIcePeers:peers.size,earlyIceLimit:total};}
++  };
++}
+diff --git a/packages/phantom-core/src/channel-drain.js b/packages/phantom-core/src/channel-drain.js
+new file mode 100644
+index 0000000..c0cba1f
+--- /dev/null
++++ b/packages/phantom-core/src/channel-drain.js
+@@ -0,0 +1,15 @@
++const waits=new WeakMap();
++// One owned watchdog per blocked channel, cancelled on drain or close.
++export function waitForChannelDrain(dc,{schedule=setTimeout,cancel=clearTimeout,timeoutMs=5000}={}){
++ if(!dc||dc.readyState!=='open')return Promise.resolve(false);
++ dc.bufferedAmountLowThreshold=512*1024;
++ if(dc.bufferedAmount<2*1024*1024)return Promise.resolve(true);
++ if(waits.has(dc))return waits.get(dc);
++ let finish,timer,settled=false;
++ const result=new Promise(resolve=>{
++  finish=event=>{if(settled)return;settled=true;cancel(timer);for(const type of ['bufferedamountlow','close','error'])dc.removeEventListener(type,finish);waits.delete(dc);resolve(event?.type!=='error'&&dc.readyState==='open'&&dc.bufferedAmount<2*1024*1024);};
++  for(const type of ['bufferedamountlow','close','error'])dc.addEventListener(type,finish);
++  timer=schedule(finish,timeoutMs);
++ });
++ waits.set(dc,result);return result;
++}
+diff --git a/packages/phantom-core/src/entry.js b/packages/phantom-core/src/entry.js
+index e582dc0..4c04340 100644
+--- a/packages/phantom-core/src/entry.js
++++ b/packages/phantom-core/src/entry.js
+@@ -13,13 +13,13 @@ export function createPhantomEntry({openContext, relays, doorways, adminPublicKe
+     if(signal?.aborted) throw new Error('Join aborted');
+     const config=await openContext(context);
+     const retireGraceMs=config.retireGraceMs??30000;if(!Number.isFinite(retireGraceMs)||retireGraceMs<0||retireGraceMs>60000)throw new TypeError('Invalid retirement grace period');
+-    let core,files,distribution,retireTimer,adminGate;
+-    let retired=false;
++    let core,files,distribution,retireTimer,adminGate,recoveryTimer,recoveryReading=false,recoveryGeneration=0;
++    let retired=false,hasBeenAdmitted=false;
+     const lifecycle=await createAdminLifecycle({networkId:context.networkId,adminPublicKey:context.adminPublicKey,
+       adminIdentity:config.adminIdentity,store:config.controlStore,crypto:config.runtime?.crypto??globalThis.crypto,
+       send:(record,to)=>core?.command('PHANTOM_ADMIN_SEND',{record,to}),
+       emit:(type,record)=>{if(type==='revoked'){files?.stop(record.target);distribution?.stop(record.target);}emit(type,record);},
+-      onRetire:()=>{retired=true;adminGate?.retire();files?.close();distribution?.close();emit('state',{...core.getState(),state:'retired',reason:'signed_network_retirement',nextAction:'none'});
++      onRetire:()=>{retired=true;recoveryGeneration++;clearTimeout(recoveryTimer);adminGate?.retire();files?.close();distribution?.close();emit('state',{...core.getState(),state:'retired',reason:'signed_network_retirement',nextAction:'none'});
+         // SysCon 1 carries the order during the drain window; ordinary peers leave promptly.
+         retireTimer=setTimeout(()=>{core?.dispose();},core.getState().role==='syscon1'?retireGraceMs:250);
+       }});
+@@ -39,10 +39,31 @@ export function createPhantomEntry({openContext, relays, doorways, adminPublicKe
+       if(event.type==='INCOMING_MSG'&&!event.payload?.sys&&typeof event.payload?.text==='string') emit('message',{from:event.payload.from,text:event.payload.text});
+     });
+     const adminContext=()=>{const snapshot=core.snapshot?.(),c=snapshot?.concierge;if(!c)return core.getState();return {peerId:snapshot.self?.hKey,leader:c.syscon1,role:c.localRoleCandidate||c.role};};
+-    const offState=core.onState(state=>{adminGate.observe(adminContext());config.onNetworkState?.(state);if(retired)lifecycle?.sync();else emit('state',state);});
++    // A recovering leaf can lose its only path to a retiring successor.
++    // Fetch retained signed controls directly; this never approves leadership.
++    function observeRecovery(state) {
++      if (closed || retired || state.state !== 'recovering') {
++        recoveryGeneration++;clearTimeout(recoveryTimer);recoveryTimer=null;return;
++      }
++      if (!hasBeenAdmitted || state.peerId===state.leader || state.peerId===state.mirror || !lifecycle || typeof config.readAdminOrders !== 'function' || recoveryReading || recoveryTimer) return;
++      const generation=recoveryGeneration,peerId=state.peerId;
++      recoveryReading=true;
++      Promise.resolve().then(()=>config.readAdminOrders({networkId:context.networkId,peerId,reason:'recovery'})).then(async orders=>{
++        if(closed||retired||generation!==recoveryGeneration)return;
++        if(!Array.isArray(orders))throw Error('Admin orders must be an array');
++        for(const order of orders){
++          if(closed||retired||generation!==recoveryGeneration)return;
++          if(!await lifecycle.apply(order))throw Error('Invalid recovery admin order');
++        }
++      }).catch(error=>{if(!closed&&!retired&&generation===recoveryGeneration)emit('controlError',{error:error.message,via:'recovery'});}).finally(()=>{
++        recoveryReading=false;
++        if(!closed&&!retired&&core.getState().state==='recovering')recoveryTimer=setTimeout(()=>{recoveryTimer=null;observeRecovery(core.getState());},1000);
++      });
++    }
++    const offState=core.onState(state=>{if(state.state==='admitted')hasBeenAdmitted=true;adminGate.observe(adminContext());observeRecovery(state);config.onNetworkState?.(state);if(retired)lifecycle?.sync();else emit('state',state);});
+     const active=()=>{if(closed)throw new Error('Network closed');if(retired)throw new Error('Network permanently retired');};
+     files=createFileDistribution({core,crypto:config.runtime?.crypto??globalThis.crypto,emit,
+-      allowed:(id,target)=>!retired&&!closed&&!lifecycle?.isRevoked(id)&&(!target||!lifecycle?.isRevoked(target)),...Object.fromEntries(Object.entries(config.files??{}).filter(([key])=>['chunkStore','requestTimeoutMs','maxFileBytes'].includes(key)))});
++      allowed:(id,target)=>!retired&&!closed&&!lifecycle?.isRevoked(id)&&(!target||!lifecycle?.isRevoked(target)),...Object.fromEntries(Object.entries(config.files??{}).filter(([key])=>['chunkStore','requestTimeoutMs','requestWindow','maxAttemptsPerPeer','maxFileBytes'].includes(key)))});
+     if(config.distribution)distribution=createNetworkDistribution({core,networkId:context.networkId,adminPublicKey:context.adminPublicKey,lifecycle,runtime:config.runtime,emit,allowed:(id,target)=>!retired&&!closed&&!lifecycle?.isRevoked(id)&&(!target||!lifecycle?.isRevoked(target)),checkAdmin:()=>adminGate.wait(adminContext()),options:config.distribution});
+     const network={invite,networkId:context.networkId,
+       distributeFile:(file,options)=>{active();if(!distribution)throw new Error('Enable distribution in SDK configuration');return distribution.publish(file,options);},
+@@ -61,9 +82,10 @@ export function createPhantomEntry({openContext, relays, doorways, adminPublicKe
+       getControls:()=>lifecycle?.records()??[],
+       isRevoked:target=>lifecycle?.isRevoked(target)??false,
+       on(type,fn){if(closed)throw new Error('Network closed');if(typeof fn!=='function')throw new TypeError('Listener required');if(!handlers.has(type))handlers.set(type,new Set());handlers.get(type).add(fn);return()=>handlers.get(type)?.delete(fn);},
++      disconnectDiscovery:()=>{active();core.disconnectDiscovery();},
+       getState:()=>retired?{...core.getState(),state:'retired',reason:'signed_network_retirement',nextAction:'none'}:core.getState(),snapshot:()=>core.snapshot(),getPeers:()=>structuredClone(peers),
+       invitePeer:id=>{active();return core.invite(id);},acceptPeer:id=>{active();return core.accept(id);},send:(id,text)=>{active();return core.send(id,text);},
+-      close(){if(closed)return;closed=true;clearTimeout(retireTimer);distribution?.close();files.close();offEvent();offState();core.dispose();adminGate.close();handlers.clear();}
++      close(){if(closed)return;closed=true;recoveryGeneration++;clearTimeout(recoveryTimer);clearTimeout(retireTimer);distribution?.close();files.close();offEvent();offState();core.dispose();adminGate.close();handlers.clear();}
+     };
+     try {
+       await new Promise((resolve,reject)=>{
+diff --git a/packages/phantom-core/src/files.js b/packages/phantom-core/src/files.js
+index bd75eb9..793594d 100644
+--- a/packages/phantom-core/src/files.js
++++ b/packages/phantom-core/src/files.js
+@@ -3,9 +3,10 @@ const digest=async(b,crypto)=>hex(await crypto.subtle.digest('SHA-256',b));
+ const descriptor=m=>[m.name,m.type,m.size,m.chunkSize,m.total,m.hashRoot,m.distributionId];
+ export function createMemoryChunkStore(){const data=new Map();return {async get(id,index){return data.get(id+':'+index);},async put(id,index,bytes){data.set(id+':'+index,bytes.slice(0));}};}
+ /** Chunked file exchange over the peer data channel with backpressure. */
+-export function createFileDistribution({core,crypto=globalThis.crypto,emit=()=>{},allowed=()=>true,chunkStore=createMemoryChunkStore(),requestTimeoutMs=10000,maxFileBytes=1024*1024*1024}) {
++export function createFileDistribution({core,crypto=globalThis.crypto,emit=()=>{},allowed=()=>true,chunkStore=createMemoryChunkStore(),requestTimeoutMs=10000,requestWindow=8,maxAttemptsPerPeer=2,maxFileBytes=1024*1024*1024}) {
+  const manifests=new Map(),sources=new Map(),offers=new Map(),downloads=new Map(),sendQueues=new Map(),queueCounts=new Map(),activeSends=new Set();let closed=false;
+  if(!Number.isFinite(requestTimeoutMs)||requestTimeoutMs<=0||!Number.isSafeInteger(maxFileBytes)||maxFileBytes<0)throw new TypeError('Invalid file service limits');
++ if(!Number.isInteger(requestWindow)||requestWindow<1||requestWindow>8||!Number.isInteger(maxAttemptsPerPeer)||maxAttemptsPerPeer<1||maxAttemptsPerPeer>3)throw new TypeError('Invalid file request window or retry limit');
+  const check=id=>{if(closed)throw new Error('File service closed');const m=manifests.get(id);if(!m)throw new Error('Unknown file');if(!allowed(id,m.distributionId))throw new Error('Distribution revoked');return m;};
+  const packet=(to,sys,file)=>core.command('SEND_DM',{to,sys,file});
+  async function publish(file,{name=file?.name||'file',type=file?.type||'application/octet-stream',chunkSize=16384,distributionId=''}={}){
+@@ -13,7 +14,22 @@ export function createFileDistribution({core,crypto=globalThis.crypto,emit=()=>{
+   if(!Number.isInteger(chunkSize)||chunkSize<1024||chunkSize>65536)throw new TypeError('Chunk size must be 1024–65536 bytes');
+   if(typeof name!=='string'||name.length>256||typeof type!=='string'||type.length>128||typeof distributionId!=='string'||distributionId.length>256)throw new TypeError('Invalid file metadata');
+   if(Math.ceil(file.size/chunkSize)>65536)throw new TypeError('At most 65536 chunks per file');
+-  const hashes=[];for(let i=0;i<Math.ceil(file.size/chunkSize);i++){if(closed||!allowed('',distributionId))throw new Error('Distribution unavailable');hashes.push(await digest(await file.slice(i*chunkSize,(i+1)*chunkSize).arrayBuffer(),crypto));}
++  const total=Math.ceil(file.size/chunkSize),hashes=new Array(total),startedAt=performance.now();let readMs=0,hashMs=0;
++  // Bound temporary file data to 4 MiB and outstanding WebCrypto jobs to eight.
++  const batchChunks=Math.max(1,Math.floor(4*1024*1024/chunkSize));
++  for(let base=0;base<total;base+=batchChunks){
++   if(closed||!allowed('',distributionId))throw new Error('Distribution unavailable');
++   const end=Math.min(total,base+batchChunks),readAt=performance.now();
++   const bytes=await file.slice(base*chunkSize,Math.min(file.size,end*chunkSize)).arrayBuffer();readMs+=performance.now()-readAt;
++   const hashAt=performance.now();
++   for(let offset=base;offset<end;offset+=8){
++    if(closed||!allowed('',distributionId))throw new Error('Distribution unavailable');
++    await Promise.all(Array.from({length:Math.min(8,end-offset)},async(_,j)=>{const index=offset+j,start=(index-base)*chunkSize;hashes[index]=await digest(new Uint8Array(bytes,start,Math.min(chunkSize,bytes.byteLength-start)),crypto);}));
++   }
++   hashMs+=performance.now()-hashAt;
++   if(closed||!allowed('',distributionId))throw new Error('Distribution unavailable');
++   emit('filePreparationProgress',{name,processed:end,total,readMs,hashMs,elapsedMs:performance.now()-startedAt});
++  }
+   const m={version:1,name,type,size:file.size,chunkSize,total:hashes.length,hashRoot:await digest(new TextEncoder().encode(hashes.join('')),crypto),distributionId};
+   m.id='sha256:'+await digest(new TextEncoder().encode(JSON.stringify(descriptor(m))),crypto);m.hashes=hashes;checkAllowed(m);manifests.set(m.id,m);sources.set(m.id,file);emit('filePublished',publicManifest(m));return publicManifest(m);
+  }
+@@ -29,19 +45,22 @@ export function createFileDistribution({core,crypto=globalThis.crypto,emit=()=>{
+  }
+  function queueChunk(to,id,index){if((queueCounts.get(to)||0)>=16)return;queueCounts.set(to,(queueCounts.get(to)||0)+1);const previous=sendQueues.get(to)||Promise.resolve();const next=previous.catch(()=>{}).then(()=>sendChunk(to,id,index));sendQueues.set(to,next);next.catch(error=>emit('fileError',{id,from:to,error:error.message})).finally(()=>{queueCounts.set(to,Math.max(0,(queueCounts.get(to)||1)-1));if(sendQueues.get(to)===next)sendQueues.delete(to);});}
+  async function request(id,{peers,signal,indexes}={}){
+-  const m=check(id);if(!Array.isArray(peers)||!peers.length||peers.some(p=>! /^[0-9a-f]{16}$/.test(p)))throw new TypeError('Supply connected peer IDs');if(downloads.has(id))throw new Error('File download already active');if(signal?.aborted)throw new Error('File download aborted');
++  const m=check(id);if(!Array.isArray(peers)||!peers.length||peers.length>16||peers.some(p=>! /^[0-9a-f]{16}$/.test(p)))throw new TypeError('Supply connected peer IDs');if(downloads.has(id))throw new Error('File download already active');if(signal?.aborted)throw new Error('File download aborted');
+   if(indexes!==undefined&&(!Array.isArray(indexes)||indexes.some(i=>!Number.isInteger(i)||i<0||i>=m.total)))throw new TypeError('Invalid chunk indexes');
+   const wanted=new Set(indexes??Array.from({length:m.total},(_,i)=>i));
+   const have=new Set();for(const i of wanted){const bytes=await chunkStore.get(id,i);if(bytes&&bytes.byteLength===Math.min(m.chunkSize,m.size-i*m.chunkSize)&&await digest(bytes,crypto)===m.hashes[i])have.add(i);}
+   check(id);
+-  return new Promise((resolve,reject)=>{const d={m,wanted,partial:indexes!==undefined,peers:[...new Set(peers)],have,pending:new Map(),attempts:new Map(),resolve,reject,signal,abort:()=>fail(id,new Error('File download aborted'))};downloads.set(id,d);signal?.addEventListener('abort',d.abort,{once:true});if(signal?.aborted){d.abort();return;}pump(id);});
++  return new Promise((resolve,reject)=>{const d={m,wanted,partial:indexes!==undefined,peers:[...new Set(peers)],have,startedAt:performance.now(),verifiedBytes:0,verificationMs:0,pending:new Map(),attempts:new Map(),resolve,reject,signal,abort:()=>fail(id,new Error('File download aborted'))};downloads.set(id,d);signal?.addEventListener('abort',d.abort,{once:true});if(signal?.aborted){d.abort();return;}pump(id);});
+  }
+  function fail(id,error){const d=downloads.get(id);if(!d)return;downloads.delete(id);for(const p of d.pending.values())clearTimeout(p.timer);d.signal?.removeEventListener('abort',d.abort);d.reject(error);}
+  async function complete(id){const d=downloads.get(id);if(!d)return;try{check(id);const parts=[];for(const i of [...d.wanted].sort((a,b)=>a-b)){const bytes=await chunkStore.get(id,i);if(!bytes||await digest(bytes,crypto)!==d.m.hashes[i])throw new Error('Stored file chunk failed verification');parts.push(bytes);}check(id);if(downloads.get(id)!==d)return;downloads.delete(id);d.signal?.removeEventListener('abort',d.abort);if(d.partial){const indexes=[...d.wanted].sort((a,b)=>a-b);emit('fileChunksComplete',{id,indexes});d.resolve({id,indexes});return;}const blob=new Blob(parts,{type:d.m.type});emit('fileComplete',{id,size:blob.size});d.resolve(blob);}catch(error){fail(id,error);}}
+  function pump(id){const d=downloads.get(id);if(!d)return;try{check(id);}catch(e){fail(id,e);return;}if(d.have.size===d.wanted.size){if(!d.completing){d.completing=true;void complete(id);}return;}
+-  for(const peer of d.peers){if([...d.pending.values()].some(p=>p.peer===peer))continue;let index=-1;for(let i=0;i<d.m.total;i++)if(d.wanted.has(i)&&!d.have.has(i)&&!d.pending.has(i)&&!d.attempts.get(i)?.has(peer)){index=i;break;}if(index<0)continue;
+-   if(!d.attempts.has(index))d.attempts.set(index,new Set());d.attempts.get(index).add(peer);
+-   const timer=setTimeout(()=>{if(downloads.get(id)!==d)return;d.pending.delete(index);pump(id);},requestTimeoutMs);d.pending.set(index,{peer,timer});packet(peer,'PHANTOM_FILE_REQUEST',{id,index});
++  for(const peer of d.peers){let outstanding=[...d.pending.values()].filter(p=>p.peer===peer).length;
++   while(outstanding<requestWindow){let index=-1;for(let i=0;i<d.m.total;i++)if(d.wanted.has(i)&&!d.have.has(i)&&!d.pending.has(i)&&(d.attempts.get(i)?.get(peer)||0)<maxAttemptsPerPeer){index=i;break;}if(index<0)break;
++    if(!d.attempts.has(index))d.attempts.set(index,new Map());const attempts=d.attempts.get(index);attempts.set(peer,(attempts.get(peer)||0)+1);
++    const pending={peer,processing:false};pending.timer=setTimeout(()=>{if(downloads.get(id)!==d||d.pending.get(index)!==pending)return;d.pending.delete(index);emit('fileRetry',{id,index,from:peer,attempt:attempts.get(peer)});pump(id);},requestTimeoutMs);
++    d.pending.set(index,pending);outstanding++;packet(peer,'PHANTOM_FILE_REQUEST',{id,index});
++   }
+   }
+   if(!d.pending.size&&d.have.size<d.wanted.size)fail(id,new Error('No source supplied the remaining chunks; retry to resume'));
+  }
+@@ -52,10 +71,10 @@ export function createFileDistribution({core,crypto=globalThis.crypto,emit=()=>{
+   }
+   if(event.type==='INCOMING_MSG'&&p.sys==='PHANTOM_FILE_MANIFEST'){const row=offers.get(from+':'+f?.id);if(!row||!Array.isArray(f.hashes)||f.hashes.length>64||!Number.isInteger(f.offset)||f.offset<0||f.offset+f.hashes.length>row.m.total||f.hashes.some(h=>! /^[0-9a-f]{64}$/.test(h)))return;for(let i=0;i<f.hashes.length;i++)row.hashes.set(f.offset+i,f.hashes[i]);await finishManifest(from,row);return;}
+   if(event.type==='INCOMING_MSG'&&p.sys==='PHANTOM_FILE_REQUEST'){if(manifests.has(f?.id)&&allowed(f.id,manifests.get(f.id).distributionId))queueChunk(from,f.id,f.index);return;}
+-  if(event.type==='INCOMING_MSG'&&p.sys==='PHANTOM_FILE_MISSING'){const d=downloads.get(f?.id),pending=d?.pending.get(f.index);if(pending?.peer===from){clearTimeout(pending.timer);d.pending.delete(f.index);pump(f.id);}return;}
+-  if(event.type==='FILE_BIN_CHUNK'){const d=downloads.get(f?.id),pending=d?.pending.get(f.index);if(!d||pending?.peer!==from)return;check(f.id);
+-   if(!(p.bytes instanceof ArrayBuffer)||p.bytes.byteLength!==Math.min(d.m.chunkSize,d.m.size-f.index*d.m.chunkSize)||await digest(p.bytes,crypto)!==d.m.hashes[f.index]){clearTimeout(pending.timer);d.pending.delete(f.index);emit('fileError',{id:f.id,from,error:'Chunk failed verification'});pump(f.id);return;}
+-   check(f.id);if(downloads.get(f.id)!==d||d.pending.get(f.index)!==pending)return;await chunkStore.put(f.id,f.index,p.bytes);check(f.id);if(downloads.get(f.id)!==d||d.pending.get(f.index)!==pending)return;clearTimeout(pending.timer);d.pending.delete(f.index);d.have.add(f.index);emit('fileProgress',{id:f.id,received:d.have.size,total:d.m.total,from});pump(f.id);
++  if(event.type==='INCOMING_MSG'&&p.sys==='PHANTOM_FILE_MISSING'){const d=downloads.get(f?.id),pending=d?.pending.get(f.index);if(pending?.peer===from){d.attempts.get(f.index)?.set(from,maxAttemptsPerPeer);clearTimeout(pending.timer);d.pending.delete(f.index);pump(f.id);}return;}
++  if(event.type==='FILE_BIN_CHUNK'){const d=downloads.get(f?.id),pending=d?.pending.get(f.index);if(!d||pending?.peer!==from||pending.processing)return;pending.processing=true;const verificationStart=performance.now();check(f.id);
++   if(!(p.bytes instanceof ArrayBuffer)||p.bytes.byteLength!==Math.min(d.m.chunkSize,d.m.size-f.index*d.m.chunkSize)||await digest(p.bytes,crypto)!==d.m.hashes[f.index]){if(downloads.get(f.id)!==d||d.pending.get(f.index)!==pending)return;d.attempts.get(f.index)?.set(from,maxAttemptsPerPeer);clearTimeout(pending.timer);d.pending.delete(f.index);emit('fileError',{id:f.id,from,error:'Chunk failed verification'});pump(f.id);return;}
++   check(f.id);if(downloads.get(f.id)!==d||d.pending.get(f.index)!==pending)return;await chunkStore.put(f.id,f.index,p.bytes);check(f.id);if(downloads.get(f.id)!==d||d.pending.get(f.index)!==pending)return;clearTimeout(pending.timer);d.pending.delete(f.index);d.have.add(f.index);d.verifiedBytes+=p.bytes.byteLength;d.verificationMs+=performance.now()-verificationStart;emit('fileProgress',{id:f.id,index:f.index,bytes:p.bytes.byteLength,verifiedBytes:d.verifiedBytes,elapsedMs:performance.now()-d.startedAt,verificationMs:d.verificationMs,inFlight:d.pending.size,received:d.have.size,total:d.m.total,from});pump(f.id);
+   }
+  }
+  const off=core.onEvent(e=>{void handle(e).catch(error=>{if(e.payload?.file?.id)fail(e.payload.file.id,error);emit('fileError',{error:error.message});});});
+diff --git a/packages/phantom-core/src/index.js b/packages/phantom-core/src/index.js
+index ad5df30..992b2fc 100644
+--- a/packages/phantom-core/src/index.js
++++ b/packages/phantom-core/src/index.js
+@@ -29,9 +29,9 @@ function eventSurface() {
+ }
+ 
+ /** Public peer-network facade with injectable transport and runtime. */
+-export function createPhantom({ doorway, origin = 'https://phantom.local',
++export function createPhantom({ transportDiagnostics=false, doorway, origin = 'https://phantom.local',
+     avatar = null, storage = memoryStorage(), sessionStorage = memoryStorage(),
+-    runtime = globalThis, canSendFile = () => true, authorizeSyscon1 = () => true, canAdmitPeer = () => true } = {}) {
++    runtime = globalThis, observeBrowserLifecycle = false, canSendFile = () => true, authorizeSyscon1 = () => true, canAdmitPeer = () => true } = {}) {
+   if (['phantom-doorway-v1','phantom-doorway-v2'].includes(doorway?.protocol)) doorway = bridgeDoorway(doorway);
+   if (!isConciergeProtocol(doorway?.protocol)) {
+     throw new Error('A Phantom concierge doorway is required');
+@@ -50,7 +50,7 @@ export function createPhantom({ doorway, origin = 'https://phantom.local',
+   let networkState={state:"idle",reason:"not_joined",nextAction:"join",peerId:null};
+   let networkSignature=JSON.stringify(networkState);
+   const window = eventSurface();
+-  const document = { ...eventSurface(), visibilityState: 'visible' };
++  const document = { ...eventSurface(), visibilityState: observeBrowserLifecycle ? runtime.document?.visibilityState ?? 'visible' : 'visible' };
+   const timeouts = new Set();
+   const intervals = new Set();
+   let disposed = false;
+@@ -61,6 +61,7 @@ export function createPhantom({ doorway, origin = 'https://phantom.local',
+   const host = {
+     window, document, origin, avatar, allowDisplayNames: true, localStorage: storage, sessionStorage,
+     location: { href: origin }, doorwayUrl: doorway.url,
++    transportDiagnostics,
+     doorwayPresence: doorway.presence ?? 'live-sockets',
+     WebSocket: doorway.WebSocket, RTCPeerConnection: runtime.RTCPeerConnection,
+     crypto: runtime.crypto, canSendFile, authorizeSyscon1,
+@@ -96,6 +97,23 @@ export function createPhantom({ doorway, origin = 'https://phantom.local',
+     clearInterval(id) { timers.clearInterval(id); intervals.delete(id); },
+   };
+   const engine = createNetworkEngine(host);
++  const lifecycleBindings = [];
++  if (observeBrowserLifecycle) {
++    const browserWindow = runtime.window ?? runtime;
++    function bind(target, type, callback) {
++      if (typeof target?.addEventListener !== 'function' || typeof target?.removeEventListener !== 'function') return;
++      target.addEventListener(type, callback);
++      lifecycleBindings.push(() => target.removeEventListener(type, callback));
++    }
++    for (const type of ['online', 'pageshow']) bind(browserWindow, type, () => {
++      if (!disposed) window.dispatchEvent({type});
++    });
++    bind(runtime.document, 'visibilitychange', () => {
++      if (disposed) return;
++      document.visibilityState = runtime.document.visibilityState;
++      document.dispatchEvent({type:'visibilitychange'});
++    });
++  }
+   function command(type, payload) {
+     if (disposed) throw new Error('Phantom instance disposed');
+     engine.command(normalizeCommand(type), payload);
+@@ -158,10 +176,12 @@ export function createPhantom({ doorway, origin = 'https://phantom.local',
+       if (!publicIdentity) throw new Error("No standalone identity initialized; join with name first");
+       return {...publicIdentity};
+     },
+-    snapshot: () => engine.snapshot(),
++    disconnectDiscovery() { command("CORE_DISCONNECT_DISCOVERY", {}); },
++    snapshot: () => ({...engine.snapshot(),runtimeResources:{ownedTimeouts:timeouts.size,ownedIntervals:intervals.size}}),
+     command,
+     dispose() {
+       if (disposed) return;
++      for (const unbind of lifecycleBindings.splice(0)) unbind();
+       engine.dispose();
+       disposed = true;
+       cancelJoin?.();
+diff --git a/packages/phantom-core/src/network-engine.js b/packages/phantom-core/src/network-engine.js
+index 8f17620..e2c702d 100644
+--- a/packages/phantom-core/src/network-engine.js
++++ b/packages/phantom-core/src/network-engine.js
+@@ -1,3 +1,7 @@
++import {createRtcDiagnostics,iceDetails} from './rtc-diagnostics.js';
++import {createCandidateInbox} from './candidate-inbox.js';
++import {waitForChannelDrain} from './channel-drain.js';
++import {createSignalQueue} from './signal-queue.js';
+ import {COMPATIBILITY_WIRE} from './compatibility.js';
+ import {acceptsSuccessorStatus} from './successor-status.js';
+ import { canCarrySysRecovery } from './recovery-signaling.js';
+@@ -50,6 +54,7 @@ export function createNetworkEngine(host) {
+   // current or successor syscon1 to commit the corresponding removal.
+   const phantomPendingTerminalExits = new Map(); // hKey -> { bootId, epoch, at, via }
+   let ws = null;
++  let discoveryDisconnected = false;
+ 
+   let tofu = {
+     pinned: false,
+@@ -477,7 +482,6 @@ export function createNetworkEngine(host) {
+     const incomingBootId = String(observation.bootId || "");
+     const incomingEndpointId = String(observation.endpointId || "");
+     const incomingAttemptId = String(observation.attemptId || "");
+-    const signalType = String(observation.signalType || "");
+     const bindCurrent = observation.bindCurrent === true;
+     const via = String(observation.via || "remote_incarnation");
+ 
+@@ -504,20 +508,12 @@ export function createNetworkEngine(host) {
+       !currentPipeOpen
+     );
+ 
+-    const offerAttemptChanged = !!(
+-      signalType === "rtc_offer" &&
+-      incomingAttemptId &&
+-      currentAttemptId &&
+-      incomingAttemptId !== currentAttemptId &&
+-      !currentPipeOpen
+-    );
+-
+     if (incomingBootId) phantomRemoteBootIds.set(key, incomingBootId);
+     if (incomingEndpointId) {
+       phantomRemoteEndpointIds.set(key, incomingEndpointId);
+     }
+ 
+-    const changed = bootChanged || endpointChanged || offerAttemptChanged;
++    const changed = bootChanged || endpointChanged;
+     const committed = phantomCommittedMember(key);
+ 
+     if (!changed) {
+@@ -1426,7 +1422,8 @@ export function createNetworkEngine(host) {
+       phantomSysReplacementWindows.entries(),
+     )) {
+       if (
+-        String(rec?.state || "") === "awaiting_doorway_absence" &&
++        ["awaiting_doorway_absence","awaiting_presence_proof"].includes(String(rec?.state || "")) &&
++        host.doorwayPresence === "live-sockets" &&
+         !(host.doorwayPresence === 'live-sockets' && phantomDoorwayAdmittedPeers.has(remoteKey)) &&
+         !phantomHasOpenSysPipe(remoteKey)
+       ) {
+@@ -2999,6 +2996,8 @@ export function createNetworkEngine(host) {
+   }
+ 
+   const PHANTOM_SYS_REPLACEMENT_MS = 10000;
++  const PHANTOM_TRANSPORT_RECOVERY_MS = 10000;
++  const PHANTOM_SYS_BIRTH_RESPONSE_MS = 10000;
+   const phantomSysReplacementWindows = new Map(); // hKey -> { state, timer, attemptId, bootId, startedAt, terminalAt, committedAt }
+ 
+   function phantomSysReplacementState(remoteHKey) {
+@@ -3038,7 +3037,7 @@ export function createNetworkEngine(host) {
+     if (
+       rec &&
+       (String(rec.state || "") === "replacing" ||
+-        String(rec.state || "") === "awaiting_doorway_absence")
++        String(rec.state || "") === "awaiting_doorway_absence" || String(rec.state || "") === "awaiting_presence_proof")
+     ) {
+       try {
+         if (rec.timer) clearTimeout(rec.timer);
+@@ -3071,7 +3070,7 @@ export function createNetworkEngine(host) {
+     const state = String(rec?.state || "");
+     if (
+       !rec ||
+-      (state !== "replacing" && state !== "awaiting_doorway_absence")
++      (state !== "replacing" && state !== "awaiting_doorway_absence" && state !== "awaiting_presence_proof")
+     ) {
+       return false;
+     }
+@@ -3106,7 +3105,7 @@ export function createNetworkEngine(host) {
+     const state = String(rec?.state || "");
+     if (
+       !rec ||
+-      (state !== "replacing" && state !== "awaiting_doorway_absence")
++      (state !== "replacing" && state !== "awaiting_doorway_absence" && state !== "awaiting_presence_proof")
+     ) {
+       return false;
+     }
+@@ -3174,7 +3173,19 @@ export function createNetworkEngine(host) {
+     }
+ 
+     const elapsed = now() - Number(rec.startedAt || 0);
+-    if (elapsed < PHANTOM_SYS_REPLACEMENT_MS) return false;
++    if (elapsed < PHANTOM_TRANSPORT_RECOVERY_MS) return false;
++
++    // A timed-out pipe is not a membership exit. Discovery hints cannot
++    // establish socket absence; keep the committed member until actual
++    // departure evidence reaches the existing authority transaction.
++    if (host.doorwayPresence !== 'live-sockets' || bootstrap.state !== 'open' || ws?.readyState !== WebSocket.OPEN) {
++      if (rec.timer) clearTimeout(rec.timer);
++      rec.timer = null;
++      rec.state = "awaiting_presence_proof";
++      phantomSysReplacementWindows.set(key, rec);
++      emitSnapshot("sys_replacement_waiting_for_presence_proof");
++      return false;
++    }
+ 
+     // Doorway visibility is corroborating liveness only. It never mutates
+     // membership; it merely prevents a transient SYS fault from becoming a
+@@ -3249,6 +3260,7 @@ export function createNetworkEngine(host) {
+     if (
+       currentState === "replacing" ||
+       currentState === "awaiting_doorway_absence" ||
++      currentState === "awaiting_presence_proof" ||
+       currentState === "terminal_staged" ||
+       currentState === "committed"
+     ) {
+@@ -3309,7 +3321,7 @@ export function createNetworkEngine(host) {
+     const bootId = String(phantomRemoteBootIds.get(key) || "");
+     const timer = setTimeout(() => {
+       phantomCompleteFailedSysReplacement(key, "replacement_window_expired");
+-    }, PHANTOM_SYS_REPLACEMENT_MS);
++    }, PHANTOM_TRANSPORT_RECOVERY_MS);
+ 
+     phantomSysReplacementWindows.set(key, {
+       state: "replacing",
+@@ -4265,7 +4277,7 @@ export function createNetworkEngine(host) {
+         );
+       }
+ 
+-      phantomRequestChatPipe(from, "relationship_status_reconcile");
++      phantomRequestChatPipe(from, "relationship_status_peer_proof");
+       return true;
+     }
+ 
+@@ -4468,6 +4480,15 @@ export function createNetworkEngine(host) {
+       rtcTeardown(key, "relationship_cycle_superseded");
+       ent = null;
+     }
++    // A validated status from the same accepted relationship proves the peer
++    // returned. Retire its exhausted transport attempt before creating one
++    // fresh attempt; local polling alone cannot reset the retry budget.
++    if (ent?.chatAttemptState === "terminal" &&
++        reason === "relationship_status_peer_proof" && phantomOwnsChatPipeOffer(key)) {
++      rtcTeardown(key, "chat_expired_attempt_peer_returned");
++      ent = null;
++      emitSnapshot("chat_expired_attempt_peer_proof_restarts_owner");
++    }
+     if (ent) ent.relationshipCycleId = relationship.cycleId;
+     const pc = ent?.pc || null;
+     const dc = ent?.dc || null;
+@@ -6433,6 +6454,24 @@ export function createNetworkEngine(host) {
+               transportIncarnationBound
+             );
+ 
++            // The remote end may send before our local open notification.
++            // Keep one bounded admission on this exact transport; only its
++            // open event can replay it through every admission gate above.
++            const admissionEntry = phantomSysPeers.get(key);
++            if (!alreadyCommitted && doorwayAdmitted && directTransport &&
++                explicitAdmission && freshIncarnation && transportIncarnationBound &&
++                !sourcePipeProven && admissionEntry?.sysdc?.readyState === "connecting" &&
++                admissionEntry.temporary !== true && incomingBootId.length <= 256 &&
++                admissionEntry.remoteBootId === incomingBootId && !blocked && !blockedBy) {
++              admissionEntry.pendingOpenAdmission = {
++                from: fromKey, bootId: incomingBootId, admit: true,
++                videoId, roomJoinedAt: Number(inner.roomJoinedAt || 0),
++                epoch: Number(inner.epoch || 0),
++              };
++              emitSnapshot("sys_admission_waiting_for_local_pipe_open");
++              return;
++            }
++
+             if (freshDirectAdmission && phantomSysAuthority.pending) {
+               sdkDeferredAdmissions.set(fromKey,{key,inner:structuredClone(inner),entry:phantomSysPeers.get(key)});
+               emitSnapshot("sys_admission_deferred_pending_commit");
+@@ -7551,21 +7590,7 @@ export function createNetworkEngine(host) {
+   }
+ 
+   function rtcWaitDCDrain(dc) {
+-    return new Promise((resolve) => {
+-      if (!dc || dc.readyState !== "open") return resolve(false);
+-
+-      dc.bufferedAmountLowThreshold = 512 * 1024;
+-
+-      if (dc.bufferedAmount < 2 * 1024 * 1024) return resolve(true);
+-
+-      const done = () => {
+-        dc.removeEventListener("bufferedamountlow", done);
+-        resolve(dc.readyState === "open");
+-      };
+-
+-      dc.addEventListener("bufferedamountlow", done, { once: true });
+-      setTimeout(done, 5000);
+-    });
++    return waitForChannelDrain(dc,{schedule:setTimeout,cancel:clearTimeout});
+   }
+ 
+   async function rtcSendRawDC(remoteHKey, buf) {
+@@ -8285,6 +8310,7 @@ export function createNetworkEngine(host) {
+     dc.onopen = () => {
+       const ent = phantomSysPeers.get(key);
+       if (!ent || ent.sysdc !== dc) return;
++      phantomEarlyRtcIce.drop("sys:" + key);
+       completeSysBirth(ent);
+       sdkSysBirthFailures.delete(key);
+       if (ent) {
+@@ -8391,6 +8417,12 @@ export function createNetworkEngine(host) {
+         }
+       }
+ 
++      const pendingAdmission = ent.pendingOpenAdmission;
++      delete ent.pendingOpenAdmission;
++      if (!temporary && pendingAdmission && phantomSysPeers.get(key) === ent) {
++        sdkApplySysAdmission(key, pendingAdmission);
++      }
++
+       emitSnapshot(temporary ? "temporary_sysdc_open" : "sysdc_open");
+ 
+       if (temporary) {
+@@ -9053,8 +9085,19 @@ export function createNetworkEngine(host) {
+     };
+     phantomChatPeers.set(k, ent);
+ 
++    pc.onicecandidateerror = error => {
++      if (phantomChatPeers.get(k) !== ent) return;
++      rtcDiagnostics.record('ice_candidate_error',{...rtcDebug('ice_candidate_error_context',k,'chat',ent),errorCode:error.errorCode,errorMessage:error.errorText});
++    };
++    pc.onicegatheringstatechange = () => {
++      if (phantomChatPeers.get(k) !== ent) return;
++      const detail=rtcDebug('ice_gathering_state',k,'chat',ent);
++      rtcStats(pc,detail);
++    };
+     pc.onicecandidate = (ev) => {
++      if (phantomChatPeers.get(k) !== ent) return;
+       const c = ev?.candidate;
++      rtcDebug(c ? "local_candidate" : "local_candidates_complete",k,"chat",ent,{},c);
+ 
+       if (c) {
+         concierge.lastRtcIceCandidateAt = now();
+@@ -9072,6 +9115,7 @@ export function createNetworkEngine(host) {
+     };
+ 
+     pc.ondatachannel = (ev) => {
++      if (phantomChatPeers.get(k) !== ent) { ev?.channel?.close(); return; }
+       const ch = ev?.channel || null;
+       if (!ch || String(ch.label || "") !== COMPATIBILITY_WIRE.chatChannel) return;
+ 
+@@ -9208,8 +9252,19 @@ export function createNetworkEngine(host) {
+     };
+     phantomSysPeers.set(k, ent);
+ 
++    pc.onicecandidateerror = error => {
++      if (phantomSysPeers.get(k) !== ent) return;
++      rtcDiagnostics.record('ice_candidate_error',{...rtcDebug('ice_candidate_error_context',k,'sys',ent),errorCode:error.errorCode,errorMessage:error.errorText});
++    };
++    pc.onicegatheringstatechange = () => {
++      if (phantomSysPeers.get(k) !== ent) return;
++      const detail=rtcDebug('ice_gathering_state',k,'sys',ent);
++      rtcStats(pc,detail);
++    };
+     pc.onicecandidate = (ev) => {
++      if (phantomSysPeers.get(k) !== ent) return;
+       const c = ev?.candidate;
++      rtcDebug(c ? "local_candidate" : "local_candidates_complete",k,"sys",ent,{},c);
+ 
+       if (c) {
+         concierge.lastRtcIceCandidateAt = now();
+@@ -9230,6 +9285,7 @@ export function createNetworkEngine(host) {
+     };
+ 
+     pc.ondatachannel = (ev) => {
++      if (phantomSysPeers.get(k) !== ent) { ev?.channel?.close(); return; }
+       const ch = ev?.channel || null;
+       if (!ch || String(ch.label || "") !== COMPATIBILITY_WIRE.systemChannel) return;
+ 
+@@ -9257,6 +9313,8 @@ export function createNetworkEngine(host) {
+         return;
+       }
+ 
++      const detail=rtcDebug("connectionState",k,"sys",current);
++      rtcStats(pc,detail);
+       const st = pc.connectionState;
+       if (st === "failed" || st === "closed") {
+         if (current.temporary === true || phantomTemporarySysTransactions.has(k)) {
+@@ -9274,6 +9332,8 @@ export function createNetworkEngine(host) {
+         return;
+       }
+ 
++      const detail=rtcDebug("iceConnectionState",k,"sys",current);
++      rtcStats(pc,detail);
+       const st = pc.iceConnectionState;
+       if (st === "failed" || st === "closed") {
+         if (current.temporary === true || phantomTemporarySysTransactions.has(k)) {
+@@ -9317,6 +9377,7 @@ export function createNetworkEngine(host) {
+     if (!key) return;
+ 
+     const ent = phantomSysPeers.get(key);
++    rtcStats(ent?.pc,rtcDebug("transport_retiring",key,"sys",ent,{}));
+     const temporary = phantomTemporarySysTransactions.get(key);
+     try {
+       if (temporary?.deadlineTimer) clearTimeout(temporary.deadlineTimer);
+@@ -9328,6 +9389,7 @@ export function createNetworkEngine(host) {
+ 
+     const dc = ent?.sysdc || null;
+     const pc = ent?.pc || null;
++    if(ent)completeSysBirth(ent);
+ 
+     if (ent) {
+       ent.sysdc = null;
+@@ -9369,6 +9431,8 @@ export function createNetworkEngine(host) {
+     dc.onopen = () => {
+       const key = phantomShortKey(remoteHKey);
+       const ent = key ? phantomChatPeers.get(key) : null;
++      if (!ent || ent.dc !== dc) return;
++      phantomEarlyRtcIce.drop("chat:" + key);
+ 
+       if (ent) {
+         ent.chatState = "open";
+@@ -10151,6 +10215,47 @@ export function createNetworkEngine(host) {
+     return true;
+   }
+ 
++  const sdkSysRecoveryAvailability=new Map(),sdkSysRecoveryPending=new Map();
++  function phantomResumeAvailableSysOwner(key) {
++    const pending=sdkSysRecoveryPending.get(key);
++    if(!pending)return false;
++    sdkSysRecoveryPending.delete(key);
++    if(phantomSessionKilling||!phantomCommittedMember(key)||phantomPendingTerminalExits.has(key)||
++       phantomSysReplacementTerminal(key)||phantomSysBirthRole(key)!=='opener'||phantomHasOpenSysPipe(key)||
++       pending.boot!==phantomRemoteBootIds.get(key))return false;
++    // A new provider availability generation supersedes an older connection
++    // attempt. It cannot change the relationship, incarnation or room owner.
++    phantomTeardownSysPeer(key,"sys_attempt_replaced_peer_available");
++    sdkSysBirthFailures.delete(key);
++    if(phantomOwnsPrimarySysState(key)){concierge.sysAttempt.faultReason='none';concierge.sysLastErr=null;}
++    emitSnapshot("sys_birth_rearmed_peer_availability");
++    void phantomEnsureSysPipe(key,"peer_available_owner_recovery");
++    return true;
++  }
++  function phantomObservePeerAvailability(status) {
++    const notice=status?.detail?.type==='peer_available'?status.detail:status;
++    if(notice?.type!=='peer_available'||notice.roomId!==videoId)return false;
++    const key=phantomShortKey(notice.peerId),boot=String(notice.bootId||'');
++    const token=String(notice.availabilityId||'');
++    if(!key||!phantomCommittedMember(key)||phantomPendingTerminalExits.has(key)||phantomSysReplacementTerminal(key)||
++       !host.canAdmitPeer(key)||notice.verified!==true||!token||token.length>128||
++       !boot||boot!==phantomRemoteBootIds.get(key))return false;
++    const duplicate=sdkSysRecoveryAvailability.get(key)===token;
++    sdkSysRecoveryAvailability.set(key,token);
++    if(sdkSysRecoveryAvailability.size>128)sdkSysRecoveryAvailability.delete(sdkSysRecoveryAvailability.keys().next().value);
++    if(duplicate||phantomSysBirthRole(key)!=='opener'||phantomHasOpenSysPipe(key)||
++       (!phantomSysReplacementWindows.has(key)&&!sdkSysBirthFailures.get(key)))return false;
++    if(!sdkSysRecoveryPending.has(key)&&sdkSysRecoveryPending.size>=128)return false;
++    const previous=sdkSysRecoveryPending.get(key);
++    sdkSysRecoveryPending.set(key,{boot,token,waiting:previous?.waiting===true});
++    const flight=sdkSysBirthFlights.get(key);
++    if(flight){
++      if(!previous?.waiting){sdkSysRecoveryPending.get(key).waiting=true;
++        flight.finally(()=>phantomResumeAvailableSysOwner(key)).catch(()=>{});}
++      return true;
++    }
++    return phantomResumeAvailableSysOwner(key);
++  }
+   const sdkSysBirthFailures=new Map();
+   const sdkSysBirthFlights=new Map();
+   function phantomEnsureSysPipe(remoteHKey, reason = "ensure") {
+@@ -10539,7 +10644,7 @@ export function createNetworkEngine(host) {
+ 
+       // A bounded response deadline detects silence, never elects authority.
+       const sentEntry=ent;
+-      armSysBirthDeadline(sentEntry,{schedule:setTimeout,cancel:clearTimeout},PHANTOM_SYS_REPLACEMENT_MS,()=>{
++      armSysBirthDeadline(sentEntry,{schedule:setTimeout,cancel:clearTimeout},PHANTOM_SYS_BIRTH_RESPONSE_MS,()=>{
+         if(!isCurrentSysBirth(phantomSysPeers,key,sentEntry))return;
+         if(phantomHasOpenSysPipe(key)){sdkSysBirthFailures.delete(key);return;}
+         // A committed member can arrive before its historical mirror promotes.
+@@ -10762,38 +10867,46 @@ export function createNetworkEngine(host) {
+     return { key, pipe, ent };
+   }
+ 
++  const rtcDiagnostics = host.transportDiagnostics === true ? createRtcDiagnostics({now}) : {record(){},stats:async()=>{},snapshot:()=>null};
++  function rtcDebug(event,key,pipe,ent,meta={},candidate) {
++    if(host.transportDiagnostics !== true)return {};
++    const values={peer:key,pipe,attempt:String(pipe==='sys'?(ent?.attempt?.id||ent?.sysAttemptId||''):(ent?.chatAttemptId||'')),
++      incomingAttempt:String(meta.sysAttemptId||meta.chatAttemptId||''),boot:String(ent?.remoteBootId||phantomRemoteBootIds.get(key)||''),incomingBoot:String(meta.bootId||''),incomingUfrag:String(meta.incomingUfrag||''),
++      owner:pipe==='sys'?phantomSysBirthRole(key):(phantomOwnsChatPipeOffer(key)?'opener':'acceptor'),
++      pc:String(ent?.pc?.connectionState||''),ice:String(ent?.pc?.iceConnectionState||''),signaling:String(ent?.pc?.signalingState||''),gathering:String(ent?.pc?.iceGatheringState||''),
++      channel:String((pipe==='sys'?ent?.sysdc:ent?.dc)?.readyState||'missing'),...iceDetails(candidate,ent?.pc)};
++    if (event === "local_candidate") {
++      delete values.generationMatches;
++      if (values.candidateUfrag && values.localUfrag) values.generationMatches=values.candidateUfrag===values.localUfrag;
++    }
++    rtcDiagnostics.record(event,values);return values;
++  }
++  function rtcStats(pc,detail) {
++    if(host.transportDiagnostics === true && typeof pc?.getStats === "function")void rtcDiagnostics.stats(pc,detail).then(()=>emitSnapshot("rtc_stats_updated"));
++  }
++  const phantomInboundRtcQueue = createSignalQueue();
++  const phantomEarlyRtcIce = createCandidateInbox();
+   function phantomQueueInboundRtc(fromHKey, meta, kind, apply) {
+-    const edge = phantomRtcEdgeForInbound(fromHKey, meta);
+-    if (!edge) return Promise.resolve(false);
+-
+-    const { key, pipe, ent } = edge;
+-    const label = String(kind || "signal");
+-
+-    ent.rtcInboundChain = Promise.resolve(ent.rtcInboundChain)
+-      .catch(() => {})
+-      .then(async () => {
+-        if(pipe === "sys") {
+-          const birth=sdkSysBirthFlights.get(key);
+-          if(birth)await birth.catch(()=>{});
+-        }
+-        const current =
+-          pipe === "sys" ? phantomSysPeers.get(key) : phantomChatPeers.get(key);
+-
+-        if (!current || current !== ent || !ent.pc) {
+-          emitSnapshot(pipe + "_rtc_inbound_stale_" + label);
+-          return false;
+-        }
+-
+-        return await apply();
+-      })
+-      .catch((e) => {
+-        concierge.lastErr =
+-          pipe + "_rtc_inbound_" + label + "_failed:" + String(e?.message || e);
+-        emitSnapshot(pipe + "_rtc_inbound_" + label + "_failed");
+-        return false;
+-      });
+-
+-    return ent.rtcInboundChain;
++    const key=phantomShortKey(fromHKey),pipe=phantomRtcPipeFromMeta(meta),label=String(kind||'signal');
++    if(!key)return Promise.resolve(false);
++    const captured=pipe==='sys'?phantomSysPeers.get(key):phantomChatPeers.get(key),boot=phantomBootId;
++    return phantomInboundRtcQueue.enqueue(pipe+':'+key,async()=>{
++      if(phantomSessionKilling||boot!==phantomBootId)return false;
++      if(pipe==='sys'){const birth=sdkSysBirthFlights.get(key);if(birth)await birth.catch(()=>{});}
++      if(phantomSessionKilling||boot!==phantomBootId)return false;
++      const current=pipe==='sys'?phantomSysPeers.get(key):phantomChatPeers.get(key);
++      if(label!=='offer'&&captured&&current!==captured&&!String(meta?.chatAttemptId||meta?.sysAttemptId||'')){
++        emitSnapshot(pipe+'_rtc_inbound_stale_'+label);return false;
++      }
++      // Allocation occurs only after acquiring a bounded queue slot. Offers
++      // may replace a PC; later packets use attempt IDs against that current PC.
++      const edge=phantomRtcEdgeForInbound(key,meta);if(!edge)return false;
++      try{return await apply();}catch(e){
++        rtcDiagnostics.record('rtc_operation_failed',{...rtcDebug(label+'_failed',key,pipe,pipe==='sys'?phantomSysPeers.get(key):phantomChatPeers.get(key),meta),errorName:e?.name,errorMessage:e?.message});
++        concierge.lastErr=pipe+'_rtc_inbound_'+label+'_failed:'+String(e?.message||e);
++        emitSnapshot(pipe+'_rtc_inbound_'+label+'_failed');return false;
++      }
++    });
+   }
+ 
+   async function phantomFlushInboundRtcIce(
+@@ -10811,25 +10924,28 @@ export function createNetworkEngine(host) {
+ 
+     if (!pending.length) return true;
+ 
++    let applied=0,failed=0;
+     for (const cand of pending) {
+       try {
+         await ent.pc.addIceCandidate(cand);
++        applied++;
++        rtcDebug("candidate_applied_from_queue",key,pipe,ent,{},cand);
+       } catch (e) {
+-        concierge.lastErr =
+-          pipe + "_rtc_ice_apply_failed:" + String(e?.message || e);
++        failed++;
++        concierge.lastErr = pipe + "_rtc_ice_apply_failed:" + String(e?.message || e);
++        rtcDiagnostics.record("queued_candidate_apply_failed",{
++          ...rtcDebug("queued_candidate_failed_context",key,pipe,ent,{},cand),
++          errorName:e?.name,errorMessage:e?.message,
++        });
+         emitSnapshot(pipe + "_rtc_ice_apply_failed");
+-        return false;
+       }
+     }
+-
+-    emitSnapshot(
+-      pipe +
+-        "_rtc_ice_flushed_" +
+-        pending.length +
+-        "_" +
+-        String(reason || "remote_description_applied"),
+-    );
+-    return true;
++    rtcDiagnostics.record("candidate_queue_flushed",{
++      ...rtcDebug("candidate_queue_flush_context",key,pipe,ent),reason,
++      pendingCandidates:pending.length,appliedCandidates:applied,failedCandidates:failed,
++    });
++    emitSnapshot(pipe + "_rtc_ice_flushed_" + applied + "_" + String(reason));
++    return failed === 0;
+   }
+ 
+   function rtcOnOffer(fromHKey, offer, meta = {}) {
+@@ -10859,6 +10975,7 @@ export function createNetworkEngine(host) {
+     if (!fromKey || fromKey === selfKey) return;
+ 
+     const pipe = phantomRtcPipeFromMeta(meta);
++    rtcDebug("offer_received",fromKey,pipe,pipe==='sys'?phantomSysPeers.get(fromKey):phantomChatPeers.get(fromKey),{...meta,incomingUfrag:String(offer?.sdp||'').match(/(?:^|\r?\n)a=ice-ufrag:([^\r\n]+)/)?.[1]||''},undefined);
+ 
+     let sysBirthRole = "";
+ 
+@@ -10991,7 +11108,12 @@ export function createNetworkEngine(host) {
+       }
+     }
+ 
++    ent.pendingRemoteIce.push(...phantomEarlyRtcIce.take(
++      pipe + ":" + fromKey, String(meta.bootId || ""),
++      String((pipe === "sys" ? meta.sysAttemptId : meta.chatAttemptId) || ""),
++    ));
+     await pc.setRemoteDescription(offer);
++    rtcDebug("remote_offer_applied",fromKey,pipe,ent,meta);
+     await phantomFlushInboundRtcIce(
+       fromKey,
+       pipe,
+@@ -11041,6 +11163,7 @@ export function createNetworkEngine(host) {
+     if (!key) return;
+ 
+     const pipe = phantomRtcPipeFromMeta(meta);
++    rtcDebug("answer_received",key,pipe,pipe==='sys'?phantomSysPeers.get(key):phantomChatPeers.get(key),{...meta,incomingUfrag:String(answer?.sdp||'').match(/(?:^|\r?\n)a=ice-ufrag:([^\r\n]+)/)?.[1]||''},undefined);
+     const ent = pipe === "sys" ? phantomSysPeers.get(key) : phantomChatPeers.get(key);
+     if (!ent?.pc) return;
+ 
+@@ -11105,6 +11228,7 @@ export function createNetworkEngine(host) {
+ 
+     try {
+       await pc.setRemoteDescription(answer);
++      rtcDebug("remote_answer_applied",key,pipe,ent,meta);
+       await phantomFlushInboundRtcIce(key, pipe, ent, "answer_remote_description");
+       emitSnapshot(pipe + "_rtc_answer_applied");
+     } catch (e) {
+@@ -11165,6 +11289,7 @@ export function createNetworkEngine(host) {
+     if (!key) return;
+ 
+     const pipe = phantomRtcPipeFromMeta(meta);
++    rtcDebug("candidate_received",key,pipe,pipe==='sys'?phantomSysPeers.get(key):phantomChatPeers.get(key),meta,cand);
+     const ent = pipe === "sys" ? phantomSysPeers.get(key) : phantomChatPeers.get(key);
+     if (!ent?.pc) return;
+ 
+@@ -11173,9 +11298,15 @@ export function createNetworkEngine(host) {
+       const currentAttemptId = String(ent?.chatAttemptId || "");
+       if (
+         incomingAttemptId &&
+-        currentAttemptId &&
+         incomingAttemptId !== currentAttemptId
+       ) {
++        if (!phantomOwnsChatPipeOffer(key) && ent.dc?.readyState !== "open" &&
++            phantomRelationshipIsAccepted(phantomRelationshipGet(key)) &&
++            String(meta.bootId || "") === phantomRemoteBootIds.get(key)) {
++          const retained = phantomEarlyRtcIce.put(pipe + ":" + key, String(meta.bootId), incomingAttemptId, cand);
++          emitSnapshot(retained ? "chat_rtc_ice_waiting_for_offer" : "chat_rtc_ice_inbox_full");
++          return retained;
++        }
+         emitSnapshot("chat_rtc_ice_ignored_stale_attempt");
+         return false;
+       }
+@@ -11192,6 +11323,16 @@ export function createNetworkEngine(host) {
+         currentAttemptId &&
+         incomingAttemptId !== currentAttemptId
+       ) {
++        // An acceptor can receive candidates before their offer through any
++        // relay. Retain bounded candidate hints until the offer owner is validated; never
++        // attach them to the previous PC or reset membership/retry authority.
++        if (!phantomHasOpenSysPipe(key) && !phantomSysReplacementTerminal(key) &&
++            host.canAdmitPeer(key) && String(meta.bootId || "") &&
++            (!phantomRemoteBootIds.get(key) || String(meta.bootId) === phantomRemoteBootIds.get(key))) {
++          const retained = phantomEarlyRtcIce.put(pipe + ":" + key, String(meta.bootId), incomingAttemptId, cand);
++          emitSnapshot(retained ? "sys_rtc_ice_waiting_for_offer" : "sys_rtc_ice_inbox_full");
++          return retained;
++        }
+         emitSnapshot("sys_rtc_ice_ignored_stale_transport_attempt");
+         return false;
+       }
+@@ -11229,9 +11370,11 @@ export function createNetworkEngine(host) {
+ 
+     try {
+       await ent.pc.addIceCandidate(cand);
++      rtcDebug("candidate_applied",key,pipe,ent,meta,cand);
+       emitSnapshot(pipe + "_rtc_ice_applied");
+       return true;
+     } catch (e) {
++      rtcDiagnostics.record("candidate_apply_failed",{...rtcDebug("candidate_apply_failed_context",key,pipe,ent,meta,cand),errorName:e?.name,errorMessage:e?.message});
+       concierge.lastErr =
+         pipe + "_rtc_ice_apply_failed:" + String(e?.message || e);
+       emitSnapshot(pipe + "_rtc_ice_apply_failed");
+@@ -11251,7 +11394,17 @@ export function createNetworkEngine(host) {
+       t: now(),
+       reason: reason || null,
+       eventCounts: phantomEventCountRows(20),
+-
++      rtcDiagnostics:rtcDiagnostics.snapshot(),
++      recoveryResources:{...phantomInboundRtcQueue.snapshot(),...phantomEarlyRtcIce.snapshot(),availabilityReceipts:sdkSysRecoveryAvailability.size,pendingAvailability:sdkSysRecoveryPending.size},
++
++      sysPairs: Array.from(phantomSysPeers.values()).map(ent => ({
++        pcState: String(ent.pc?.connectionState || "missing"),
++        iceState: String(ent.pc?.iceConnectionState || "missing"),
++        signalingState: String(ent.pc?.signalingState || "missing"),
++        dcState: String(ent.sysdc?.readyState || "missing"),
++        attemptState: String(ent.attempt?.state || "missing"),
++        pendingRemoteIce: ent.pendingRemoteIce?.length || 0,
++      })),
+       chatPairs: Array.from(phantomChatPeers.entries())
+         .map(([hKey, ent]) => ({
+           hKey: phantomShortKey(hKey),
+@@ -11418,6 +11571,7 @@ export function createNetworkEngine(host) {
+           lastAt: Number(bootstrap.cfHits?.lastAt || 0),
+         },
+ 
++
+         sysEligible: concierge.sysEligible,
+         sysReady: concierge.sysReady,
+         sysUnavailableReason: concierge.sysUnavailableReason,
+@@ -11593,6 +11747,9 @@ export function createNetworkEngine(host) {
+   }
+ 
+   function emitSnapshot(reason) {
++    if (/(rtc_|sys_.*(?:birth|preflight|attempt|transport|pipe|admission))/.test(String(reason))) {
++      rtcDiagnostics.record("core_event",{reason:String(reason||''),errorMessage:String(concierge.lastErr||concierge.sysLastErr||''),owner:String(concierge.localRoleCandidate||concierge.role||'')});
++    }
+     try {
+       const why = String(reason || "snapshot");
+       phantomCountEvent("snapshot:" + why);
+@@ -11819,6 +11976,7 @@ export function createNetworkEngine(host) {
+   }
+ 
+   function wsAdvanceDoorwayRecovery(attemptId, failure = {}) {
++    if (discoveryDisconnected) return false;
+     const recoveryLegal =
+       !phantomSessionKilling && enabled && !!selfHKey && !!videoId;
+ 
+@@ -12031,7 +12189,7 @@ export function createNetworkEngine(host) {
+   }
+ 
+   function wsOpenBootstrap(url) {
+-    if (phantomSessionKilling) return;
++    if (phantomSessionKilling || discoveryDisconnected) return;
+ 
+     if (ws && ws.readyState === WebSocket.OPEN) return;
+ 
+@@ -12103,6 +12261,12 @@ export function createNetworkEngine(host) {
+ 
+     wsArmDoorwayDeadline(sock, attemptId, "connect");
+ 
++    sock.onstatus = status => {
++      if(ws!==sock||attemptId!==Number(bootstrap.attempts||0))return;
++      // Provider observations grant a transport attempt, never membership.
++      phantomObservePeerAvailability(status);
++    };
++
+     ws.onopen = () => {
+       if (attemptId !== Number(bootstrap.attempts || 0) || ws !== sock) return;
+       if (wsObserveDoorwayDeadline("ws_open")) return;
+@@ -12988,6 +13152,7 @@ export function createNetworkEngine(host) {
+     phantomPendingSysRelay.clear();
+     phantomPendingDm.clear();
+     phantomPendingRtcIce.clear();
++    phantomEarlyRtcIce.clear();
+     phantomSeenControlCids.clear();
+     phantomSeenRtcSignals.clear();
+ 
+@@ -13897,6 +14062,18 @@ export function createNetworkEngine(host) {
+       return;
+     }
+ 
++    if (d.type === "CORE_DISCONNECT_DISCOVERY") {
++      discoveryDisconnected = true;
++      bootstrap.discoveryDisconnected = true;
++      // Remove socket ownership before close callbacks can trigger recovery.
++      const socket = ws;
++      ws = null;
++      wsClose("discovery_disconnected_by_application");
++      try { socket?.close(); } catch {}
++      post("DISCOVERY_DISCONNECTED", { at: now(), recoveryEnabled: false });
++      return;
++    }
++
+     if (d.type === "CORE_SET_ENABLED") {
+       enabled = !!d.payload?.enabled;
+       emitSnapshot("CORE_SET_ENABLED");
+@@ -14013,6 +14190,7 @@ export function createNetworkEngine(host) {
+       phantomSendRoomExitedAndTeardown(true);
+       wsClose("sdk_dispose");
+       rtcTeardownAll("sdk_dispose");
++      sdkSysRecoveryAvailability.clear();sdkSysRecoveryPending.clear();
+     }
+   };
+ }
+diff --git a/packages/phantom-core/src/network-state.js b/packages/phantom-core/src/network-state.js
+index 8b978f3..f6ca88d 100644
+--- a/packages/phantom-core/src/network-state.js
++++ b/packages/phantom-core/src/network-state.js
+@@ -4,7 +4,7 @@ export function projectNetworkState(snapshot={}) {
+  const admitted=!!snapshot.self?.hKey && String(t.committedKeys??'').split(',').includes(snapshot.self.hKey.slice(0,8));
+  let state,reason,nextAction;
+  if(admitted&&c.sysReady){state='admitted';reason='committed_membership_and_system_ready';nextAction='none';}
+- else if(c.sysAttempt?.faultReason==='sys_birth_response_deadline_exhausted'||c.sysLastErr==='sys_birth_response_deadline_exhausted') {state='failed';reason='sys_birth_response_deadline_exhausted';nextAction='inspect_diagnostics';}
++ else if(c.sysAttempt?.faultReason==='sys_birth_response_deadline_exhausted'||c.sysLastErr==='sys_birth_response_deadline_exhausted') {state=admitted?'recovering':'failed';reason='sys_birth_response_deadline_exhausted';nextAction=admitted?'wait_for_peer_availability':'inspect_diagnostics';}
+  else if(c.sysAttempt?.state==='faulted'||b.doorwayState==='failed') {state='recovering';reason=c.sysAttempt?.faultReason??b.doorwayFault??'transport_fault';nextAction='observe_core_recovery';}
+  else if(admitted){state='recovering';reason=c.sysUnavailableReason??'system_unavailable';nextAction='wait_for_system_proof';}
+  else if(['connecting','creating','offer_sent','open'].includes(c.sysAttempt?.state)||c.sysPipeState==='connecting'){state='connecting';reason=c.sysUnavailableReason??'waiting_for_system_proof';nextAction='wait_for_peer_response';}
+diff --git a/packages/phantom-core/src/rtc-diagnostics.js b/packages/phantom-core/src/rtc-diagnostics.js
+new file mode 100644
+index 0000000..2538aa4
+--- /dev/null
++++ b/packages/phantom-core/src/rtc-diagnostics.js
+@@ -0,0 +1,38 @@
++const fields=['peer','pipe','attempt','incomingAttempt','boot','incomingBoot','incomingUfrag','owner','pc','ice','signaling','gathering','channel','candidate','candidateType','protocol','candidateUfrag','localUfrag','remoteUfrag','generationMatches','errorName','errorMessage','errorCode','result','reason','state','pairId','localAddress','localPort','remoteAddress','remotePort','selected','nominated','writable','bytesSent','bytesReceived','requestsSent','requestsReceived','responsesSent','responsesReceived','localCandidateType','remoteCandidateType','currentRoundTripTime','pendingCandidates','appliedCandidates','failedCandidates'];
++export function createRtcDiagnostics({limit=256,now=Date.now}={}) {
++ const rows=[];let sequence=0,dropped=0;const flights=new WeakSet();
++ function record(event,values={}){
++  const row={sequence:++sequence,at:now(),event:String(event).slice(0,256)};
++  let remaining=4096;row.truncatedFields=[];
++  for(const field of fields){const value=values[field];if(typeof value==='string'){
++    const cap=Math.min(field==='errorMessage'||field==='reason'||field==='candidate'?2048:256,remaining);
++    row[field]=value.slice(0,cap);remaining-=row[field].length;
++    if(value.length>cap)row.truncatedFields.push(field);
++   }else if(typeof value==='boolean'||typeof value==='number'&&Number.isFinite(value))row[field]=value;}
++
++  rows.push(row);if(rows.length>limit){rows.shift();dropped++;}
++ }
++ async function stats(pc,context={}){
++  if(typeof pc?.getStats!=='function'||flights.has(pc))return;
++  flights.add(pc);
++  try{
++   const report=await pc.getStats(),all=[];report.forEach(row=>all.push(row));
++   const byId=new Map(all.map(row=>[row.id,row]));
++   const selected=new Set(all.filter(row=>row.type==='transport').map(row=>row.selectedCandidatePairId));
++   const pairs=all.filter(row=>row.type==='candidate-pair').sort((a,b)=>Number(selected.has(b.id))-Number(selected.has(a.id))||Number(!!b.nominated)-Number(!!a.nominated)||(b.requestsSent||0)-(a.requestsSent||0)).slice(0,16);
++   if(!pairs.length)record('candidate_pairs_empty',context);
++   for(const pair of pairs){const local=byId.get(pair.localCandidateId),remote=byId.get(pair.remoteCandidateId);
++    record('candidate_pair',{...context,...pair,pairId:String(pair.id||''),localAddress:local?.address||local?.ip,localPort:local?.port,remoteAddress:remote?.address||remote?.ip,remotePort:remote?.port,selected:selected.has(pair.id)||pair.selected===true,localCandidateType:local?.candidateType,remoteCandidateType:remote?.candidateType,protocol:local?.protocol});}
++  }catch(error){record('get_stats_failed',{...context,errorName:error?.name,errorMessage:error?.message});}
++  finally{flights.delete(pc);}
++ }
++ return {record,stats,snapshot:()=>({limit,dropped,events:structuredClone(rows)})};
++}
++export function iceDetails(candidate,pc){
++ const line=String(candidate?.candidate||'');
++ const candidateUfrag=String(candidate?.usernameFragment||line.match(/\bufrag\s+(\S+)/)?.[1]||'');
++ const ufrag=description=>String(description?.sdp||'').match(/(?:^|\r?\n)a=ice-ufrag:([^\r\n]+)/)?.[1]||'';
++ const remoteUfrag=ufrag(pc?.remoteDescription);
++ return {candidate:line,candidateType:line.match(/\btyp\s+(\S+)/)?.[1]||'',protocol:line.split(/\s+/)[2]||'',candidateUfrag,localUfrag:ufrag(pc?.localDescription),remoteUfrag,
++  ...(candidateUfrag&&remoteUfrag?{generationMatches:candidateUfrag===remoteUfrag}:{})};
++}
+diff --git a/packages/phantom-core/src/signal-queue.js b/packages/phantom-core/src/signal-queue.js
+new file mode 100644
+index 0000000..afaf97d
+--- /dev/null
++++ b/packages/phantom-core/src/signal-queue.js
+@@ -0,0 +1,19 @@
++// One FIFO per peer pipe. Capacity is checked before retaining a task.
++export function createSignalQueue({perKey=64,total=1024}={}) {
++ const chains=new Map(),counts=new Map();let pending=0;
++ return {
++  enqueue(key,task){
++   const count=counts.get(key)||0;
++   if(count>=perKey||pending>=total)return Promise.resolve(false);
++   counts.set(key,count+1);pending++;
++   const next=Promise.resolve(chains.get(key)).catch(()=>{}).then(task);
++   chains.set(key,next);
++   return next.finally(()=>{
++    pending--;const left=(counts.get(key)||1)-1;
++    if(left)counts.set(key,left);else counts.delete(key);
++    if(chains.get(key)===next)chains.delete(key);
++   });
++  },
++  snapshot(){return {queuedSignals:pending,queueLimit:total,perPeerLimit:perKey,activeQueues:counts.size};}
++ };
++}
+diff --git a/packages/phantom-doorways/src/browser-entry.js b/packages/phantom-doorways/src/browser-entry.js
+index 666ef3c..e6cee76 100644
+--- a/packages/phantom-doorways/src/browser-entry.js
++++ b/packages/phantom-doorways/src/browser-entry.js
+@@ -11,7 +11,7 @@ import {createAdmissionCheckpoint, AdmissionError} from '../../phantom-core/src/
+ import {withAdmissionDoorway} from './admission-doorway.js';
+ import {parseInvite, encodeInvite} from '../../phantom-core/src/invite.js';
+ /** One entry API; service selection belongs to the adapter composition layer. */
+-export function createBrowserPhantom({admission,authorizationTimeoutMs=5000,adminIdentity,adminPublicKey=adminIdentity?.publicKey,controlStore,files,distribution,readAdminOrders,retireGraceMs,relays,doorways,doorwayMode='failover',doorwayAdmissionTimeoutMs=10000,adapters={},storage,WebSocket=globalThis.WebSocket,runtime=globalThis,onRelayProgress=()=>{},onDoorwayStatus=()=>{},relayFinder,relayMaxAgeMs,now,coreFactory}={}) {
++export function createBrowserPhantom({transportDiagnostics=false,admission,authorizationTimeoutMs=5000,adminIdentity,adminPublicKey=adminIdentity?.publicKey,controlStore,files,distribution,readAdminOrders,retireGraceMs,relays,doorways,doorwayMode='failover',doorwayAdmissionTimeoutMs=10000,adapters={},storage,WebSocket=globalThis.WebSocket,runtime=globalThis,onRelayProgress=()=>{},onDoorwayStatus=()=>{},relayFinder,relayMaxAgeMs,now,coreFactory}={}) {
+  if(admission!==undefined&&(!admission||typeof admission.authorize!=='function'||typeof admission.verify!=='function'))throw new TypeError('admission requires authorize and verify functions');
+  if(relays!==undefined&&doorways!==undefined)throw new TypeError('Use relays or doorways, not both');
+  try{storage??=runtime.localStorage;}catch{}
+@@ -56,7 +56,7 @@ export function createBrowserPhantom({admission,authorizationTimeoutMs=5000,admi
+    // Keep original invite coordinates while adding discovered alternatives.
+    return build({...spec,relays:expanded});
+   }}),{onStatus:onDoorwayStatus});
+-  return {identity:{version:1,id:identity.publicKey},runtime,doorway,canAdmitPeer:access?peer=>access.checkpoint.allows(peer):undefined,adminIdentity,controlStore:context.adminPublicKey?(controlStore??createControlStore(storage)):undefined,files,distribution,readAdminOrders,retireGraceMs,onNetworkState:state=>doorway.observeNetworkState(state)};
++  return {transportDiagnostics,identity:{version:1,id:identity.publicKey},runtime,observeBrowserLifecycle:true,doorway,canAdmitPeer:access?peer=>access.checkpoint.allows(peer):undefined,adminIdentity,controlStore:context.adminPublicKey?(controlStore??createControlStore(storage)):undefined,files,distribution,readAdminOrders,retireGraceMs,onNetworkState:state=>doorway.observeNetworkState(state)};
+  }
+  return {
+   async join(invite,options){const context=parseInvite(invite);const access=await preflight(context,options,'join');return createPhantomEntry({openContext:context=>openContext(context,options?.doorwayTypes,access),...(coreFactory?{coreFactory}:{})}).join(invite,options);},
+diff --git a/packages/phantom-doorways/src/composite.js b/packages/phantom-doorways/src/composite.js
+index ac63420..eaa7c61 100644
+--- a/packages/phantom-doorways/src/composite.js
++++ b/packages/phantom-doorways/src/composite.js
+@@ -4,7 +4,7 @@ export function createCompositeDoorway({doorways,recover,openTimeoutMs=8000,mode
+  if(!['parallel','failover'].includes(mode))throw new TypeError('Doorway mode must be parallel or failover');
+  if(!Array.isArray(doorways)||!doorways.length)throw new TypeError('At least one doorway required');
+  for(const d of doorways){validateDoorway(d);if(d.protocol!=='phantom-doorway-v2')throw new TypeError('Composite requires typed doorway adapters');}
+- return createDoorway({discovery:true,presence:'discovery-hints',open(context){
++ return createDoorway({discovery:true,presence:doorways.every(d=>d.presence==='live-sockets')?'live-sockets':'discovery-hints',open(context){
+   const slots=doorways.map(adapter=>({adapter,session:null,open:false,ended:false,retried:false,generation:0,hint:null,peers:new Map()}));
+   let closed=false,opened=false,admitted=false,own,authority,epoch=0,fingerprint='';const seen=new Set();
+   const status=(type,detail={})=>{if(!closed)context.onStatus?.({type,...detail});};
+diff --git a/packages/phantom-doorways/src/nostr-doorway.js b/packages/phantom-doorways/src/nostr-doorway.js
+index 2fef2ec..0ea97e6 100644
+--- a/packages/phantom-doorways/src/nostr-doorway.js
++++ b/packages/phantom-doorways/src/nostr-doorway.js
+@@ -7,6 +7,8 @@ export function createNostrDoorway({identity,relays,WebSocket=globalThis.WebSock
+   if(blocked)throw new Error('Nostr doorway deliberately offline');
+   if(peerId!==identity.publicKey.slice(0,16))throw new Error('Core identity must match Nostr-bound Ed25519 identity');
+   let own=null,closed=false,epoch=0,topology='',bus,authorityHint=null;
++  let availabilityId=crypto.randomUUID(),hasOpened=false;
++  const availabilitySeen=new Map();
+   const members=new Map(),routes=new Map();
+   function roster() {
+    if(!own||closed)return;
+@@ -15,16 +17,16 @@ export function createNostrDoorway({identity,relays,WebSocket=globalThis.WebSock
+    if(fingerprint!==topology){topology=fingerprint;epoch++;}
+    onDiscovery({kind:'concierge_route',roomId,epoch,leader:authorityHint?.syscon1??list[0]?.hKey,mirror:authorityHint?.syscon2??list[1]?.hKey??null,peers:list});
+   }
+-  function announce() {if(own&&!closed)bus.announce({row:own,discoveryEpoch:epoch,...(authorityHint?.from===peerId?{authorityHint}: {})});}
++  function announce() {if(own&&!closed)bus.announce({row:own,availabilityId,discoveryEpoch:epoch,...(authorityHint?.from===peerId?{authorityHint}: {})});}
+   bus=busFactory({roomId,identity,relays,WebSocket,onError,
+-   onStatus:s=>{if(closed)return;onStatus(s);sessionStatus(s);if(s.type==='publish')onPublication({id:s.messageId??s.eventId,state:s.accepted?'accepted':'rejected',surface:s.url,reason:s.reason});if(s.type==='open')onOpen();if(s.type==='exhausted')onClose({code:1006,reason:'nostr_relays_exhausted',wasClean:false});},
++   onStatus:s=>{if(closed)return;onStatus(s);sessionStatus(s);if(s.type==='publish')onPublication({id:s.messageId??s.eventId,state:s.accepted?'accepted':'rejected',surface:s.url,reason:s.reason});if(s.type==='open'){if(hasOpened){availabilityId=crypto.randomUUID();queueMicrotask(announce);}hasOpened=true;onOpen();}if(s.type==='exhausted')onClose({code:1006,reason:'nostr_relays_exhausted',wasClean:false});},
+    onSync:()=>{if(!closed)roster();}, // Open already publishes the cached announcement.
+    onAnnouncement:p=>{
+     if(closed||!p.row)return;
+     const key=p.s7pPublicKey.slice(0,16),row=p.row;
+     if(row.hKey!==key||row.hex!==p.s7pPublicKey||typeof row.bootId!=='string'||!Number.isSafeInteger(row.roomJoinedAt))return;
+     if(routes.has(key)&&routes.get(key).s7pPublicKey!==p.s7pPublicKey){onError(new Error('Short peer ID collision'));return;}
+-    if(p.departed){if(members.get(key)?.bootId===row.bootId){members.delete(key);routes.delete(key);roster();}return;}
++    if(p.departed){if(members.get(key)?.bootId===row.bootId){members.delete(key);routes.delete(key);availabilitySeen.delete(key);roster();}return;}
+     const hint=p.authorityHint;
+     if(hint && hint.room===roomId && hint.from===key && hint.syscon1===key &&
+        Number.isSafeInteger(hint.epoch) && Number.isSafeInteger(hint.rosterSeq) && Array.isArray(hint.roster) &&
+@@ -32,9 +34,19 @@ export function createNostrDoorway({identity,relays,WebSocket=globalThis.WebSock
+          (hint.epoch===authorityHint.epoch && hint.rosterSeq>authorityHint.rosterSeq))) {
+       authorityHint=hint;epoch=Math.max(epoch,hint.epoch);roster();
+     }
++    if(!members.has(key)&&members.size>=256)return;
+     const changed=members.get(key)?.bootId!==row.bootId;
++    const availability=typeof p.availabilityId==='string'&&p.availabilityId.length<=128?p.availabilityId:row.bootId;
++    const newlyAvailable=availabilitySeen.get(key)!==availability;
++    availabilitySeen.set(key,availability);
+     routes.set(key,p);members.set(key,{...row,videoId:roomId});
+-    if(changed){roster();announce();}
++    if(changed)roster();
++    // Reply once per remote doorway session, including same-boot returns.
++    // This refreshes the reverse signed route without announcement ping-pong.
++    if(changed||newlyAvailable)announce();
++    // A signed, deduplicated announcement is an availability hint only.
++    // The core may rearm its bounded owner attempt; it cannot infer admission.
++    sessionStatus({type:'peer_available',verified:true,roomId,peerId:key,bootId:row.bootId,availabilityId:availability,eventId:p.eventId});
+    },
+    onSignal:p=>{
+     if(closed)return;
