@@ -11,3 +11,5 @@ Limits: 256 app events; 32 retained connections; 32 transitions and 128 stats pe
 An open relay is not an open peer channel. Automated tests validate ownership, candidate queueing and evidence retention, not connectivity between physical devices.
 
 See docs/six7-connection-lifecycle.md for the source comparison and known differences.
+
+Default startup has no forced SYS birth deadline or admission deadline. Join remains pending until SDK admission/failure/closure or Leave cancellation. SDK consumers may explicitly request timeoutMs for their own cancellation policy.

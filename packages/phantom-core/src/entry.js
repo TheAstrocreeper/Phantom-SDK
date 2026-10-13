@@ -7,9 +7,9 @@ import {createInvite, parseInvite} from './invite.js';
 /** Dependency-injected entry facade: adapters remain outside core. */
 export function createPhantomEntry({openContext, relays, doorways, adminPublicKey, coreFactory=createPhantom}={}) {
   if(typeof openContext !== 'function') throw new TypeError('openContext factory required');
-  async function start(invite,{name='Peer',timeoutMs=30000,signal,onState,onEvent}={},waitForAdmission=true) {
+  async function start(invite,{name='Peer',timeoutMs=null,signal,onState,onEvent}={},waitForAdmission=true) {
     const context=parseInvite(invite);
-    if(!Number.isFinite(timeoutMs)||timeoutMs<=0) throw new TypeError('Positive admission timeout required');
+    if(timeoutMs!==null&&(!Number.isFinite(timeoutMs)||timeoutMs<=0)) throw new TypeError('Positive admission timeout required');
     if(signal?.aborted) throw new Error('Join aborted');
     const config=await openContext(context);
     const retireGraceMs=config.retireGraceMs??30000;if(!Number.isFinite(retireGraceMs)||retireGraceMs<0||retireGraceMs>60000)throw new TypeError('Invalid retirement grace period');
@@ -71,7 +71,8 @@ export function createPhantomEntry({openContext, relays, doorways, adminPublicKe
         const finish=error=>{if(done)return;done=true;clearTimeout(timer);off();signal?.removeEventListener('abort',abort);error?reject(error):resolve();};
         const check=state=>{if(retired)finish(new Error('Network permanently retired'));else if(state.state==='admitted')finish();else if(['failed','closed'].includes(state.state))finish(new Error(state.reason));};
         const abort=()=>finish(new Error('Join aborted'));
-        const timer=setTimeout(()=>finish(new Error('Network admission timed out')),timeoutMs);
+        // Only a caller-requested cancellation deadline may end this wait.
+        const timer=timeoutMs===null?null:setTimeout(()=>finish(new Error('Network admission timed out')),timeoutMs);
         off=core.onState(check);signal?.addEventListener('abort',abort,{once:true});
         if(signal?.aborted){abort();return;}
         Promise.resolve().then(()=>core.join({roomId:context.networkId,name,identity:config.identity})).then(()=>waitForAdmission?check(core.getState()):finish(),finish);

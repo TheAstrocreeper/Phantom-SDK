@@ -3,7 +3,7 @@ import {COMPATIBILITY_WIRE} from './compatibility.js';
 import {acceptsSuccessorStatus} from './successor-status.js';
 import { canCarrySysRecovery } from './recovery-signaling.js';
 import { resumeDeferredAdmissions } from './deferred-admission.js';
-import { sysBirthDisposition, isCurrentSysBirth, runSysBirth, completeSysBirth, armSysBirthDeadline } from './sys-birth.js';
+import { sysBirthDisposition, isCurrentSysBirth, runSysBirth } from './sys-birth.js';
 import { acceptsSuccessorHandshake } from './successor-handshake.js';
 /** Peer networking engine: membership, leadership, signaling, and data channels. */
 export function createNetworkEngine(host) {
@@ -8301,8 +8301,6 @@ export function createNetworkEngine(host) {
       if(diagnosticEntry?.sysdc===dc)rtcDiagnostics.capture(diagnosticEntry.pc,"datachannel_open");
       const ent = phantomSysPeers.get(key);
       if (!ent || ent.sysdc !== dc) return;
-      completeSysBirth(ent);
-      sdkSysBirthFailures.delete(key);
       if (ent) {
         ent.sysCarrier = false;
         const edgeAttempt = phantomSysEdgeAttempt(key, false);
@@ -10189,7 +10187,6 @@ export function createNetworkEngine(host) {
     return true;
   }
 
-  const sdkSysBirthFailures=new Map();
   const sdkSysBirthFlights=new Map();
   function phantomEnsureSysPipe(remoteHKey, reason = "ensure") {
     const key=phantomShortKey(remoteHKey);
@@ -10197,8 +10194,6 @@ export function createNetworkEngine(host) {
     return runSysBirth(sdkSysBirthFlights,key,()=>phantomPerformSysBirth(key,reason));
   }
   async function phantomPerformSysBirth(remoteHKey, reason = "ensure") {
-    const budgetKey=phantomShortKey(remoteHKey);
-    if(sdkSysBirthFailures.get(budgetKey)>=2 && !phantomHasOpenSysPipe(budgetKey)){emitSnapshot("sys_birth_retry_budget_exhausted");return false;}
     const key = phantomShortKey(remoteHKey);
     if (!key) return false;
     if (!selfHKey || !videoId) return false;
@@ -10515,7 +10510,6 @@ export function createNetworkEngine(host) {
       }
 
       if (!ent.sysdc || ent.sysdc.readyState === "closed") {
-        ent.sdkSysBirthCompleted = false;
         ent.sysdc = pc.createDataChannel(COMPATIBILITY_WIRE.systemChannel, { ordered: true });
 
         const edgeAttempt = phantomSysEdgeAttempt(key);
@@ -10576,25 +10570,8 @@ export function createNetworkEngine(host) {
         phantomRefreshSysReadiness("sys_preflight_offer_sent");
       }
 
-      // A bounded response deadline detects silence, never elects authority.
-      const sentEntry=ent;
-      armSysBirthDeadline(sentEntry,{schedule:setTimeout,cancel:clearTimeout},PHANTOM_SYS_REPLACEMENT_MS,()=>{
-        if(!isCurrentSysBirth(phantomSysPeers,key,sentEntry))return;
-        if(phantomHasOpenSysPipe(key)){sdkSysBirthFailures.delete(key);return;}
-        // A committed member can arrive before its historical mirror promotes.
-        // Silence exhausts this attempt, not the member's recovery route forever.
-        if(phantomGossipRecovery.kind === 'committed_mirror' &&
-            phantomShortKey(phantomGossipRecovery.targets[phantomGossipRecovery.index]) === key){
-          phantomHandleTransportLoss(key,"sys_birth_response_deadline");return;
-        }
-        const failures=(sdkSysBirthFailures.get(key)||0)+1;
-        sdkSysBirthFailures.set(key,failures);
-        if(failures<2){phantomHandleTransportLoss(key,"sys_birth_response_deadline");return;}
-        phantomTeardownSysPeer(key,"sys_birth_response_deadline_exhausted");
-        if(phantomShortKey(concierge.sysPeer)===key){concierge.sysPipeState="faulted";concierge.sysReady=false;concierge.sysLastErr="sys_birth_response_deadline_exhausted";concierge.sysAttempt.state="faulted";concierge.sysAttempt.faultReason="sys_birth_response_deadline_exhausted";}
-        post("ADMISSION_FAILED",{peer:key,reason:"sys_birth_response_deadline_exhausted",attempts:failures});
-        emitSnapshot("sys_birth_response_deadline_exhausted");
-      });
+      // Native failure, channel closure, an authenticated replacement or
+      // explicit disposal retires this attempt. Elapsed time is not failure.
       phantomSysPreflightUnstableRetries.delete(key);
       emitSnapshot("sys_preflight_offer_sent");
 

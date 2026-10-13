@@ -18,21 +18,3 @@ export function runSysBirth(flights,key,operation) {
  return flight;
 }
 
-/** Successful setup stays complete even if that channel is lost later. */
-export function completeSysBirth(entry) {
- entry.sdkSysBirthCompleted=true;
- const deadline=entry.sdkSysBirthDeadline;
- if(deadline){deadline.state='completed';deadline.cancel(deadline.timer);entry.sdkSysBirthDeadline=null;}
-}
-export function armSysBirthDeadline(entry,{schedule,cancel},delay,onExpire) {
- if(entry.sdkSysBirthCompleted)return;
- const old=entry.sdkSysBirthDeadline;
- if(old){old.state='retired';old.cancel(old.timer);}
- const deadline={state:'waiting',cancel,timer:null};
- entry.sdkSysBirthDeadline=deadline;
- deadline.timer=schedule(()=>{
-  if(deadline.state!=='waiting'||entry.sdkSysBirthDeadline!==deadline)return;
-  deadline.state='expired';entry.sdkSysBirthDeadline=null;
-  onExpire();
- },delay);
-}

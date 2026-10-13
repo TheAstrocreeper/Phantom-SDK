@@ -18,11 +18,11 @@ class RTC {
  close(){this.connectionState='closed';}
 }
 async function settle(){for(let i=0;i<10;i++)await new Promise(setImmediate);}
-async function fixture(self){
+async function fixture(self,timers={}){
  const packets=[];let wire;
  const peers=[leader,mirror,...(self===ordinary?[ordinary]:[])].map((hKey,i)=>({hKey,handle:'Peer',bootId:hKey,roomJoinedAt:i+1}));
  const raw=createDoorway({discovery:true,open(c){wire=c;queueMicrotask(()=>c.onOpen());return {announce(){c.onDiscovery({kind:'concierge_route',roomId:room,epoch:2,leader,mirror,peers});},reconcile(){},sendSignal(p){packets.push(p)},close(){}};}});
- const core=createPhantom({doorway:withNativeEntry(raw),runtime:{crypto:webcrypto,RTCPeerConnection:RTC,setTimeout,clearTimeout,setInterval,clearInterval}});
+ const core=createPhantom({doorway:withNativeEntry(raw),runtime:{crypto:webcrypto,RTCPeerConnection:RTC,setTimeout,clearTimeout,setInterval,clearInterval,...timers}});
  await core.join({roomId:room,handle:'@Peer',identityHash:self+'0'.repeat(48)});await settle();
  return {core,packets,get wire(){return wire;}};
 }
@@ -85,4 +85,21 @@ test('core snapshot preserves native state and stats after SDK teardown',async()
  const records=f.core.snapshot().rtcDiagnostics.connections;
  assert(records.length>0);assert(records.every(r=>r.retired));
  const r=records.find(r=>r.pipe==='sys');assert.equal(r.state.connectionState,'new');assert(r.lastReason.startsWith('before_close:'));assert.equal(r.stats.rows[0].responsesReceived,0);assert.equal(r.statsError,undefined);
+});
+
+function clock(){
+ let time=0,serial=0;const scheduled=new Map(),intervals=new Set();
+ return {timers:{setTimeout(fn,ms){const id=++serial;scheduled.set(id,{fn,at:time+ms});return id;},clearTimeout:id=>scheduled.delete(id),setInterval(){const id=++serial;intervals.add(id);return id;},clearInterval:id=>intervals.delete(id)},
+ advance(ms){time+=ms;let count=0;for(;;){const due=[...scheduled].find(([,v])=>v.at<=time);if(!due)return;assert(++count<1000,'timer loop');scheduled.delete(due[0]);due[1].fn();}},pending:()=>scheduled.size+intervals.size};
+}
+test('elapsed time does not retire a checking SYS birth; native failure initiates recovery',async()=>{
+ const c=clock(),before=instances.length,f=await fixture(leader,c.timers);
+ try{
+  const original=instances[before];original.connectionState='connecting';original.iceConnectionState='checking';
+  c.advance(11000);await settle();c.advance(11000);await settle();c.advance(11000);await settle();
+  assert.equal(original.connectionState,'connecting');assert.equal(f.packets.filter(p=>p.type==='rtc_offer').length,1);
+  original.connectionState='failed';original.onconnectionstatechange();await settle();
+  assert.equal(original.connectionState,'closed');assert(f.packets.filter(p=>p.type==='rtc_offer').length>1);
+ }finally{f.core.dispose();}
+ assert.equal(c.pending(),0,'disposal clears scheduled work');
 });

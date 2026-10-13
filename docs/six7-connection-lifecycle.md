@@ -28,3 +28,11 @@ RTC_DIAGNOSTICS events and snapshot.rtcDiagnostics retain native connection ID, 
 Capture is event-driven; getStats resolves asynchronously and may reject or omit fields. Those limitations and dropped records are reported. No polling timer, relay-specific recovery policy or native constructor wrapper is added. Reports retain diagnostic IP addresses, ports and peer IDs while redacting SDP/passwords/credentials.
 
 Tests cover startup ownership, immediate queued ICE, replacement/stale ICE, non-owner protection, pre-close capture, bounded history/concurrency, older-result rejection, retrieval errors and retained evidence after core disposal. They do not establish physical-device connectivity or network-switch recovery.
+
+## State-driven startup correction
+
+The subsequent correction removes the added initial SYS birth deadline and its two-attempt exhaustion map. Pending connection checks are no longer retired by that deadline. Native failure, channel closure, valid incarnation replacement and explicit disposal continue to use existing owner-controlled recovery and teardown paths.
+
+The entry facade also stops imposing its default 30-second admission deadline. Default join waits for admitted/failed/closed state or AbortSignal cancellation. A developer can explicitly pass timeoutMs to bound their own operation; this is caller-requested cancellation, not a declaration that ICE failed. Leave aborts the demo's pending join. This change does not remove every timer in the SDK or claim that all other lifecycle behavior is timer-free.
+
+Tests advance simulated time past both former startup deadlines without retiring a checking birth or resolving pending admission. Native failure initiates recovery; abort/core failure closes admission; teardown releases scheduled work and listeners. Physical-device connectivity remains unverified until a report demonstrates it.
