@@ -11,3 +11,12 @@ test('bounded reports disclose dropped events and preserve multiple completions'
  const d=createDiagnostics({build:'test',limit:2});d.record('networkState',{state:'admitted'});d.record('complete',{durationMs:26,size:32,result:'verified'});d.record('complete',{durationMs:45,size:96,result:'verified'});
  assert.equal(d.report().droppedEvents,1);assert.equal(d.report().events.length,2);
 });
+
+test('network context exports only recognized reasons and actions',()=>{
+ const d=createDiagnostics({build:'test'});
+ d.record('networkState',{state:'recovering',reason:'transport_fault',nextAction:'observe_core_recovery'});
+ d.record('networkState',{state:'recovering',reason:'SECRET',nextAction:'https://example/#SECRET'});
+ assert.equal(d.report().events[0].reason,'transport_fault');
+ assert.equal(d.report().events[0].nextAction,'observe_core_recovery');
+ assert.ok(!d.text().includes('SECRET'));
+});

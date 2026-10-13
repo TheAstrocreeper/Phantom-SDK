@@ -46,3 +46,7 @@ This is open admission with Nostr discovery, not the restricted Cloudflare Worke
 ## Interface update
 
 Compact steel/charcoal and amber console with system Arial typography. At desktop widths of at least 1,000 px and heights of at least 700 px, a viewport grid places the transfer workflow on one screen; the SDK inspector opens as an overlay. Smaller screens retain natural scrolling for access to controls. Connection startup shows an active button spinner, elapsed waiting time, and actual network/doorway statuses. The transfer trace is a verified-progress ring, not a piece grid or simulated traffic animation. Peer-offline state clears stale latency and changes the connection heading. Revised layout needs browser confirmation after deployment.
+
+## Recovery status and diagnostics
+
+Loss of an established peer channel shows recovery instructions while keeping the room open. Channel return restores the active transfer message or prompts the receiver to resume missing pieces. A recovered channel does not itself claim that a file transfer completed. Copy, download, and share report controls are visible outside the inspector. Reports record channel loss/return, browser online/offline/visibility events, and allowlisted SDK reasons/actions without raw packets or identities. Test network switching on the actual phone and laptop; automated fixtures cannot establish real NAT connectivity.
