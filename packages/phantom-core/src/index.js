@@ -4,6 +4,7 @@ export { createPeerIdentity } from './identity.js';
 import { bridgeDoorway } from '../../phantom-doorways/src/interface.js';
 import {isConciergeProtocol,migrateStorage,normalizeCommand} from './compatibility.js';
 import { createNetworkEngine } from './network-engine.js';
+import { createNetworkPermissions } from './network-permissions.js';
 
 function memoryStorage() {
   const values = new Map();
@@ -68,7 +69,7 @@ export function createPhantom({ doorway, origin = 'https://phantom.local',
     emit(type, payload) {
       if (disposed) return;
       if(type==='SNAPSHOT') {
-        const projected=projectNetworkState(payload);
+        const projected={...projectNetworkState(payload),permissions:networkPermissions.snapshot()};
         const signature=JSON.stringify(projected);
         if(signature!==networkSignature){networkState=projected;networkSignature=signature;for(const listener of stateListeners){try{listener(structuredClone(networkState));}catch(error){console.error('Phantom state listener failed',error);}}}
       }
@@ -95,13 +96,23 @@ export function createPhantom({ doorway, origin = 'https://phantom.local',
     },
     clearInterval(id) { timers.clearInterval(id); intervals.delete(id); },
   };
+  const networkPermissions=createNetworkPermissions({runtime,onChange:permissions=>{
+    if(disposed)return;
+    networkState={...networkState,permissions};
+    networkSignature=JSON.stringify(networkState);
+    for(const listener of stateListeners){try{listener(structuredClone(networkState));}catch(error){console.error('Phantom state listener failed',error);}}
+    host.emit('NETWORK_PERMISSIONS',permissions);
+  }});
+  networkState={...networkState,permissions:networkPermissions.snapshot()};
   const engine = createNetworkEngine(host);
+  void networkPermissions.refresh();
   function command(type, payload) {
     if (disposed) throw new Error('Phantom instance disposed');
     engine.command(normalizeCommand(type), payload);
   }
   return {
     getState() {return structuredClone(networkState);},
+    refreshNetworkPermissions(){return networkPermissions.refresh();},
     onState(listener) {
       if(disposed)throw new Error('Phantom instance disposed');
       if(typeof listener!=='function')throw new TypeError('State listener required');
@@ -158,12 +169,13 @@ export function createPhantom({ doorway, origin = 'https://phantom.local',
       if (!publicIdentity) throw new Error("No standalone identity initialized; join with name first");
       return {...publicIdentity};
     },
-    snapshot: () => engine.snapshot(),
+    snapshot: () => ({...engine.snapshot(),permissions:networkPermissions.snapshot()}),
     command,
     dispose() {
       if (disposed) return;
       engine.dispose();
       disposed = true;
+      networkPermissions.dispose();
       cancelJoin?.();
       for (const id of timeouts) timers.clearTimeout(id);
       for (const id of intervals) timers.clearInterval(id);

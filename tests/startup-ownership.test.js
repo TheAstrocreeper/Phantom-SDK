@@ -26,6 +26,20 @@ async function fixture(self,timers={}){
  await core.join({roomId:room,handle:'@Peer',identityHash:self+'0'.repeat(48)});await settle();
  return {core,packets,get wire(){return wire;}};
 }
+test('denied LAN permission is additive evidence, does not block RTC, and updates public state',async()=>{
+ const listeners=new Set(),status={state:'denied',addEventListener:(type,fn)=>listeners.add(fn),removeEventListener:(type,fn)=>listeners.delete(fn)};
+ const f=await fixture(leader,{navigator:{permissions:{query:async()=>status}}});
+ try{
+  assert.equal(f.core.getState().permissions.localNetwork.state,'denied');
+  assert.equal(f.core.snapshot().permissions.localNetwork.nextAction,'review_local_network_if_connection_fails');
+  assert(f.packets.some(p=>p.type==='rtc_offer'));
+  const states=[],events=[];f.core.onState(s=>states.push(s));f.core.onEvent(e=>events.push(e));
+  status.state='granted';for(const fn of listeners)fn();
+  assert.equal(states.at(-1).permissions.localNetwork.state,'granted');
+  assert(events.some(e=>e.type==='NETWORK_PERMISSIONS'&&e.payload.localNetwork.state==='granted'));
+  await f.core.refreshNetworkPermissions();assert.equal(listeners.size,1);
+ }finally{f.core.dispose();assert.equal(listeners.size,0);}
+});
 test('candidate mirror waits for the leader without promoting itself',async()=>{
  const f=await fixture(mirror);try{
   assert.equal(f.packets.filter(p=>p.type==='rtc_offer').length,0);

@@ -1,5 +1,9 @@
 # SDK connection test
 
+Local network permission is shown before startup and included in SDK state and
+reports. Invitation URLs now wait for a Join click. See
+../../docs/local-network-permissions.md for the public-HTTPS Allow/Block/Ask test.
+
 This demo uses createBrowserPhantom, state, snapshots, SDK events and doorway callbacks. Create on one device and open its invitation on the other. Connect peer invites a chat channel after admission; incoming invitations are accepted. Leave cancels startup or closes the network. Diagnostics remain available after failure and Leave.
 
 Build with npm install and npm run build in this directory. Deploy only dist. Set SDK_SOURCE_COMMIT to the source commit being built to embed its exact revision.
