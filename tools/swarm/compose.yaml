@@ -1,0 +1,9 @@
+services:
+  swarm:
+    build:
+      context: ../..
+      dockerfile: tools/swarm/Dockerfile
+    init: true
+    shm_size: 1gb
+    volumes:
+      - ./reports:/sdk/tools/swarm/reports

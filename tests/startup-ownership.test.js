@@ -130,3 +130,36 @@ test('candidate trace correlates generation, local route submission and remote a
   assert.deepEqual(tx.map(e=>e.stage),['generated','route_submission']);assert.deepEqual(rx.map(e=>e.stage),['received','applied']);assert(tx.every(e=>e.key===rx[0].key));assert.equal(tx[0].candidate.address,'pc-example.local');assert.equal(tx[1].submitted,true);
  }finally{a.core.dispose();b.core.dispose();}
 });
+
+
+test('an unanswered SYS offer retries with a new attempt and ignores the retired answer',async()=>{
+ const c=clock(),before=instances.length,f=await fixture(ordinary,c.timers);
+ try{
+  const original=instances[before],offer=f.packets.find(p=>p.type==='rtc_offer');
+  c.advance(15000);await settle();
+  assert.equal(original.connectionState,'closed');
+  const replacement=f.packets.filter(p=>p.type==='rtc_offer').at(-1);
+  assert.notEqual(replacement.sysAttemptId,offer.sysAttemptId);
+  assert.notEqual(replacement.to,offer.to,'unadmitted peer tries another live discovery hint');
+  assert.equal(f.core.getState().admitted,false,'routing does not commit membership');
+  f.wire.onSignal({...offer,type:'rtc_answer',from:leader,to:ordinary,sdp:{type:'answer',sdp:'retired-answer'}});await settle();
+  const active=instances.at(-1);assert.equal(active.remoteDescription,undefined);
+  f.wire.onSignal({...replacement,type:'rtc_answer',from:replacement.to,to:ordinary,sdp:{type:'answer',sdp:'current-answer'}});await settle();
+  assert.equal(active.remoteDescription.sdp,'current-answer');
+  c.advance(15000);await settle();assert.notEqual(active.connectionState,'closed');
+ }finally{f.core.dispose();}
+ assert.equal(c.pending(),0);
+});
+
+test('correlated bootstrap advice changes the pending route without waiting or committing membership',async()=>{
+ const before=instances.length,f=await fixture(ordinary);
+ try{
+  const offer=f.packets.find(p=>p.type==='rtc_offer'),original=instances[before];
+  const hint={type:'rtc_route_hint',pipe:'sys',videoId:room,from:leader,to:ordinary,bootId:leader,requestBootId:offer.bootId,sysAttemptId:offer.sysAttemptId,leader:mirror};
+  f.wire.onSignal({...hint,sysAttemptId:'retired'});await settle();assert.notEqual(original.connectionState,'closed');
+  f.wire.onSignal(hint);await settle();assert.equal(original.connectionState,'closed');
+  const next=f.packets.filter(p=>p.type==='rtc_offer').at(-1);assert.equal(next.to,mirror);assert.notEqual(next.sysAttemptId,offer.sysAttemptId);
+  assert.equal(f.core.getState().admitted,false);
+  const active=instances.at(-1);f.wire.onSignal(hint);await settle();assert.notEqual(active.connectionState,'closed');
+ }finally{f.core.dispose();}
+});

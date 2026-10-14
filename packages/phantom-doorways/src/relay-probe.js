@@ -21,7 +21,7 @@ export function probeRelay(url,{timeoutMs=8000,WebSocket=globalThis.WebSocket,id
    const bus=busFactory({roomId,identity,relays:[url],WebSocket,
     onAnnouncement:p=>{if(p.s7pPublicKey===other.publicKey&&p.probe===roomId){announced.add(i);send();}},
     onSignal:p=>{if(p.s7pPublicKey===other.publicKey&&p.control?.probe===roomId&&p.control.to===identity.publicKey.slice(0,16)){received.add(i);check();}},
-    onStatus:s=>{if(s.type==='open'){opened.add(i);send();}if(s.type==='publish'&&s.packetType==='SIGNAL'){if(s.accepted){accepted.add(i);check();}else finish(false,'publication_rejected: '+s.reason);}if(s.type==='subscription_closed')finish(false,'subscription_closed: '+s.reason);if(s.type==='exhausted')finish(false,'connection_exhausted');},
+    onStatus:s=>{if(s.type==='open'){opened.add(i);send();}if(s.type==='write_blocked')finish(false,'publication_rejected: '+s.reason);if(s.type==='publish'&&s.packetType==='SIGNAL'){if(s.accepted){accepted.add(i);check();}else finish(false,'publication_rejected: '+s.reason);}if(s.type==='subscription_closed')finish(false,'subscription_closed: '+s.reason);if(s.type==='exhausted')finish(false,'connection_exhausted');},
     onError:e=>{if(diagnostics.length<5)diagnostics.push(e.message);}
    });buses.push(bus);bus.announce({probe:roomId,row:{hKey:identity.publicKey.slice(0,16),hex:identity.publicKey,bootId:roomId,roomJoinedAt:start}});
   }}catch(e){finish(false,e.message);}

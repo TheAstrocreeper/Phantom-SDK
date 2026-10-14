@@ -32,7 +32,7 @@ function eventSurface() {
 /** Public peer-network facade with injectable transport and runtime. */
 export function createPhantom({ doorway, origin = 'https://phantom.local',
     avatar = null, storage = memoryStorage(), sessionStorage = memoryStorage(),
-    runtime = globalThis, canSendFile = () => true, authorizeSyscon1 = () => true, canAdmitPeer = () => true } = {}) {
+    runtime = globalThis, recoverySignaling, canSendFile = () => true, authorizeSyscon1 = () => true, canAdmitPeer = () => true } = {}) {
   if (['phantom-doorway-v1','phantom-doorway-v2'].includes(doorway?.protocol)) doorway = bridgeDoorway(doorway);
   if (!isConciergeProtocol(doorway?.protocol)) {
     throw new Error('A Phantom concierge doorway is required');
@@ -64,7 +64,7 @@ export function createPhantom({ doorway, origin = 'https://phantom.local',
     location: { href: origin }, doorwayUrl: doorway.url,
     doorwayPresence: doorway.presence ?? 'live-sockets',
     WebSocket: doorway.WebSocket, RTCPeerConnection: runtime.RTCPeerConnection,
-    crypto: runtime.crypto, canSendFile, authorizeSyscon1,
+    crypto: runtime.crypto, recoverySignaling, canSendFile, authorizeSyscon1,
     canAdmitPeer: peer => { try { return canAdmitPeer(peer) === true; } catch { return false; } },
     emit(type, payload) {
       if (disposed) return;

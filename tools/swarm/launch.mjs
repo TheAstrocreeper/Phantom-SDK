@@ -1,0 +1,14 @@
+import {spawn} from 'node:child_process';
+import {mkdirSync,appendFileSync} from 'node:fs';
+import {resolve,join} from 'node:path';
+import {fileURLToPath} from 'node:url';
+const here=fileURLToPath(new URL('.',import.meta.url));
+const args=process.argv.slice(2),index=args.indexOf('--output');
+const output=resolve(index<0?join(here,'reports',new Date().toISOString().replaceAll(':','-')+'-'+crypto.randomUUID().slice(0,8)):args[index+1]);
+mkdirSync(output,{recursive:true});
+const child=spawn(process.execPath,[join(here,args.includes('--stress')?'stress.mjs':'run.mjs'),...args.filter(a=>a!=='--stress'),...(index<0?['--output',output]:[])],{stdio:['inherit','pipe','pipe'],env:{...process.env,DEBUG:[process.env.DEBUG,'pw:browser'].filter(Boolean).join(',')}});
+child.stdout.on('data',chunk=>{appendFileSync(join(output,'runner.log'),chunk);process.stdout.write(chunk);});
+child.stderr.on('data',chunk=>{appendFileSync(join(output,'browser-stderr.log'),chunk);const visible=chunk.toString().split('\n').filter(line=>line&&!line.includes('pw:browser')).join('\n');if(visible)process.stderr.write(visible+'\n');});
+for(const signal of ['SIGINT','SIGTERM'])process.on(signal,()=>child.kill(signal));
+child.on('error',error=>{appendFileSync(join(output,'browser-stderr.log'),error.stack+'\n');console.error(error.message);process.exitCode=1;});
+child.on('exit',(code,signal)=>{process.exitCode=code??1;if(signal)console.error('Runner exited on',signal,'— logs:',output);});
