@@ -1,4 +1,14 @@
-# Phantom SDK
+<div align="center">
+
+# PHANTOM SDK
+### Modular Web3 Infrastructure & Resilient P2P Swarm Protocol
+
+[![Status](https://img.shields.io/badge/swarm-stable-success?style=for-the-badge&color=0a0a0c&logo=git)](https://github.com)
+[![Build](https://img.shields.io/badge/stress__test-passed-8b0000?style=for-the-badge)](https://github.com)
+
+</div>
+
+> *Resilient WebRTC peer-to-peer data swarms with automated failure recovery, leader rotation, and seamless channel state reconciliation.*
 
 **[Explore the demos →](demos/README.md)**
 
