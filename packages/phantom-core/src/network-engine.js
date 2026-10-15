@@ -668,6 +668,14 @@ export function createNetworkEngine(host) {
       if (oldEnt && oldTarget === targetPeer) {
         oldEnt.ownerAttemptId = attemptId;
         emitSnapshot("sys_birth_preserved_same_target");
+      } else if (oldEnt && roleNow === "syscon1" &&
+          phantomSysBirthRole(oldTarget) === "acceptor" &&
+          (phantomCommittedMember(oldTarget) ||
+            sdkDeferredAdmissions.get(oldTarget)?.entry === oldEnt)) {
+        // Changing the primary mirror does not retire a legal inbound tether.
+        // A queued admission must keep the exact transport that proved it.
+        oldEnt.ownerAttemptId = null;
+        emitSnapshot("sys_birth_preserved_peer_tether");
       } else if (oldEnt && oldSysDc && oldEnt.ownerAttemptId === oldAttemptId) {
         oldEnt.sysdc = null;
         oldEnt.sysAttemptId = null;
@@ -5443,6 +5451,15 @@ export function createNetworkEngine(host) {
         if (replacement?.timer) clearTimeout(replacement.timer);
       } catch {}
 
+      const exited = __phantomMembershipExitApplied.get(newKey);
+      const admittedBoot = String(phantomRemoteBootIds.get(newKey) || "");
+      const relationship = phantomRelationships.get(newKey);
+      if (host.messaging === "automatic" && relationship?.endReason === "ROOM_EXITED" &&
+          exited?.bootId && admittedBoot && admittedBoot !== exited.bootId) {
+        // A newly admitted incarnation starts a new automatic messaging cycle.
+        // Explicit chat ends and block state retain their existing owners.
+        phantomRelationships.delete(newKey);
+      }
       phantomPendingTerminalExits.delete(newKey);
       phantomSysReplacementWindows.delete(newKey);
       __phantomGoneNotified.delete(newKey);
