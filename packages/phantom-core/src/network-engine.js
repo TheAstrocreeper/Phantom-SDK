@@ -669,11 +669,9 @@ export function createNetworkEngine(host) {
         oldEnt.ownerAttemptId = attemptId;
         emitSnapshot("sys_birth_preserved_same_target");
       } else if (oldEnt && roleNow === "syscon1" &&
-          phantomSysBirthRole(oldTarget) === "acceptor" &&
-          (phantomCommittedMember(oldTarget) ||
-            sdkDeferredAdmissions.get(oldTarget)?.entry === oldEnt)) {
+          phantomSysBirthRole(oldTarget) === "acceptor") {
         // Changing the primary mirror does not retire a legal inbound tether.
-        // A queued admission must keep the exact transport that proved it.
+        // Admission frames may still be in flight on that candidate transport.
         oldEnt.ownerAttemptId = null;
         emitSnapshot("sys_birth_preserved_peer_tether");
       } else if (oldEnt && oldSysDc && oldEnt.ownerAttemptId === oldAttemptId) {
