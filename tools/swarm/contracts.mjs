@@ -84,6 +84,36 @@ try{
   assert.equal(events.some(e=>e.type==='pageerror'),false,'no browser script errors');
   return {excluded:excluded.peerId,chunks:0,receiverJobs:0,allPeersReady:rows.length};
  });
+ if(turnTransport&&process.env.PHANTOM_TURN_FAILURES==='1'){
+  for(const fault of ['unavailable','credentials'])await step(`TURN ${fault} rejects admission, disposes RTC and permits a fresh join`,async()=>{
+   const context=await browser.newContext(),page=await context.newPage(),label='fault-'+fault;
+   await page.exposeBinding('harnessLog',(_,e)=>log(label,e.type,e.data));
+   await page.goto(server.url);await page.waitForFunction(()=>!!globalThis.contracts);
+   const bad=structuredClone(rtcConfiguration);
+   if(fault==='unavailable')bad.iceServers[0].urls=`turn:127.0.0.1:34790?transport=${turnTransport}`;
+   else bad.iceServers[0].credential=crypto.randomUUID();
+   const start=events.length;
+   try{
+    const failure=await page.evaluate(async args=>{try{await contracts.open(args);return null;}catch(error){return error.message;}},{label,invite:source.invite,rtcConfiguration:bad,timeoutMs:15000});
+    assert.equal(failure,'Network admission timed out');
+    const failed=await page.evaluate(()=>contracts.inspect()),attempt=events.slice(start).filter(e=>e.peer===label);
+    assert.ok(attempt.some(e=>e.type==='rtc.created'&&e.data.policy==='relay'),'failed attempt constructs real relay-only RTC');
+    assert.equal(attempt.some(e=>e.type==='sdk.state'&&e.data.state==='admitted'),false,'failed TURN must never admit');
+    assert.equal(attempt.some(e=>e.type==='rtc.selectedPair'),false,'failed TURN has no selected relay pair');
+    assert.deepEqual(failed.nativeConnections,[],'rejected join disposes every native RTC connection');
+    assert.ok(attempt.some(e=>e.type==='sdk.event'&&e.data.type==='SNAPSHOT'),'SDK diagnostics exist for failed attempt');
+    await page.reload();await page.waitForFunction(()=>!!globalThis.contracts);
+    const recovered=await page.evaluate(args=>contracts.open(args),{label,invite:source.invite,rtcConfiguration});
+    assert.equal(recovered.peerId,failed.state.peerId,'fresh join retains failed identity');
+    await until(async()=>{const r=await page.evaluate(()=>contracts.inspect());return r.state.state==='admitted'&&r.connections.some(p=>p.peerId===source.peerId&&p.state==='ready');},'failed TURN identity recovers with valid configuration');
+    await page.evaluate(to=>contracts.send({to,text:'recovered-'+fault}),source.peerId);
+    await until(async()=>(await inspect(source)).messages.some(m=>m.from===recovered.peerId&&m.text==='recovered-'+fault),'message from recovered TURN identity');
+    await page.evaluate(()=>contracts.close());
+    assert.deepEqual((await page.evaluate(()=>contracts.inspect())).nativeConnections,[]);
+    return {failure,peerId:recovered.peerId,disposed:true,recoveredMessage:true};
+   }finally{await context.close();}
+  });
+ }
  if(turnTransport)await step('selected native pairs use TURN for system, messaging and distribution',async()=>{
   const evidence=events.filter(e=>e.type==='rtc.selectedPair').map(e=>({peer:e.peer,...e.data}));
   for(const kind of ['system','messaging','distribution'])assert.ok(evidence.some(e=>e.kind===kind),'missing selected pair for '+kind);
