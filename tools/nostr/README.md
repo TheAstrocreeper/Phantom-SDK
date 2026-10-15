@@ -64,3 +64,5 @@ Relay-set signals expire after 10 seconds by default (`publicationLifetimeMs`, p
 When fresh queued work survives a cooldown, the relay set refreshes its cached announcement before flushing signals. Announcement coalescing tracks what was actually submitted, so updates cached during a pause are not mistakenly treated as already sent. It does not schedule discovery retries when no live queued work remains. Departure, reconnect and close clear queue-expiry timers.
 
 The `banned:` prefix and the exact observed reply `Policy violated and pubkey is not in our web of trust.` are compatibility cases in the local classifier. The latter maps to `restricted`. Both stop new writes for that bus session while reads and outstanding ACK processing remain active; reconnecting that bus does not clear the write block. They do not create a persistent relay blacklist or infer a server ban duration. Other unknown replies retain event-scoped handling.
+
+The exact unprefixed `rate limited` reply also maps to the existing `rate-limited` cooldown policy. Its raw reason remains unchanged; this does not infer a server-provided retry duration.
