@@ -36,6 +36,7 @@ export function createPhantomEntry({openContext, relays, doorways, adminPublicKe
       if(event.type==='PHANTOM_ADMIN_LINK_READY'||event.type==='P2P_CHAT_READY'){const peer=event.payload?.from;if(peer)lifecycle?.sync(peer);}
       if(event.type==='PRESENCE_ROSTER') peers=structuredClone(event.payload?.list||[]);
       emit('event',event);
+      if(event.type==='PEER_CONNECTION_STATE')emit('peerConnection',event.payload);
       if(event.type==='INCOMING_MSG'&&!event.payload?.sys&&typeof event.payload?.text==='string') emit('message',{from:event.payload.from,text:event.payload.text});
     });
     const adminContext=()=>{const snapshot=core.snapshot?.(),c=snapshot?.concierge;if(!c)return core.getState();return {peerId:snapshot.self?.hKey,leader:c.syscon1,role:c.localRoleCandidate||c.role};};
@@ -43,11 +44,12 @@ export function createPhantomEntry({openContext, relays, doorways, adminPublicKe
     const active=()=>{if(closed)throw new Error('Network closed');if(retired)throw new Error('Network permanently retired');};
     files=createFileDistribution({core,crypto:config.runtime?.crypto??globalThis.crypto,emit,
       allowed:(id,target)=>!retired&&!closed&&!lifecycle?.isRevoked(id)&&(!target||!lifecycle?.isRevoked(target)),...Object.fromEntries(Object.entries(config.files??{}).filter(([key])=>['chunkStore','requestTimeoutMs','maxFileBytes'].includes(key)))});
-    if(config.distribution)distribution=createNetworkDistribution({core,networkId:context.networkId,adminPublicKey:context.adminPublicKey,lifecycle,runtime:config.runtime,emit,allowed:(id,target)=>!retired&&!closed&&!lifecycle?.isRevoked(id)&&(!target||!lifecycle?.isRevoked(target)),checkAdmin:()=>adminGate.wait(adminContext()),options:config.distribution});
+    if(config.distribution)distribution=createNetworkDistribution({core,networkId:context.networkId,adminPublicKey:context.adminPublicKey,lifecycle,runtime:config.runtime,emit,allowed:(id,target)=>!retired&&!closed&&!lifecycle?.isRevoked(id)&&(!target||!lifecycle?.isRevoked(target)),checkAdmin:()=>adminGate.wait(adminContext()),options:{...config.distribution,...(config.rtcConfiguration!==undefined?{rtcConfiguration:config.rtcConfiguration}:{})}});
     const network={invite,networkId:context.networkId,
       refreshNetworkPermissions:()=>{active();return core.refreshNetworkPermissions?.()??Promise.resolve({localNetwork:{state:'unknown',name:null,reason:'permissions_api_unavailable',nextAction:'none'}});},
       distributeFile:(file,options)=>{active();if(!distribution)throw new Error('Enable distribution in SDK configuration');return distribution.publish(file,options);},
       getDistributionState:()=>distribution?.snapshot()??null,
+      getDistributedFile:id=>{active();if(!distribution)throw new Error('Enable distribution in SDK configuration');return distribution.getFile(id);},
       getAdminState:()=>adminGate.snapshot(),
       publishFile:(file,options)=>{active();return files.publish(file,options);},
       shareFile:(peer,id)=>{active();return files.share(peer,id);},
@@ -62,21 +64,21 @@ export function createPhantomEntry({openContext, relays, doorways, adminPublicKe
       getControls:()=>lifecycle?.records()??[],
       isRevoked:target=>lifecycle?.isRevoked(target)??false,
       on(type,fn){if(closed)throw new Error('Network closed');if(typeof fn!=='function')throw new TypeError('Listener required');if(!handlers.has(type))handlers.set(type,new Set());handlers.get(type).add(fn);return()=>handlers.get(type)?.delete(fn);},
-      getState:()=>retired?{...core.getState(),state:'retired',reason:'signed_network_retirement',nextAction:'none'}:core.getState(),snapshot:()=>core.snapshot(),getPeers:()=>structuredClone(peers),
+      getState:()=>retired?{...core.getState(),state:'retired',reason:'signed_network_retirement',nextAction:'none'}:core.getState(),snapshot:()=>core.snapshot(),getPeers:()=>structuredClone(peers),getPeerConnections:()=>core.getPeerConnections(),
       invitePeer:id=>{active();return core.invite(id);},acceptPeer:id=>{active();return core.accept(id);},send:(id,text)=>{active();return core.send(id,text);},
       close(){if(closed)return;closed=true;clearTimeout(retireTimer);distribution?.close();files.close();offEvent();offState();core.dispose();adminGate.close();handlers.clear();}
     };
     try {
       await new Promise((resolve,reject)=>{
-        let done=false,off=()=>{};
+        let done=false,off=()=>{},storageReady=!distribution;
         const finish=error=>{if(done)return;done=true;clearTimeout(timer);off();signal?.removeEventListener('abort',abort);error?reject(error):resolve();};
-        const check=state=>{if(retired)finish(new Error('Network permanently retired'));else if(state.state==='admitted')finish();else if(['failed','closed'].includes(state.state))finish(new Error(state.reason));};
+        const check=state=>{if(retired)finish(new Error('Network permanently retired'));else if(['failed','closed'].includes(state.state))finish(new Error(state.reason));else if(storageReady&&state.state==='admitted')finish();};
         const abort=()=>finish(new Error('Join aborted'));
         // Only a caller-requested cancellation deadline may end this wait.
         const timer=timeoutMs===null?null:setTimeout(()=>finish(new Error('Network admission timed out')),timeoutMs);
         off=core.onState(check);signal?.addEventListener('abort',abort,{once:true});
         if(signal?.aborted){abort();return;}
-        Promise.resolve().then(()=>core.join({roomId:context.networkId,name,identity:config.identity})).then(()=>waitForAdmission?check(core.getState()):finish(),finish);
+        Promise.resolve().then(()=>core.join({roomId:context.networkId,name,identity:config.identity})).then(async()=>{await distribution?.restore();storageReady=true;return waitForAdmission?check(core.getState()):finish();}).catch(finish);
       });
       return network;
     } catch(error){network.close();throw error;}
