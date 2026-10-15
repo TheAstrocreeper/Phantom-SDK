@@ -32,7 +32,9 @@ function eventSurface() {
 /** Public peer-network facade with injectable transport and runtime. */
 export function createPhantom({ doorway, origin = 'https://phantom.local',
     avatar = null, storage = memoryStorage(), sessionStorage = memoryStorage(),
-    runtime = globalThis, recoverySignaling, canSendFile = () => true, authorizeSyscon1 = () => true, canAdmitPeer = () => true } = {}) {
+    runtime = globalThis, messaging = 'manual', rtcConfiguration = {iceServers:[{urls:"stun:stun.l.google.com:19302"}]}, recoverySignaling, canSendFile = () => true, authorizeSyscon1 = () => true, canAdmitPeer = () => true } = {}) {
+  if(!['manual','automatic'].includes(messaging))throw new TypeError('messaging must be manual or automatic');
+  if(!rtcConfiguration||typeof rtcConfiguration!=='object'||Array.isArray(rtcConfiguration))throw new TypeError('rtcConfiguration must be an object');
   if (['phantom-doorway-v1','phantom-doorway-v2'].includes(doorway?.protocol)) doorway = bridgeDoorway(doorway);
   if (!isConciergeProtocol(doorway?.protocol)) {
     throw new Error('A Phantom concierge doorway is required');
@@ -48,6 +50,8 @@ export function createPhantom({ doorway, origin = 'https://phantom.local',
   );
   const listeners = new Set();
   const stateListeners=new Set();
+  const peerConnections=new Map();
+  let snapshotRevision=0;
   let networkState={state:"idle",reason:"not_joined",nextAction:"join",peerId:null};
   let networkSignature=JSON.stringify(networkState);
   const window = eventSurface();
@@ -64,17 +68,36 @@ export function createPhantom({ doorway, origin = 'https://phantom.local',
     location: { href: origin }, doorwayUrl: doorway.url,
     doorwayPresence: doorway.presence ?? 'live-sockets',
     WebSocket: doorway.WebSocket, RTCPeerConnection: runtime.RTCPeerConnection,
-    crypto: runtime.crypto, recoverySignaling, canSendFile, authorizeSyscon1,
+    crypto: runtime.crypto, rtcConfiguration, messaging, recoverySignaling, canSendFile, authorizeSyscon1,
     canAdmitPeer: peer => { try { return canAdmitPeer(peer) === true; } catch { return false; } },
     emit(type, payload) {
       if (disposed) return;
+      const changes=[],revision=type==='SNAPSHOT'?++snapshotRevision:snapshotRevision;
       if(type==='SNAPSHOT') {
         const projected={...projectNetworkState(payload),permissions:networkPermissions.snapshot()};
         const signature=JSON.stringify(projected);
         if(signature!==networkSignature){networkState=projected;networkSignature=signature;for(const listener of stateListeners){try{listener(structuredClone(networkState));}catch(error){console.error('Phantom state listener failed',error);}}}
       }
-      for (const listener of listeners) {
-        try { listener({ type, payload }); }
+      if(type==='SNAPSHOT'&&revision===snapshotRevision&&Array.isArray(payload.peerConnections)) {
+        const current=new Set();
+        for(const connection of payload.peerConnections){
+          current.add(connection.peerId);
+          if(JSON.stringify(peerConnections.get(connection.peerId))!==JSON.stringify(connection)){
+            peerConnections.set(connection.peerId,structuredClone(connection));
+            changes.push({type:'PEER_CONNECTION_STATE',payload:connection});
+          }
+        }
+        for(const peerId of peerConnections.keys())if(!current.has(peerId)){
+          peerConnections.delete(peerId);changes.push({type:'PEER_CONNECTION_STATE',payload:{peerId,state:'closed',reason:'peer_left_roster',attemptId:null}});
+        }
+      }
+      for(const event of [{type,payload},...changes])for (const listener of listeners) {
+        if(disposed)break;
+        if(event.type==='PEER_CONNECTION_STATE'){
+          const current=peerConnections.get(event.payload.peerId);
+          if(event.payload.reason==='peer_left_roster'?current!==undefined:JSON.stringify(current)!==JSON.stringify(event.payload))break;
+        }
+        try { listener(event.type==='PEER_CONNECTION_STATE'?structuredClone(event):event); }
         catch (error) { console.error('Phantom event listener failed', error); }
       }
     },
@@ -112,6 +135,7 @@ export function createPhantom({ doorway, origin = 'https://phantom.local',
   }
   return {
     getState() {return structuredClone(networkState);},
+    getPeerConnections() {return disposed?[]:engine.peerConnections();},
     refreshNetworkPermissions(){return networkPermissions.refresh();},
     onState(listener) {
       if(disposed)throw new Error('Phantom instance disposed');
@@ -182,7 +206,7 @@ export function createPhantom({ doorway, origin = 'https://phantom.local',
       timeouts.clear(); intervals.clear(); listeners.clear();
       networkState={...networkState,state:'closed',reason:'disposed',nextAction:'create_instance'};
       for(const listener of stateListeners){try{listener(structuredClone(networkState));}catch{}}
-      stateListeners.clear();
+      stateListeners.clear();peerConnections.clear();
       window.clear(); document.clear();
     },
   };
