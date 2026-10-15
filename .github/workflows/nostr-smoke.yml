@@ -1,0 +1,28 @@
+name: Live Nostr smoke
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/nostr-smoke.yml'
+permissions:
+  contents: read
+jobs:
+  nostr:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci
+      - run: npm ci --prefix tools/swarm
+      - run: cd tools/swarm && npx playwright install --with-deps chromium --only-shell
+      - name: Four peers using production Nostr discovery and signaling
+        run: node tools/swarm/launch.mjs --nostr --peers 4 --bytes 65536 --timeout 60000
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nostr-smoke-reports
+          path: tools/swarm/reports/
+          if-no-files-found: warn
