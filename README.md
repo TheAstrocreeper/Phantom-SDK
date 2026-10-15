@@ -1,3 +1,5 @@
+<div align="center">
+
 # PHANTOM SDK
 ### Resilient peer-to-peer networking for browser applications.
 
