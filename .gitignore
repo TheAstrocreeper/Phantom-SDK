@@ -11,3 +11,6 @@ demos/*/dist/
 
 # Swarm harness generated diagnostics
 tools/swarm/reports/
+
+tools/sdk-test/dist/
+tools/sdk-test/reports/
