@@ -11,7 +11,7 @@ const trace=[],messages=[],connections=[],errors=[],native=new Set();
 const log=(type,data)=>{void globalThis.harnessLog({type,data});};
 class RTC extends RTCPeerConnection{
  constructor(config){
-  super(config);native.add(this);
+  super(config);native.add(this);log('rtc.created',{policy:this.getConfiguration().iceTransportPolicy});
   if(turnOnly&&this.getConfiguration().iceTransportPolicy!=='relay')throw Error('SDK connection did not retain relay-only policy');
   this.addEventListener('connectionstatechange',()=>{if(this.connectionState==='connected')void this.capturePair();});
   this.addEventListener('datachannel',e=>this.observeChannel(e.channel));
@@ -42,14 +42,14 @@ const chunkStore={
 };
 const sha=async bytes=>Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),b=>b.toString(16).padStart(2,'0')).join('');
 globalThis.contracts={
- async open({invite,label,rtcConfiguration={iceServers:[]}}){
+ async open({invite,label,rtcConfiguration={iceServers:[]},timeoutMs=60000}){
   turnOnly=rtcConfiguration.iceTransportPolicy==='relay';
   let identity=JSON.parse(localStorage.getItem('identity')??'null');if(!identity){identity=createBrowserIdentity();localStorage.setItem('identity',JSON.stringify(identity));}
   const sdk=createBrowserPhantom({identity,messaging:'automatic',rtcConfiguration,...(!invite?{adminIdentity:await createAdminIdentity()}:{}),
    distribution:{chunkStore,batchSize:1,maxConnections:1,intervalMs:50,traceChunks:true},
    runtime:{crypto,RTCPeerConnection:RTC,setTimeout,clearTimeout,setInterval,clearInterval,localStorage},
    doorways:[{type:'harness'}],adapters:{harness:()=>adaptWebSocketDoorway(createWebSocketDoorway({url:location.origin.replace('http:','ws:')+'/' }))}});
-  const options={name:label,timeoutMs:60000,onState:state=>{lastState=state;log('sdk.state',state);},onEvent:e=>{if(e.type==='SNAPSHOT')lastSnapshot=e.payload;log('sdk.event',e);}};
+  const options={name:label,timeoutMs,onState:state=>{lastState=state;log('sdk.state',state);},onEvent:e=>{if(e.type==='SNAPSHOT')lastSnapshot=e.payload;log('sdk.event',e);}};
   network=await(invite?sdk.join(invite,options):sdk.create(options));
   for(const type of ['distributionChunkTrace','distributionJob','distributionJobFailed','distributionRestored','distributionRestoreRejected','distributionComplete','distributionError','peerConnection'])network.on(type,data=>{
    if(type==='distributionChunkTrace')trace.push(data);
@@ -60,7 +60,7 @@ globalThis.contracts={
   network.on('message',data=>messages.push(data));
   return {peerId:network.getState().peerId,invite:network.invite};
  },
- inspect(){return {state:network?.getState()??lastState,snapshot:network?.snapshot()??lastSnapshot,connections:network?.getPeerConnections()??[],connectionEvents:connections,distribution:network?.getDistributionState(),trace,messages,errors,interrupted};},
+ inspect(){return {state:network?.getState()??lastState,snapshot:network?.snapshot()??lastSnapshot,connections:network?.getPeerConnections()??[],connectionEvents:connections,nativeConnections:[...native].map(pc=>({connectionState:pc.connectionState,iceConnectionState:pc.iceConnectionState})),distribution:network?.getDistributionState(),trace,messages,errors,interrupted};},
  send({to,text}){network.send(to,text);},
  breakMessaging(){let closed=0;for(const pc of native)if(pc.chat?.readyState==='open'){pc.chat.close();closed++;}if(!closed)throw Error('No native messaging channel found');return closed;},
  armPartial(){interrupt=true;},
