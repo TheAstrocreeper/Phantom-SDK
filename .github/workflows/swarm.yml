@@ -25,6 +25,8 @@ jobs:
       - run: node --test tools/swarm/*.test.mjs
       - run: cd tools/swarm && npx playwright install --with-deps chromium --only-shell
       - run: node tools/swarm/launch.mjs --peers 5 --bytes 4194304 --timeout 90000
+      - name: Force native early-successor offer retention
+        run: node tools/swarm/launch.mjs --scenario early-successor --peers 4 --bytes 65536 --timeout 90000
       - name: Repeat Cloudflare peer-bridge recovery
         run: node tools/swarm/launch.mjs --stress --runs 5 --cf wss://switchboard.primer187.workers.dev/ --scenario peer-bridge --peers 5 --bytes 4194304 --timeout 180000
       - uses: actions/upload-artifact@v4

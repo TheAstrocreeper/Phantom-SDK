@@ -98,3 +98,14 @@ test('unanswered readiness stops at the job deadline and releases its probe time
   const stopped=probes;await pause(150);assert.equal(probes,stopped,'probe timer released');
  }finally{f.close();}
 });
+test('duplicate channel-open callbacks do not duplicate endpoint events or readiness probes',async()=>{
+ let repeated=false,probes=0;
+ const f=await fixture({onSend(data,ch){let m;try{m=JSON.parse(data);}catch{return true;}
+  if(m.kind==='ready_probe'){probes++;if(!repeated){repeated=true;queueMicrotask(()=>ch.onopen?.());}}return true;
+ }});
+ try{
+  f.job('duplicate-open',ids[0],ids[1],[0]);await until(()=>f.frames.some(f=>f.body.type==='done'));
+  assert.equal(f.events.filter(e=>e.type==='distributionConnectionOpened').length,2);
+  assert.equal(probes,1);
+ }finally{f.close();}
+});

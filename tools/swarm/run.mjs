@@ -15,7 +15,7 @@ function option(key,fallback){const i=args.indexOf('--'+key);return i<0?fallback
 const known=new Set(['--peers','--bytes','--timeout','--output','--headed','--scenario','--nostr','--relays','--cf','--batch-size']);
 for(let i=0;i<args.length;i++){if(!known.has(args[i]))throw Error('Unknown option: '+args[i]);if(!['--headed','--nostr'].includes(args[i])){if(args[i+1]===undefined||args[i+1].startsWith('--'))throw Error('Missing option value: '+args[i]);i++;}}
 const transport=transportConfig({nostr:args.includes('--nostr'),relays:option('relays',undefined),cf:option('cf',undefined)});
-const scenario=option('scenario','baseline');if(!['baseline','stress','peer-recovery','peer-bridge'].includes(scenario))throw Error('Scenario must be baseline, stress, peer-recovery, or peer-bridge');
+const scenario=option('scenario','baseline');if(!['baseline','stress','peer-recovery','peer-bridge','early-successor'].includes(scenario))throw Error('Scenario must be baseline, stress, peer-recovery, peer-bridge, or early-successor');
 const batchSize=Number(option('batch-size',8));if(!Number.isInteger(batchSize)||batchSize<1||batchSize>64)throw Error('--batch-size must be 1–64');
 const peers=Number(option('peers',8)),size=Number(option('bytes',262144)),timeout=Number(option('timeout',120000));
 if(!Number.isInteger(peers)||peers<3||peers>64||!Number.isInteger(size)||size<1024||size>16777216||!Number.isInteger(timeout)||timeout<1000)throw Error('Use 3–64 peers, 1024–16777216 bytes, and timeout >=1000 ms.');
@@ -24,6 +24,7 @@ if(scenario==='stress'&&size<32768)throw Error('Stress requires at least 32768 b
 const runId=new Date().toISOString().replaceAll(':','-')+'-'+crypto.randomUUID().slice(0,8);
 const output=resolve(option('output',join(root,'tools/swarm/reports',runId)));mkdirSync(output,{recursive:true});
 const started=Date.now(),clients=[],steps=[];let browser,server,stage='setup',fixture,transferFault,publishAuthorizer;
+const handoffEvents=[];
 const departed=[];let recoverySignals=0;const bridgeCounts={sent:0,forwarded:0,received:0,failed:0,rejected:0};
 const metrics={jobs:0,connectionEndpointOpens:0,connectionEndpointCloses:0,jobFailures:0,requestedChunks:0,byStage:{}};
 const summary={build:'swarm-bridge-identities-v19',runId,status:'running',startedAt:new Date(started).toISOString(),settings:{scenario,peers,size,timeout,batchSize,transport,network:transport.mode==='local'?'single-host loopback; real WebRTC, no NAT/loss emulation':'single-host real WebRTC; live '+transport.mode+' discovery/signaling; no NAT/loss emulation'},steps,output,metrics,bridgeCounts};
@@ -31,9 +32,9 @@ try{summary.sdkRevision=execFileSync('git',['rev-parse','HEAD'],{cwd:root,encodi
 // Identify the actual source even when the checkout came from a ZIP.
 function sourceHashes(directory){const result={};for(const entry of readdirSync(directory,{withFileTypes:true})){const path=join(directory,entry.name);if(entry.isDirectory()&&entry.name!=='node_modules')Object.assign(result,sourceHashes(path));else if(entry.isFile()&&/\.(js|mjs|json)$/.test(entry.name))result[path.slice(root.length)]=createHash('sha256').update(readFileSync(path)).digest('hex');}return result;}
 summary.sdkSourceHashes=sourceHashes(join(root,'packages'));
-summary.harnessSourceHashes=Object.fromEntries(['run.mjs','peer.js','server.mjs','launch.mjs','stress.mjs','publish-authorization.mjs','observed-rtc.mjs','live-transport.mjs','package-lock.json'].map(name=>[name,createHash('sha256').update(readFileSync(join(root,'tools/swarm',name))).digest('hex')]));
+summary.harnessSourceHashes=Object.fromEntries(['run.mjs','peer.js','server.mjs','launch.mjs','stress.mjs','publish-authorization.mjs','observed-rtc.mjs','native-loss-gate.mjs','live-transport.mjs','package-lock.json'].map(name=>[name,createHash('sha256').update(readFileSync(join(root,'tools/swarm',name))).digest('hex')]));
 summary.dependencies=JSON.parse(readFileSync(join(root,'tools/swarm/package.json'),'utf8')).dependencies;
-function log(peer,type,data){if(type==='sdk.event'&&data.type==='SYS_SIGNAL_BRIDGE'&&data.payload?.action in bridgeCounts)bridgeCounts[data.payload.action]++;if(type==='recovery.peer_pipe')recoverySignals++;const key=({distributionJob:'jobs',distributionConnectionOpened:'connectionEndpointOpens',distributionConnectionClosed:'connectionEndpointCloses',distributionJobFailed:'jobFailures'})[type];if(key){metrics[key]++;const counters=metrics.byStage[stage]??={jobs:0,connectionEndpointOpens:0,connectionEndpointCloses:0,jobFailures:0,requestedChunks:0};counters[key]++;if(type==='distributionJob'){metrics.requestedChunks+=data.indexes.length;counters.requestedChunks+=data.indexes.length;}}const row={at:new Date().toISOString(),elapsedMs:Date.now()-started,stage,peer,type,data};appendFileSync(join(output,'events.jsonl'),JSON.stringify(row)+'\n');if(type==='distributionProgress'&&transferFault?.client.label===peer&&data.received<data.total)triggerTransferFault(data);}
+function log(peer,type,data){if(type==='sdk.event'&&['SYS_SUCCESSOR_OFFER','ICE_TRACE','SYS_SIGNAL_TIMEOUT'].includes(data.type))handoffEvents.push({peer,at:Date.now(),type:data.type,payload:data.payload});if(type==='sdk.event'&&data.type==='SYS_SIGNAL_BRIDGE'&&data.payload?.action in bridgeCounts)bridgeCounts[data.payload.action]++;if(type==='recovery.peer_pipe')recoverySignals++;const key=({distributionJob:'jobs',distributionConnectionOpened:'connectionEndpointOpens',distributionConnectionClosed:'connectionEndpointCloses',distributionJobFailed:'jobFailures'})[type];if(key){metrics[key]++;const counters=metrics.byStage[stage]??={jobs:0,connectionEndpointOpens:0,connectionEndpointCloses:0,jobFailures:0,requestedChunks:0};counters[key]++;if(type==='distributionJob'){metrics.requestedChunks+=data.indexes.length;counters.requestedChunks+=data.indexes.length;}}const row={at:new Date().toISOString(),elapsedMs:Date.now()-started,stage,peer,type,data};appendFileSync(join(output,'events.jsonl'),JSON.stringify(row)+'\n');if(type==='distributionProgress'&&transferFault?.client.label===peer&&data.received<data.total)triggerTransferFault(data);}
 function save(){writeFileSync(join(output,'summary.json'),JSON.stringify(summary,null,2));}
 async function bounded(promise,label){let timer;try{return await Promise.race([promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error(`Deadline exceeded: ${label}`)),timeout);})]);}finally{clearTimeout(timer);}}
 async function capture(label){const results=await Promise.all(clients.filter(c=>!c.closed).map(async c=>{try{const state=await bounded(c.page.evaluate(()=>swarm.inspect()),'snapshot '+c.label);return {peer:c.label,...state};}catch(e){return {peer:c.label,error:e.message};}}));writeFileSync(join(output,label+'.json'),JSON.stringify(results,null,2));return results;}
@@ -107,6 +108,38 @@ async function peerRecoveryScenario(){
  }finally{await pauseSignaling(false);}
 }
 
+async function earlySuccessorScenario(){
+ const leader=await currentRole('leader'),mirror=await currentRole('mirror');
+ const receivers=clients.filter(c=>!c.closed&&c!==leader&&c!==mirror);
+ let retained,ice;
+ try{
+  await step('retain native successor offer and ICE while old leader loss is delayed',async()=>{
+   for(const c of receivers)await c.page.evaluate(()=>swarm.holdSystemLoss());
+   await kill(leader);
+   const evidence=await poll(async()=>{
+    retained=handoffEvents.find(e=>e.type==='SYS_SUCCESSOR_OFFER'&&e.payload.action==='held'&&receivers.some(c=>c.label===e.peer));
+    ice=retained&&handoffEvents.find(e=>e.type==='ICE_TRACE'&&e.peer===retained.peer&&e.payload.stage==='successor_held'&&e.payload.attemptId===retained.payload.attemptId);
+    return {ok:!!(retained&&ice),evidence:{retained,ice}};
+   },'native offer and ICE retained before old pipe loss');
+   const receiver=receivers.find(c=>c.label===retained.peer),snapshot=await receiver.page.evaluate(()=>swarm.inspect());
+   if(snapshot.state.leader!==leader.peerId||!snapshot.snapshot.successorOffers.some(r=>r.attemptId===retained.payload.attemptId&&r.candidates>0))throw Error('Retained signaling changed authority or lost matching ICE');
+   return {...evidence,oldLeader:leader.peerId,candidate:mirror.peerId,receiver:receiver.peerId,authorityUnchanged:true};
+  });
+  await step('release old pipe loss and resume the exact native successor attempt',async()=>{
+   for(const c of receivers)await c.page.evaluate(()=>swarm.releaseSystemLoss());
+   const result=await poll(async()=>{
+    const resumed=handoffEvents.find(e=>e.type==='SYS_SUCCESSOR_OFFER'&&e.payload.action==='resumed'&&e.peer===retained.peer&&e.payload.peer===retained.payload.peer&&e.payload.attemptId===retained.payload.attemptId);
+    const applied=handoffEvents.find(e=>e.type==='ICE_TRACE'&&e.peer===ice.peer&&e.payload.key===ice.payload.key&&['applied','applied_from_buffer'].includes(e.payload.stage));
+    return {ok:!!(resumed&&applied),evidence:{retained,resumed,ice,applied}};
+   },'same attempt resumed and retained ICE applied');
+   if(result.resumed.at-retained.at>=15000)throw Error('Retained offer outlived its bounded lifetime');
+   if(handoffEvents.some(e=>e.type==='SYS_SIGNAL_TIMEOUT'&&e.payload.attemptId===retained.payload.attemptId))throw Error('Retained attempt timed out');
+   return {...result,converged:await admitted()};
+  });
+  await step('verified new distribution after forced native successor race',async()=>{await publish(await currentRole('leader'));return completed();});
+ }finally{for(const c of receivers)if(!c.closed)await c.page.evaluate(()=>swarm.releaseSystemLoss()).catch(()=>{});}
+}
+
 process.on('SIGINT',()=>{log('runner','interrupt',{});void browser?.close();});
 try{
  const bundle=await build({entryPoints:[join(root,'tools/swarm/peer.js')],bundle:true,write:false,format:'esm',platform:'browser'});server=await startServer(bundle.outputFiles[0].text,(type,data)=>log('relay',type,data));
@@ -115,6 +148,7 @@ try{
  await step('admit swarm',async()=>{seed=await addPeer('seed');summary.resolvedDoorways=seed.doorways;publishAuthorizer=createPublishAuthorizer({identity:await importAdminIdentity(await seed.page.evaluate(()=>swarm.exportAdminSeed())),networkId:seed.networkId});for(let i=1;i<peers;i++)await addPeer('peer-'+i,seed.invite);return admitted();});
  await step('distribute and verify',async()=>{fixture=await seed.page.evaluate(bytes=>swarm.publish(bytes),size);summary.fixture=fixture;return completed();});
  await capture('initial-distribution');
+ if(scenario==='early-successor'){await earlySuccessorScenario();}else{
  await step('remove publisher and recover',async()=>{await kill(seed);return admitted([seed.peerId]);});
  await step('late peer downloads without publisher',async()=>{await addPeer('late-peer',seed.invite);await admitted();return completed();});
  const rows=await capture('after-late-peer');
@@ -124,6 +158,7 @@ try{
  await step('new transfer after leader replacement',async()=>{await addPeer('post-election-peer',seed.invite);await admitted();return completed();});
  }
  if(scenario==='stress')await stressScenarios(seed.invite);
+ }
  summary.status='passed';
 }catch(e){summary.status='failed';summary.error={stage,message:e.message,stack:e.stack};log('runner','failure',summary.error);console.error('FAIL',stage+':',e.message);process.exitCode=1;
 }finally{

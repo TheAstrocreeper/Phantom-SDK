@@ -1,5 +1,7 @@
 import {observeSignaling} from './live-transport.mjs';
 import {parseInvite} from '../../packages/phantom-core/src/invite.js';
+import {createNativeLossGate} from './native-loss-gate.mjs';
+import {COMPATIBILITY_WIRE} from '../../packages/phantom-core/src/compatibility.js';
 import {observeRTC} from './observed-rtc.mjs';
 import {createBrowserPhantom} from '../../packages/phantom-doorways/src/browser-entry.js';
 import {createAdminIdentity} from '../../packages/phantom-core/src/authorization.js';
@@ -8,6 +10,7 @@ let network, admin, name, lastSnapshot=0,lastState,lastCoreSnapshot,admissionTim
 const completed={},progress={},errors=[];let publication=0;
 const log=(type,data)=>globalThis.harnessLog({type,data});
 const observed=observeRTC(globalThis.RTCPeerConnection,log),rtc=observed.active,ObservedRTC=observed.RTCPeerConnection;
+const lossGate=createNativeLossGate(ObservedRTC,{systemChannel:COMPATIBILITY_WIRE.systemChannel,log});
 const signaling=observeSignaling(globalThis.WebSocket,log);
 const sha=async bytes=>Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),b=>b.toString(16).padStart(2,'0')).join('');
 function watch(n){
@@ -28,13 +31,15 @@ function options(){return {name,timeoutMs:admissionTimeout,onState:state=>{lastS
 globalThis.swarm={
  async open({label,invite,timeoutMs,transport,batchSize=8}){
   name=label;admissionTimeout=timeoutMs??60000;if(!invite)admin=await createAdminIdentity();
-  const sdk=createBrowserPhantom({...(admin?{adminIdentity:admin}:{}),distribution:{batchSize,maxConnections:3,traceChunks:true},runtime:{crypto,RTCPeerConnection:ObservedRTC,setTimeout,clearTimeout,setInterval,clearInterval,timerTarget:globalThis,localStorage},WebSocket:signaling.WebSocket,onRelayProgress:data=>void log('relay.discovery',data),onDoorwayStatus:data=>void log('doorway.status',data),doorways:transport?.doorways??[{type:'harness'}],adapters:{harness:()=>adaptWebSocketDoorway(createWebSocketDoorway({url:location.origin.replace('http:','ws:')+'/',WebSocket:signaling.WebSocket}))}});
+  const sdk=createBrowserPhantom({...(admin?{adminIdentity:admin}:{}),distribution:{batchSize,maxConnections:3,traceChunks:true},runtime:{crypto,RTCPeerConnection:lossGate.RTCPeerConnection,setTimeout,clearTimeout,setInterval,clearInterval,timerTarget:globalThis,localStorage},WebSocket:signaling.WebSocket,onRelayProgress:data=>void log('relay.discovery',data),onDoorwayStatus:data=>void log('doorway.status',data),doorways:transport?.doorways??[{type:'harness'}],adapters:{harness:()=>adaptWebSocketDoorway(createWebSocketDoorway({url:location.origin.replace('http:','ws:')+'/',WebSocket:signaling.WebSocket}))}});
   watch(await (invite?sdk.join(invite,options()):sdk.create(options())));
   return {invite:network.invite,peerId:network.getState().peerId,networkId:network.networkId,doorways:parseInvite(network.invite).doorways};
  },
  invitePeer(id){network.invitePeer(id);},
  acceptPeer(id){network.acceptPeer(id);},
  peerPipes(){return network.snapshot().chatPairs;},
+ holdSystemLoss(){return lossGate.hold();},
+ releaseSystemLoss(){return lossGate.release();},
  setSignalingPaused(value){signaling.setPaused(value);},
  async exportAdminSeed(){if(!admin)throw Error('No admin signer on this peer');return admin.exportSeed();},
  async publish(config){const size=typeof config==='number'?config:config.size;publication=typeof config==='number'?publication+1:config.variant;const bytes=Uint8Array.from({length:size},(_,i)=>(i*31+(i>>>8)+publication)%256);const expected=await sha(bytes);const file=new Blob([bytes]),settings={name:'swarm-fixture.bin'};let authorization;if(!admin){const prepared=await network.publishFile(file,settings);authorization=await globalThis.harnessAuthorizePublish({networkId:network.networkId,target:prepared.id});await log('publish.authorization',{networkId:network.networkId,target:prepared.id,operationId:authorization.operationId});}const manifest=await network.distributeFile(file,{...settings,...(authorization?{authorization}:{})});completed[manifest.id]={id:manifest.id,size,sha256:expected,publisher:true};await log('published',{manifest,sha256:expected});return {id:manifest.id,size,sha256:expected};},

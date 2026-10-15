@@ -76,7 +76,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
     link.readyTimer=setTimeout(()=>{link.readyTimer=null;probeSource(link);},100);
   }
   function bind(link,dc){if(dc.label!=='phantom-distribution'){dc.close();return;}link.dc=dc;dc.binaryType='arraybuffer';
-    dc.onopen=()=>{if(links.get(link.job.id)!==link)return;emit('distributionConnectionOpened',{jobId:link.job.id,peer:link.peer});
+    dc.onopen=()=>{if(links.get(link.job.id)!==link||link.opened)return;link.opened=true;emit('distributionConnectionOpened',{jobId:link.job.id,peer:link.peer});
       if(link.job.receiver===self()){probeSource(link);startReceiver(link);}
     };
     dc.onmessage=event=>{if(links.get(link.job.id)!==link||!allowed(link.job.asset,assets.get(link.job.asset)?.distributionId))return;
