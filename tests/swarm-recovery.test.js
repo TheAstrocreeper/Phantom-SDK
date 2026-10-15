@@ -14,12 +14,14 @@ function doorwayBus(){
 }
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 async function wait(check,label){const deadline=Date.now()+65000;while(Date.now()<deadline){if(check())return;await sleep(20);}throw Error('Timed out: '+label);}
-test('publisher/leader loss converges before a new peer receives verified distribution', {timeout:180000},async()=>{
+test('publisher/leader loss converges with early recovery timers before verified distribution', {timeout:180000},async()=>{
  let mirrorFault=null,faultFired=false,identitySerial=0;
+ // Exercise timer wakeups before the wall-clock grace deadline on both elections.
+ const recoveryTimer=(fn,ms,...args)=>setTimeout(fn,ms===10000?ms-5:ms,...args);
  const adapter=doorwayBus(),RTC=memoryRTC({emitCandidates:true,onSend:data=>{let packet;try{packet=JSON.parse(data);}catch{return true;}if(mirrorFault&&packet.pendingAuthority?.admission){const departed=mirrorFault;mirrorFault=null;faultFired=true;queueMicrotask(()=>departed.close());return false;}return true;}}),admin=await createAdminIdentity(),networks=[],files=new Map(),events=[],cores=[];
  async function peer(name,invite){const values=new Map(),storage={getItem:k=>values.get(k)??null,setItem:(k,v)=>values.set(k,v),removeItem:k=>values.delete(k)};
   const id=(++identitySerial).toString(16).padStart(8,'0')+'deadbeef'+'0'.repeat(48);
-  const sdk=createBrowserPhantom({coreFactory:config=>{const core=createPhantom(config),join=core.join;cores.push(core);return {...core,join:options=>join({...options,identity:{version:1,id}})};},...(invite?{}:{adminIdentity:admin}),doorways:[{type:'memory'}],adapters:{memory:adapter},distribution:{},runtime:{crypto,RTCPeerConnection:RTC,setTimeout,clearTimeout,setInterval,clearInterval,localStorage:storage}});
+  const sdk=createBrowserPhantom({coreFactory:config=>{const core=createPhantom(config),join=core.join;cores.push(core);return {...core,join:options=>join({...options,identity:{version:1,id}})};},...(invite?{}:{adminIdentity:admin}),doorways:[{type:'memory'}],adapters:{memory:adapter},distribution:{},runtime:{crypto,RTCPeerConnection:RTC,setTimeout:recoveryTimer,clearTimeout,setInterval,clearInterval,localStorage:storage}});
   const n=await(invite?sdk.join(invite,{name,timeoutMs:65000,onEvent:e=>events.push({...e,observedAt:Date.now(),observer:name})}):sdk.create({name,onEvent:e=>events.push({...e,observedAt:Date.now(),observer:name})}));networks.push(n);n.on('distributionComplete',data=>files.set(n,data));return n;
  }
  try{
@@ -54,6 +56,8 @@ test('publisher/leader loss converges before a new peer receives verified distri
   const remaining=current.filter(n=>n!==leader);
   await wait(()=>remaining.every(n=>n.getState().state==='admitted'&&![oldLeader,leaderId].includes(n.getState().leader))&&new Set(remaining.map(n=>n.getState().leader)).size===1,'second leader replacement');
   console.log('engine swarm: second successor agreed');
+  assert.ok(events.some(e=>e.type==='SYS_RECOVERY_TIMER'&&e.payload.action==='rearmed'),
+    'early timer wakeup retained the recovery deadline');
   adapter.setRouteHint(remaining.find(n=>n.getState().peerId!==remaining[0].getState().leader).getState().peerId);
   const finalPeer=await peer('after-second-election',seed.invite);await wait(()=>files.get(finalPeer)?.id===manifest.id,'distribution after second election');assert.deepEqual(new Uint8Array(await files.get(finalPeer).blob.arrayBuffer()),bytes);
   const redirect=events.find(e=>e.type==='SYS_BOOTSTRAP_ROUTE'&&e.observer==='after-second-election'&&e.payload.reason==='peer_route_hint');

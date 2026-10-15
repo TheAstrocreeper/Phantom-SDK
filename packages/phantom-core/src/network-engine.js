@@ -3206,7 +3206,17 @@ export function createNetworkEngine(host) {
     }
 
     const elapsed = now() - Number(rec.startedAt || 0);
-    if (elapsed < PHANTOM_SYS_REPLACEMENT_MS) return false;
+    if (elapsed < PHANTOM_SYS_REPLACEMENT_MS) {
+      // Timers can wake before the wall-clock deadline. Keep the same recovery
+      // window alive until its full grace period has elapsed.
+      if (rec.timer) clearTimeout(rec.timer);
+      rec.timer = setTimeout(() => {
+        phantomCompleteFailedSysReplacement(key, "replacement_window_expired");
+      }, PHANTOM_SYS_REPLACEMENT_MS - elapsed);
+      post("SYS_RECOVERY_TIMER", {peer:key, action:"rearmed", elapsedMs:elapsed,
+        remainingMs:PHANTOM_SYS_REPLACEMENT_MS-elapsed});
+      return false;
+    }
 
     // Doorway visibility is corroborating liveness only. It never mutates
     // membership; it merely prevents a transient SYS fault from becoming a
