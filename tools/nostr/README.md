@@ -27,3 +27,19 @@ The finder also fetches the optional [NIP-11 information document](https://githu
 Declared limits observed in this sample: nostr.mom 131072-byte messages / 50 subscriptions; Snort 524288 / 300; Primal 1000000 / 20. These are metadata, not measured boundaries. Avoid interpreting missing metadata fields as unrestricted access. Full signed message frames also include framing bytes beyond the recorded event size.
 
 Corrected Snort result: opens at 3241ms and 7602ms (4361ms apart), discovery at 7832ms and 7967ms, targeted delivery 126ms and 233ms after the opposite peer's submission. Both signals were accepted. This demonstrates successful delayed discovery with the probe's reply exchange; there was no paired no-reply control on the live relay, so it does not prove which messages Snort would otherwise retain.
+
+## Publication policy
+
+The SDK classifies NIP-01/NIP-42 rejection prefixes separately from the original reason text:
+
+| Prefix | Local behavior |
+| --- | --- |
+| `rate-limited` | Pause new writes for 30 seconds by default (`publicationCooldownMs`); keep reading and processing outstanding ACKs. Emit `publication_paused` / `publication_resumed`. |
+| `blocked`, `restricted`, `auth-required` | Stop writes for this bus session, keep reading, and request alternative relay paths. No automatic authentication. |
+| `mute`, `invalid`, `pow`, `error`, unknown | Reject that publication, keep the path eligible for future messages. No automatic replay. |
+
+The 30-second pause is a conservative local policy, not a measured relay cooldown or a server-supplied retry time. The relay set can queue fresh messages while paused (within its existing 256-entry bound), and sends them when a path becomes eligible. Rejected messages are not automatically replayed on the rejecting path; other opening paths can still carry the original message. All-path temporary pauses do not declare permanent exhaustion. Event-specific rejection does not prove later messages will succeed.
+
+An incoming NIP-42 `AUTH` message emits `authentication_challenge`, not `authentication_required`: a challenge alone does not establish that our operation is restricted. A subsequent `auth-required` rejection does. Challenges are observed without signing an AUTH response.
+
+[NIP-66](https://github.com/nostr-protocol/nips/blob/master/66.md) describes existing relay-monitor observations and explicitly allows measured policy to differ from NIP-11 metadata. Such data is a future source of candidates, not an implemented dependency or a trusted replacement for probing.

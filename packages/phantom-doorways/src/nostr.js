@@ -1,15 +1,22 @@
 import { verifyNostrEnvelope } from './nostr-crypto.js';
+export function classifyNostrRejection(reason='') {
+ const category=String(reason).split(':',1)[0].trim().toLowerCase();
+ return {category:category||'unknown',scope:category==='rate-limited'?'temporary':['blocked','restricted','auth-required'].includes(category)?'session':'event'};
+}
 /** Signed discovery/signaling bus. Does not elect leaders or confer room authority. */
 export function openNostrBus({roomId,identity,relays,WebSocket=globalThis.WebSocket,
- onAnnouncement=()=>{},onSignal=()=>{},onSync=()=>{},onStatus=()=>{},onError=()=>{}}) {
+ publicationCooldownMs=30000,onAnnouncement=()=>{},onSignal=()=>{},onSync=()=>{},onStatus=()=>{},onError=()=>{}}) {
+ if(!Number.isFinite(publicationCooldownMs)||publicationCooldownMs<=0)throw new TypeError('Positive publication cooldown required');
  if(!roomId || !identity?.sign || !Array.isArray(relays)||!relays.length)throw new TypeError('Room, signing identity and explicit relays required');
  const urls=relays.map(url=>{const u=new URL(url);if(!['ws:','wss:'].includes(u.protocol))throw new TypeError('WebSocket relay required');return u.href;});
  let socket,closed=false,generation=0,index=0,chain=Promise.resolve(),announcement=null,departureId=null,writeBlocked=false,announcementFingerprint=null,announcementAt=0;
+ let pausedUntil=0,pauseTimer;
  const seen=new Set(),pending=new Map();
  const subscription=`phantom-${crypto.randomUUID()}`;
  function status(type,detail={}){onStatus({type,...detail});}
  function publish(payload) {
   if(closed||socket?.readyState!==1)throw new Error('Relay is not open');
+  if(Date.now()<pausedUntil)throw new Error('Relay publication path temporarily rate-limited');
   if(writeBlocked)throw new Error('Relay publication path rejected for this session');
   const event=identity.sign(roomId,payload);pending.set(event.id,{event,sentAt:Date.now()});
   if(pending.size>256){pending.delete(event.id);throw new Error('Too many unacknowledged relay publications');}
@@ -36,13 +43,16 @@ export function openNostrBus({roomId,identity,relays,WebSocket=globalThis.WebSoc
      const {event,sentAt}=pending.get(packet[1]);
      const payload=JSON.parse(event.content);
      pending.delete(packet[1]);
-     status('publish',{url,ackMs:Date.now()-sentAt,eventBytes:new TextEncoder().encode(JSON.stringify(event)).length,eventId:packet[1],messageId:payload.messageId,packetType:payload.type,signalType:payload.control?.type,attemptId:payload.control?.sysAttemptId,from:payload.control?.from,to:payload.control?.to,accepted:packet[2]===true,reason:packet[3]});
-     if(packet[2]===false&&!writeBlocked){writeBlocked=true;pending.clear();status('write_blocked',{url,reason:packet[3]??'publication_rejected'});}
-     if(packet[1]===departureId){closed=true;generation++;current.close();pending.clear();}
+     const rejection=packet[2]===false?classifyNostrRejection(packet[3]):null;
+     status('publish',{url,...(rejection?{rejectionCategory:rejection.category,rejectionScope:rejection.scope}:{}),ackMs:Date.now()-sentAt,eventBytes:new TextEncoder().encode(JSON.stringify(event)).length,eventId:packet[1],messageId:payload.messageId,packetType:payload.type,signalType:payload.control?.type,attemptId:payload.control?.sysAttemptId,from:payload.control?.from,to:payload.control?.to,accepted:packet[2]===true,reason:packet[3]});
+     if(closed||token!==generation)return;
+     if(rejection?.scope==='session'&&!writeBlocked){writeBlocked=true;clearTimeout(pauseTimer);status('write_blocked',{url,category:rejection.category,reason:packet[3]??'publication_rejected'});}
+     if(rejection?.scope==='temporary'&&!writeBlocked){pausedUntil=Date.now()+publicationCooldownMs;clearTimeout(pauseTimer);pauseTimer=setTimeout(()=>{if(closed||token!==generation||writeBlocked)return;pausedUntil=0;status('publication_resumed',{url});},publicationCooldownMs);status('publication_paused',{url,reason:packet[3],retryAfterMs:publicationCooldownMs});}
+     if(packet[1]===departureId){clearTimeout(pauseTimer);closed=true;generation++;current.close();pending.clear();}
      return;
     }
     if(packet[0]==='NOTICE'){status('notice',{url,reason:packet[1]});return;}
-    if(packet[0]==='AUTH'){status('authentication_required',{url});return;}
+    if(packet[0]==='AUTH'){status('authentication_challenge',{url});return;}
     if(packet[1]!==subscription)return;
     if(packet[0]==='EOSE'){onSync();return;} // Subscription remains open.
     if(packet[0]==='CLOSED'){status('subscription_closed',{reason:packet[2]});current.close();return;}
@@ -58,15 +68,15 @@ export function openNostrBus({roomId,identity,relays,WebSocket=globalThis.WebSoc
    }).catch(onError);
   };
   current.onerror=()=>current.close();
-  current.onclose=()=>{if(closed||token!==generation)return;pending.clear();status('closed',{url});if(departureId){closed=true;return;}connect();};
+  current.onclose=()=>{if(closed||token!==generation)return;clearTimeout(pauseTimer);pausedUntil=0;pending.clear();status('closed',{url});if(departureId){closed=true;return;}connect();};
  }
  connect();
  return {
-  announce(fields={}){const next={...fields,type:'ANNOUNCEMENT'},fingerprint=JSON.stringify(next);const changed=fingerprint!==announcementFingerprint;announcement=next;announcementFingerprint=fingerprint;if(!writeBlocked&&socket?.readyState===1&&(changed||Date.now()-announcementAt>=15000)){announcementAt=Date.now();return publish(announcement);}},
+  announce(fields={}){const next={...fields,type:'ANNOUNCEMENT'},fingerprint=JSON.stringify(next);const changed=fingerprint!==announcementFingerprint;announcement=next;announcementFingerprint=fingerprint;if(!writeBlocked&&Date.now()>=pausedUntil&&socket?.readyState===1&&(changed||Date.now()-announcementAt>=15000)){announcementAt=Date.now();return publish(announcement);}},
   sendSignal(target,control,messageId=crypto.randomUUID()){return publish({messageId,type:'SIGNAL',targetNostrKey:target.nostrKey,targetS7pKey:target.s7pPublicKey,control});},
-  depart(fields){if(closed)return;if(writeBlocked||socket?.readyState!==1){closed=true;generation++;socket?.close();pending.clear();return;}departureId=publish({...fields,type:'ANNOUNCEMENT',departed:true});},
-  reconnect(){if(closed)throw new Error('Bus closed');generation++;socket?.close();pending.clear();index=0;connect();},
-  close(){if(closed)return;closed=true;generation++;if(socket?.readyState===1)socket.send(JSON.stringify(['CLOSE',subscription]));socket?.close();pending.clear();seen.clear();}
+  depart(fields){if(closed)return;clearTimeout(pauseTimer);if(writeBlocked||Date.now()<pausedUntil||socket?.readyState!==1){closed=true;generation++;socket?.close();pending.clear();return;}departureId=publish({...fields,type:'ANNOUNCEMENT',departed:true});},
+  reconnect(){if(closed)throw new Error('Bus closed');generation++;clearTimeout(pauseTimer);pausedUntil=0;socket?.close();pending.clear();index=0;connect();},
+  close(){if(closed)return;closed=true;generation++;clearTimeout(pauseTimer);if(socket?.readyState===1)socket.send(JSON.stringify(['CLOSE',subscription]));socket?.close();pending.clear();seen.clear();}
  };
 }
 
@@ -86,10 +96,12 @@ export function openNostrRelaySet(config) {
    onStatus:s=>{
     if(closed)return;
     if(s.type==='open'){if(blocked.has(url)){config.onStatus?.({...s,type:'relay_open',readOnly:true});return;}const first=open.size===0;open.add(url);config.onStatus?.({...s,type:first?'open':'relay_open'});for(const p of publications.values())submit(child,url,p);}
+    else if(s.type==='publication_paused'){open.delete(url);config.onStatus?.(s);}
+    else if(s.type==='publication_resumed'){if(!blocked.has(url)){open.add(url);for(const p of publications.values())submit(child,url,p);}config.onStatus?.(s);}
     else if(s.type==='write_blocked'){blocked.add(url);open.delete(url);config.onStatus?.(s);if(blocked.size+ [...exhausted].filter(value=>!blocked.has(value)).length===urls.length){publications.clear();config.onStatus?.({type:'exhausted',reason:'all_publication_paths_rejected'});}}
     else if(s.type==='closed'){open.delete(url);config.onStatus?.({...s,type:'relay_closed'});}
     else if(s.type==='exhausted'){exhausted.add(url);config.onStatus?.({...s,type:'relay_exhausted',url});if(new Set([...blocked,...exhausted]).size===urls.length)config.onStatus?.({type:'exhausted'});}
-    else {if(s.type==='publish'&&s.accepted&&s.messageId)publications.delete(s.messageId);config.onStatus?.({...s,url});}
+    else {if(s.type==='publish'&&s.messageId){const p=publications.get(s.messageId);if(s.accepted||(p&&urls.every(value=>p.attempted.has(value)||blocked.has(value)||exhausted.has(value))))publications.delete(s.messageId);}config.onStatus?.({...s,url});}
    }
   });children.push(child);if(announced)child.announce(announced);
  }

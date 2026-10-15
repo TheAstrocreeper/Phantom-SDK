@@ -19,7 +19,7 @@ function relays(){
   constructor(url){this.url=url;this.readyState=0;Socket.all.push(this);queueMicrotask(()=>{this.readyState=1;this.onopen?.();});}
   send(raw){const p=JSON.parse(raw);if(p[0]==='REQ'){this.subscription=p[1];return;}if(p[0]!=='EVENT')return;
    const event=p[1],accepted=!Socket.rejected.has(this.url+':'+event.pubkey);
-   queueMicrotask(()=>{this.onmessage?.({data:JSON.stringify(['OK',event.id,accepted,accepted?'':'rate limited'])});
+   queueMicrotask(()=>{this.onmessage?.({data:JSON.stringify(['OK',event.id,accepted,accepted?'':'rate-limited: test relay policy'])});
     if(accepted)for(const socket of Socket.all)if(socket.url===this.url&&socket.readyState===1&&socket.subscription)socket.onmessage?.({data:JSON.stringify(['EVENT',socket.subscription,event])});
    });
   }

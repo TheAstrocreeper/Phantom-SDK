@@ -30,7 +30,7 @@ export function createNostrDoorway({identity,relays,WebSocket=globalThis.WebSock
   }
   function announce() {if(own&&!closed)bus.announce({row:own,...(refreshRelays?{relays:sharedRelays}:{}),discoveryEpoch:epoch,...(authorityHint?.from===peerId?{authorityHint}: {})});}
   bus=busFactory({roomId,identity,relays,WebSocket,onError,
-   onStatus:s=>{if(closed)return;onStatus(s);sessionStatus(s);if(s.type==='publish')onPublication({id:s.messageId??s.eventId,state:s.accepted?'accepted':'rejected',surface:s.url,reason:s.reason});if(s.type==='write_blocked')prepareAlternatives();if(s.type==='open')onOpen();if(s.type==='exhausted')onClose({code:1006,reason:'nostr_relays_exhausted',wasClean:false});},
+   onStatus:s=>{if(closed)return;onStatus(s);sessionStatus(s);if(s.type==='publish')onPublication({id:s.messageId??s.eventId,state:s.accepted?'accepted':'rejected',surface:s.url,reason:s.reason});if(s.type==='write_blocked'||s.type==='publication_paused')prepareAlternatives();if(s.type==='open')onOpen();if(s.type==='exhausted')onClose({code:1006,reason:'nostr_relays_exhausted',wasClean:false});},
    onSync:()=>{if(!closed)roster();}, // Open already publishes the cached announcement.
    onAnnouncement:p=>{
     if(closed||!p.row)return;

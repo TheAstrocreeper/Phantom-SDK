@@ -70,7 +70,7 @@ test('relay set stops rejected path while remaining writer carries signaling',as
  const set=openNostrRelaySet({roomId:'room',identity,relays:['wss://bad.example','wss://good.example'],WebSocket:Socket,onStatus:s=>statuses.push(s)});
  try{
   set.announce({row:{bootId:'a'}});await turn();const [bad,good]=Socket.all;
-  const event=bad.sent.find(p=>p[0]==='EVENT')[1];bad.receive(['OK',event.id,false,'rate-limited']);await turn();
+  const event=bad.sent.find(p=>p[0]==='EVENT')[1];bad.receive(['OK',event.id,false,'restricted']);await turn();
   const count=bad.sent.length;set.sendSignal({nostrKey:remote.nostrKey,s7pPublicKey:remote.publicKey},{type:'rtc_offer'});
   assert.equal(bad.sent.length,count);assert.ok(good.sent.some(p=>p[0]==='EVENT'&&JSON.parse(p[1].content).type==='SIGNAL'));
   assert.equal(statuses.some(s=>s.type==='exhausted'),false);
@@ -78,4 +78,58 @@ test('relay set stops rejected path while remaining writer carries signaling',as
   assert.ok(statuses.some(s=>s.type==='exhausted'&&s.reason==='all_publication_paths_rejected'));
   assert.throws(()=>set.sendSignal({},{}),/No open/);
  }finally{set.close();}
+});
+test('event-specific rejections preserve later writes and expose machine-readable categories',async()=>{
+ for(const category of ['mute','invalid','pow','error','unknown']){
+  const Socket=sockets(),identity=createNostrIdentity(),statuses=[];
+  const bus=openNostrBus({roomId:'room',identity,relays:['wss://relay.example'],WebSocket:Socket,onStatus:s=>statuses.push(s)});
+  try{bus.announce({row:{bootId:'a'}});await turn();const socket=Socket.all[0];
+   socket.receive(['OK',socket.sent.find(p=>p[0]==='EVENT')[1].id,false,`${category}: test`]);await turn();
+   assert.doesNotThrow(()=>bus.sendSignal({nostrKey:identity.nostrKey,s7pPublicKey:identity.publicKey},{type:'test'}));
+   assert.equal(statuses.some(s=>s.type==='write_blocked'),false);
+   assert.ok(statuses.some(s=>s.type==='publish'&&s.rejectionCategory===category&&s.rejectionScope==='event'));
+  }finally{bus.close();}
+ }
+});
+test('rate limit pauses writes, keeps ACK/read processing, then permits fresh messages without replay',async()=>{
+ const Socket=sockets(),identity=createNostrIdentity(),statuses=[];
+ const bus=openNostrBus({roomId:'room',identity,relays:['wss://relay.example'],publicationCooldownMs:30,WebSocket:Socket,onStatus:s=>statuses.push(s)});
+ try{bus.announce({row:{bootId:'a'}});await turn();const socket=Socket.all[0],target={nostrKey:identity.nostrKey,s7pPublicKey:identity.publicKey};
+  const second=bus.sendSignal(target,{type:'test'});
+  socket.receive(['OK',socket.sent.find(p=>p[0]==='EVENT')[1].id,false,'rate-limited: slow down']);await turn();
+  assert.throws(()=>bus.sendSignal(target,{}),/temporarily/);
+  socket.receive(['OK',second,true,'']);await turn();assert.ok(statuses.some(s=>s.eventId===second&&s.accepted));
+  assert.equal(socket.readyState,1);assert.equal(statuses.some(s=>s.type==='write_blocked'),false);
+  await new Promise(r=>setTimeout(r,45));assert.ok(statuses.some(s=>s.type==='publication_resumed'));
+  assert.equal(socket.sent.filter(p=>p[0]==='EVENT').length,2,'cooldown does not replay rejected messages');
+  bus.sendSignal(target,{type:'fresh'});assert.equal(socket.sent.filter(p=>p[0]==='EVENT').length,3);
+ }finally{bus.close();}
+});
+test('AUTH challenge alone does not block writes or claim authentication is required',async()=>{
+ const Socket=sockets(),identity=createNostrIdentity(),statuses=[];
+ const bus=openNostrBus({roomId:'room',identity,relays:['wss://relay.example'],WebSocket:Socket,onStatus:s=>statuses.push(s)});
+ try{await turn();const socket=Socket.all[0];socket.receive(['AUTH','challenge']);await turn();
+  assert.ok(statuses.some(s=>s.type==='authentication_challenge'));assert.equal(statuses.some(s=>s.type==='authentication_required'),false);
+  assert.doesNotThrow(()=>bus.announce({row:{bootId:'a'}}));
+  const event=socket.sent.find(p=>p[0]==='EVENT')[1];socket.receive(['OK',event.id,false,'auth-required: authenticate']);await turn();
+  assert.ok(statuses.some(s=>s.type==='write_blocked'&&s.category==='auth-required'));
+ }finally{bus.close();}
+});
+test('paused relay set queues fresh work and resumes without replaying rejected signaling',async()=>{
+ const Socket=sockets(),identity=createNostrIdentity(),statuses=[];
+ const set=openNostrRelaySet({roomId:'room',identity,relays:['wss://relay.example'],publicationCooldownMs:30,WebSocket:Socket,onStatus:s=>statuses.push(s)});
+ try{await turn();const socket=Socket.all[0],target={nostrKey:identity.nostrKey,s7pPublicKey:identity.publicKey};
+  const rejected=set.sendSignal(target,{type:'old'}),event=socket.sent.find(p=>p[0]==='EVENT')[1];socket.receive(['OK',event.id,false,'rate-limited: pause']);await turn();
+  const fresh=set.sendSignal(target,{type:'fresh'});assert.equal(socket.sent.filter(p=>p[0]==='EVENT').length,1);
+  assert.equal(statuses.some(s=>s.type==='exhausted'),false);
+  await new Promise(r=>setTimeout(r,45));const messages=socket.sent.filter(p=>p[0]==='EVENT').map(p=>JSON.parse(p[1].content).messageId);
+  assert.deepEqual(messages,[rejected,fresh]);
+ }finally{set.close();}
+});
+test('closing from rejection callback cannot install a cooldown timer afterwards',async()=>{
+ const Socket=sockets(),identity=createNostrIdentity(),statuses=[];
+ const bus=openNostrBus({roomId:'room',identity,relays:['wss://relay.example'],WebSocket:Socket,onStatus:s=>{statuses.push(s);if(s.type==='publish'&&!s.accepted)bus.close();}});
+ bus.announce({row:{bootId:'a'}});await turn();const socket=Socket.all[0];
+ socket.receive(['OK',socket.sent.find(p=>p[0]==='EVENT')[1].id,false,'rate-limited: pause']);await turn();
+ assert.equal(socket.readyState,3);assert.equal(statuses.some(s=>s.type==='publication_paused'),false);
 });
