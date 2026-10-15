@@ -46,10 +46,14 @@ try {
     }
   }, {}, { timeout: 6e4 });
   const state = (p) => p.locator("#state").textContent().then(JSON.parse), receiverId = (await state(receiver)).state.peerId;
-  await source.locator("#target").fill(receiverId);
+  assert.equal(await receiver.locator("#publish").isDisabled(),true,"joining peer cannot publish without admin key");
+  assert.equal(await source.locator("#publish").isEnabled(),true,"creator can publish");
+  await source.locator("#target").selectOption("");
+  assert.equal(await source.locator("#send").isDisabled(),true,"blank target cannot submit");
+  await source.locator("#target").selectOption(receiverId);
   await source.locator("#text").fill("native-page-message");
   await source.locator("#send").click();
-  await receiver.waitForFunction(() => document.querySelector("#log").textContent.includes("native-page-message"));
+  await receiver.waitForFunction(() => document.querySelector("#messages").textContent.includes("native-page-message"));
   const bytes = Buffer.from(Array.from({ length: 262144 }, (_, i) => (i * 31 + (i >>> 8) + 17) % 256)), expected = createHash("sha256").update(bytes).digest("hex");
   await source.locator(`#peers input[value="${receiverId}"]`).check();
   await source.locator("#file").setInputFiles({ name: "fixture.bin", mimeType: "application/octet-stream", buffer: bytes });
