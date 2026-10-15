@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import http from "node:http";
 import { readFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
@@ -8,20 +9,21 @@ const bundle = readFileSync(new URL("./dist/app.js", import.meta.url), "utf8"), 
 const server = await startServer(bundle, () => {
 }), output = new URL("./reports/",import.meta.url).pathname;
 mkdirSync(output,{recursive:true});
+const appServer=http.createServer((req,res)=>{res.setHeader("Content-Type",req.url==="/app.js"?"text/javascript":"text/html");res.end(req.url==="/app.js"?bundle:html);});
+await new Promise(resolve=>appServer.listen(0,"127.0.0.1",resolve));
+const appUrl=`http://127.0.0.1:${appServer.address().port}`;
 let browser;
 const pages = [];
 try {
   browser = await chromium.launch({ headless: true, ...process.env.PHANTOM_CHROMIUM_PATH ? { executablePath: process.env.PHANTOM_CHROMIUM_PATH } : {}, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
   for (let i = 0; i < 3; i++) {
     const context = await browser.newContext({ acceptDownloads: true });
-    await context.route("**/", (r) => r.fulfill({ contentType: "text/html", body: html }));
-    await context.route("**/app.js", (r) => r.fulfill({ contentType: "text/javascript", body: bundle }));
     const p = await context.newPage();
     p.on("console",m=>{if(m.type()==="error")console.error("browser:",m.text());});
     p.on("pageerror", (e) => {
       throw e;
     });
-    await p.goto(server.url);
+    await p.goto(appUrl);
     await p.locator("#doorway").fill(server.url.replace("http:", "ws:"));
     await p.locator("#rtc").fill('{"iceServers":[]}');
     await p.locator("#name").fill("peer-" + i);
@@ -86,4 +88,5 @@ try {
 } finally {
   await browser?.close();
   await server.close();
+  await new Promise(resolve=>appServer.close(resolve));
 }
