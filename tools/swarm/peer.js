@@ -12,7 +12,7 @@ const signaling=observeSignaling(globalThis.WebSocket,log);
 const sha=async bytes=>Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),b=>b.toString(16).padStart(2,'0')).join('');
 function watch(n){
  network=n;
- for(const type of ['distributionJob','distributionJobFailed','distributionConnectionFailed','distributionProgress','distributionError','distributionConnectionOpened','distributionConnectionClosed','distributionAdminChecked','distributionFileEvent','controlError'])n.on(type,data=>{
+ for(const type of ['distributionChunkTrace','distributionJob','distributionJobFailed','distributionConnectionFailed','distributionProgress','distributionError','distributionConnectionOpened','distributionConnectionClosed','distributionAdminChecked','distributionFileEvent','controlError'])n.on(type,data=>{
   if(type==='distributionProgress'){const p=progress[data.id]??={received:0,bySource:{}};p.received=Object.values(p.bySource).reduce((sum,n)=>sum+n,0)+1;p.total=data.total;p.bySource[data.from]=(p.bySource[data.from]??0)+1;}
   if(type.endsWith('Error'))errors.push({type,...data});
   void log(type,data);
@@ -28,7 +28,7 @@ function options(){return {name,timeoutMs:admissionTimeout,onState:state=>{lastS
 globalThis.swarm={
  async open({label,invite,timeoutMs,transport,batchSize=8}){
   name=label;admissionTimeout=timeoutMs??60000;if(!invite)admin=await createAdminIdentity();
-  const sdk=createBrowserPhantom({...(admin?{adminIdentity:admin}:{}),distribution:{batchSize,maxConnections:3},runtime:{crypto,RTCPeerConnection:ObservedRTC,setTimeout,clearTimeout,setInterval,clearInterval,timerTarget:globalThis,localStorage},WebSocket:signaling.WebSocket,onRelayProgress:data=>void log('relay.discovery',data),onDoorwayStatus:data=>void log('doorway.status',data),doorways:transport?.doorways??[{type:'harness'}],adapters:{harness:()=>adaptWebSocketDoorway(createWebSocketDoorway({url:location.origin.replace('http:','ws:')+'/',WebSocket:signaling.WebSocket}))}});
+  const sdk=createBrowserPhantom({...(admin?{adminIdentity:admin}:{}),distribution:{batchSize,maxConnections:3,traceChunks:true},runtime:{crypto,RTCPeerConnection:ObservedRTC,setTimeout,clearTimeout,setInterval,clearInterval,timerTarget:globalThis,localStorage},WebSocket:signaling.WebSocket,onRelayProgress:data=>void log('relay.discovery',data),onDoorwayStatus:data=>void log('doorway.status',data),doorways:transport?.doorways??[{type:'harness'}],adapters:{harness:()=>adaptWebSocketDoorway(createWebSocketDoorway({url:location.origin.replace('http:','ws:')+'/',WebSocket:signaling.WebSocket}))}});
   watch(await (invite?sdk.join(invite,options()):sdk.create(options())));
   return {invite:network.invite,peerId:network.getState().peerId,networkId:network.networkId,doorways:parseInvite(network.invite).doorways};
  },

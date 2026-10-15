@@ -14,6 +14,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
   const state=()=>core.getState(),self=()=>state().peerId,leader=()=>state().leader;
   const isLeader=()=>state().role==='syscon1'&&leader()===self();
   const fire=(type,payload)=>{for(const fn of listeners)fn({type,payload});};
+  function traceChunk(payload){if(options.traceChunks===true)emit('distributionChunkTrace',payload);}
   function error(error){if(!closed)emit('distributionError',{error:error.message});}
   function frame(to,body){if(closed||!self()||!leader())return;const packet={networkId,from:self(),to,body};if(to===self()){void handle(self(),packet).catch(error);return;}core.command('PHANTOM_DIST_SEND',{to:isLeader()?to:leader(),frame:packet});}
   // The facade supplies the committed roster projection. Reading it never changes it.
@@ -33,6 +34,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
     const link=[...links.values()].find(l=>l.peer===payload.to&&l.job.asset===payload.file?.id&&
       (receiving?l.job.receiver:l.job.source)===self()&&l.dc?.readyState==='open'&&
       (payload.file?.index===undefined||l.job.indexes.includes(payload.file.index)));
+    if(type==='SEND_FILE_BIN_CHUNK'||type==='SEND_DM'&&['PHANTOM_FILE_REQUEST','PHANTOM_FILE_MISSING'].includes(payload.sys))traceChunk({direction:'send',kind:type==='SEND_FILE_BIN_CHUNK'?'binary':payload.sys,jobId:link?.job.id??null,peer:payload.to,index:payload.file?.index,available:!!link});
     if(!link){
       // A source read may finish after its job/channel was retired. Settle the
       // file service's send immediately so its per-peer queue can keep moving.
@@ -65,11 +67,11 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
   function bind(link,dc){if(dc.label!=='phantom-distribution'){dc.close();return;}link.dc=dc;dc.binaryType='arraybuffer';
     dc.onopen=()=>{if(links.get(link.job.id)!==link)return;emit('distributionConnectionOpened',{jobId:link.job.id,peer:link.peer});if(link.job.source===self()&&link.job.needsManifest)void files.share(link.peer,link.job.asset).catch(error);else if(link.job.receiver===self()&&!link.started){try{files.getManifest(link.job.asset);link.started=true;void receive(link).catch(error);}catch{}}};
     dc.onmessage=event=>{if(links.get(link.job.id)!==link||!allowed(link.job.asset,assets.get(link.job.asset)?.distributionId))return;
-      if(event.data instanceof ArrayBuffer){const file=link.binary;link.binary=null;if(file?.id===link.job.asset)fire('FILE_BIN_CHUNK',{from:link.peer,file,bytes:event.data});return;}
+      if(event.data instanceof ArrayBuffer){const file=link.binary;link.binary=null;if(file?.id===link.job.asset){traceChunk({direction:'receive',kind:'binary',jobId:link.job.id,peer:link.peer,index:file.index});fire('FILE_BIN_CHUNK',{from:link.peer,file,bytes:event.data});}return;}
       let m;try{m=JSON.parse(event.data);}catch{return;}
       if(m.file?.id!==link.job.asset)return;
       if(m.kind==='binary')link.binary=m.file;
-      else if(m.kind==='message')fire('INCOMING_MSG',{from:link.peer,sys:m.sys,file:m.file});
+      else if(m.kind==='message'){if(['PHANTOM_FILE_REQUEST','PHANTOM_FILE_MISSING'].includes(m.sys))traceChunk({direction:'receive',kind:m.sys,jobId:link.job.id,peer:link.peer,index:m.file.index});fire('INCOMING_MSG',{from:link.peer,sys:m.sys,file:m.file});}
     };
     dc.onclose=()=>{if(links.get(link.job.id)===link){
       const interrupted=link.job.receiver===self()&&!link.completed;
