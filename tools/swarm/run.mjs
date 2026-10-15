@@ -118,7 +118,7 @@ async function earlySuccessorScenario(){
    await kill(leader);
    const evidence=await poll(async()=>{
     retained=handoffEvents.find(e=>e.type==='SYS_SUCCESSOR_OFFER'&&e.payload.action==='held'&&receivers.some(c=>c.label===e.peer));
-    ice=retained&&handoffEvents.find(e=>e.type==='ICE_TRACE'&&e.peer===retained.peer&&e.payload.stage==='successor_held'&&e.payload.attemptId===retained.payload.attemptId);
+    ice=retained&&handoffEvents.find(e=>e.type==='ICE_TRACE'&&e.peer===retained.peer&&e.payload.stage==='buffered_deferred'&&e.payload.attemptId===retained.payload.attemptId);
     return {ok:!!(retained&&ice),evidence:{retained,ice}};
    },'native offer and ICE retained before old pipe loss');
    const receiver=receivers.find(c=>c.label===retained.peer),snapshot=await receiver.page.evaluate(()=>swarm.inspect());
