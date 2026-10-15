@@ -3,10 +3,10 @@ import assert from 'node:assert/strict';
 import {createPhantomEntry} from '../packages/phantom-core/src/entry.js';
 import {createInvite} from '../packages/phantom-core/src/invite.js';
 const tick=()=>new Promise(setImmediate);
-function fixture(){
+function fixture(rtcDiagnostics){
  let state={state:'recovering',role:'peer',reason:'waiting_for_system_connection'},disposed=0;
  const listeners=new Set(),events=new Set();
- const core={getState:()=>state,snapshot:()=>({}),onState(fn){listeners.add(fn);return()=>listeners.delete(fn);},onEvent(fn){events.add(fn);return()=>events.delete(fn);},async join(){},command(){},dispose(){disposed++;listeners.clear();events.clear();}};
+ const core={getState:()=>state,snapshot:()=>({rtcDiagnostics}),onState(fn){listeners.add(fn);return()=>listeners.delete(fn);},onEvent(fn){events.add(fn);return()=>events.delete(fn);},async join(){},command(){},dispose(){disposed++;listeners.clear();events.clear();}};
  const sdk=createPhantomEntry({relays:['wss://relay.example'],openContext:async()=>({}),coreFactory:()=>core});
  const invite=createInvite({relays:['wss://relay.example']});
  return {sdk,invite,get disposed(){return disposed},get listeners(){return listeners.size},update(next){state=next;for(const fn of [...listeners])fn(state);}};
@@ -24,4 +24,17 @@ test('native/core failed state terminates pending admission and disposes it',asy
 });
 test('caller explicitly requesting a deadline can still cancel its join',async t=>{
  t.mock.timers.enable({apis:['setTimeout']});const f=fixture();const p=f.sdk.join(f.invite,{timeoutMs:10});const rejected=assert.rejects(p,/Network admission timed out/);await tick();t.mock.timers.tick(11);await rejected;assert.equal(f.disposed,1);
+});
+
+test('admission timeout retains browser RTC evidence before disposal without inferring a cause',async t=>{
+ t.mock.timers.enable({apis:['setTimeout']});
+ const rtc={connections:[{events:[{reason:'ice_candidate_error',detail:{errorCode:401,errorText:'Unauthorized.',url:'turn:relay.example:3478'}}]}]},f=fixture(rtc);
+ const p=f.sdk.join(f.invite,{timeoutMs:10});
+ const rejected=assert.rejects(p,error=>{assert.equal(error.code,'ADMISSION_TIMEOUT');assert.equal(error.message,'Network admission timed out');assert.deepEqual(error.diagnostics,{state:{state:'recovering',role:'peer',reason:'waiting_for_system_connection'},rtc});return true;});
+ await tick();t.mock.timers.tick(10);await rejected;assert.equal(f.disposed,1);assert.equal(f.listeners,0);
+});
+test('admission timeout permits absent RTC evidence',async t=>{
+ t.mock.timers.enable({apis:['setTimeout']});const f=fixture(),p=f.sdk.join(f.invite,{timeoutMs:10});
+ const rejected=assert.rejects(p,error=>{assert.equal(error.code,'ADMISSION_TIMEOUT');assert.equal(error.diagnostics.rtc,null);return true;});
+ await tick();t.mock.timers.tick(10);await rejected;assert.equal(f.disposed,1);
 });

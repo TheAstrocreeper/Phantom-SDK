@@ -94,8 +94,12 @@ try{
    else bad.iceServers[0].credential=crypto.randomUUID();
    const start=events.length;
    try{
-    const failure=await page.evaluate(async args=>{try{await contracts.open(args);return null;}catch(error){return error.message;}},{label,invite:source.invite,rtcConfiguration:bad,timeoutMs:15000});
-    assert.equal(failure,'Network admission timed out');
+    const failure=await page.evaluate(async args=>{try{await contracts.open(args);return null;}catch(error){return {message:error.message,code:error.code,diagnostics:error.diagnostics};}},{label,invite:source.invite,rtcConfiguration:bad,timeoutMs:15000});
+    assert.equal(failure.message,'Network admission timed out');
+    assert.equal(failure.code,'ADMISSION_TIMEOUT');
+    assert.ok(failure.diagnostics.rtc.connections.length>0,'rejected join retains native RTC diagnostics');
+    const iceErrors=failure.diagnostics.rtc.connections.flatMap(c=>c.events.filter(e=>e.reason==='ice_candidate_error').map(e=>e.detail));
+    if(fault==='credentials')assert.ok(iceErrors.some(e=>e.errorCode===401),'browser reports rejected TURN credentials');
     const failed=await page.evaluate(()=>contracts.inspect()),attempt=events.slice(start).filter(e=>e.peer===label);
     assert.ok(attempt.some(e=>e.type==='rtc.created'&&e.data.policy==='relay'),'failed attempt constructs real relay-only RTC');
     assert.equal(attempt.some(e=>e.type==='sdk.state'&&e.data.state==='admitted'),false,'failed TURN must never admit');

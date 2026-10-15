@@ -75,13 +75,16 @@ export function createPhantomEntry({openContext, relays, doorways, adminPublicKe
         const check=state=>{if(retired)finish(new Error('Network permanently retired'));else if(['failed','closed'].includes(state.state))finish(new Error(state.reason));else if(storageReady&&state.state==='admitted')finish();};
         const abort=()=>finish(new Error('Join aborted'));
         // Only a caller-requested cancellation deadline may end this wait.
-        const timer=timeoutMs===null?null:setTimeout(()=>finish(new Error('Network admission timed out')),timeoutMs);
+        const timer=timeoutMs===null?null:setTimeout(()=>finish(Object.assign(new Error('Network admission timed out'),{code:'ADMISSION_TIMEOUT'})),timeoutMs);
         off=core.onState(check);signal?.addEventListener('abort',abort,{once:true});
         if(signal?.aborted){abort();return;}
         Promise.resolve().then(()=>core.join({roomId:context.networkId,name,identity:config.identity})).then(async()=>{await distribution?.restore();storageReady=true;return waitForAdmission?check(core.getState()):finish();}).catch(finish);
       });
       return network;
-    } catch(error){network.close();throw error;}
+    } catch(error){
+      if(error?.code==='ADMISSION_TIMEOUT')error.diagnostics={state:core.getState(),rtc:core.snapshot()?.rtcDiagnostics??null};
+      network.close();throw error;
+    }
   }
   return {join:(invite,options)=>start(invite,options,true),create:options=>start(createInvite({relays,doorways,adminPublicKey}),options,false),
     startCreated:(invite,options)=>start(invite,options,false)};

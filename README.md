@@ -60,6 +60,8 @@ Supply the configuration locally on each browser instance; it is not carried in 
 
 When omitted, existing behavior is preserved: system and messaging connections use `stun:stun.l.google.com:19302`; distribution uses its existing `distribution.rtcConfiguration`, or `{}`. An explicit top-level configuration takes precedence for all three connection types, including an explicit `{}` with no configured ICE servers. Existing distribution-only configuration remains supported when the top-level option is omitted. Lower-level `createPhantom` callers can also supply `rtcConfiguration` for system and messaging connections.
 
+A caller-requested admission deadline rejects with `error.code === "ADMISSION_TIMEOUT"` and the existing `Network admission timed out` message. `error.diagnostics` retains `{state, rtc}` captured before cleanup; `rtc` is the existing bounded native RTC history (or `null` when unavailable). Its connection events include browser ICE error codes, text and server URLs when reported. A timeout alone does not identify a TURN, signaling or authority failure. Diagnostics can contain network addresses; review before sharing. No RTC credentials are added.
+
 ## Messaging lifecycle
 
 Messaging remains manual by default: applications call `invitePeer` and `acceptPeer`. Applications that want messaging connections between all admitted members can explicitly opt in:
