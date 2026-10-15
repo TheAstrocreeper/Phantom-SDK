@@ -6,7 +6,7 @@ import {COMPATIBILITY_WIRE} from '../../packages/phantom-core/src/compatibility.
 // Test-only durable storage; reloads use the browser's real IndexedDB backend.
 const db=await new Promise((resolve,reject)=>{const r=indexedDB.open('phantom-contracts',1);r.onupgradeneeded=()=>{r.result.createObjectStore('chunks');r.result.createObjectStore('records');};r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);});
 function stored(table,mode,action){return new Promise((resolve,reject)=>{const tx=db.transaction(table,mode),r=action(tx.objectStore(table));tx.oncomplete=()=>resolve(r.result);tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error??Error('Storage transaction aborted'));});}
-let network,interrupted=false,interrupt=false;
+let network,lastState,lastSnapshot,lastSnapshotAt=0,interrupted=false,interrupt=false;
 const trace=[],messages=[],connections=[],errors=[],native=new Set();
 const log=(type,data)=>{void globalThis.harnessLog({type,data});};
 class RTC extends RTCPeerConnection{
@@ -28,7 +28,7 @@ globalThis.contracts={
    distribution:{chunkStore,batchSize:1,maxConnections:1,intervalMs:50,traceChunks:true},
    runtime:{crypto,RTCPeerConnection:RTC,setTimeout,clearTimeout,setInterval,clearInterval,localStorage},
    doorways:[{type:'harness'}],adapters:{harness:()=>adaptWebSocketDoorway(createWebSocketDoorway({url:location.origin.replace('http:','ws:')+'/' }))}});
-  const options={name:label,timeoutMs:60000,onState:state=>log('sdk.state',state),onEvent:e=>{if(e.type!=='SNAPSHOT')log('sdk.event',e);}};
+  const options={name:label,timeoutMs:60000,onState:state=>{lastState=state;log('sdk.state',state);},onEvent:e=>{if(e.type==='SNAPSHOT'){lastSnapshot=e.payload;if(Date.now()-lastSnapshotAt<1000)return;lastSnapshotAt=Date.now();}log('sdk.event',e);}};
   network=await(invite?sdk.join(invite,options):sdk.create(options));
   for(const type of ['distributionChunkTrace','distributionJob','distributionJobFailed','distributionRestored','distributionRestoreRejected','distributionComplete','distributionError','peerConnection'])network.on(type,data=>{
    if(type==='distributionChunkTrace')trace.push(data);
@@ -39,7 +39,7 @@ globalThis.contracts={
   network.on('message',data=>messages.push(data));
   return {peerId:network.getState().peerId,invite:network.invite};
  },
- inspect(){return {state:network.getState(),connections:network.getPeerConnections(),connectionEvents:connections,distribution:network.getDistributionState(),trace,messages,errors,interrupted};},
+ inspect(){return {state:network?.getState()??lastState,snapshot:network?.snapshot()??lastSnapshot,connections:network?.getPeerConnections()??[],connectionEvents:connections,distribution:network?.getDistributionState(),trace,messages,errors,interrupted};},
  send({to,text}){network.send(to,text);},
  breakMessaging(){let closed=0;for(const pc of native)if(pc.chat?.readyState==='open'){pc.chat.close();closed++;}if(!closed)throw Error('No native messaging channel found');return closed;},
  armPartial(){interrupt=true;},
