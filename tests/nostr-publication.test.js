@@ -161,3 +161,19 @@ test('cooldown with only expired work does not create a discovery retry loop',as
   assert.equal(socket.sent.filter(p=>p[0]==='EVENT').length,1);assert.ok(statuses.some(s=>s.type==='signal_expired'));assert.ok(statuses.some(s=>s.type==='publication_resumed'));
  }finally{set.close();}
 });
+
+test('expired unacknowledged publications release bus capacity and late ACKs cannot block fresh writes',async()=>{
+ const Socket=sockets(),statuses=[],errors=[];let serial=0;
+ const set=openNostrRelaySet({roomId:'room',identity:{sign:(_,payload)=>({id:String(++serial),content:JSON.stringify(payload)})},relays:['wss://relay.example'],WebSocket:Socket,publicationLifetimeMs:20,onStatus:s=>statuses.push(s),onError:e=>errors.push(e.message)});
+ try{
+  await turn();const socket=Socket.all[0],target={nostrKey:'remote',s7pPublicKey:'remote'};
+  for(let i=0;i<256;i++)set.sendSignal(target,{type:'rtc_ice'});
+  const expiredEvent=socket.sent.find(p=>p[0]==='EVENT')[1].id;
+  await new Promise(r=>setTimeout(r,40));
+  assert.equal(statuses.filter(s=>s.type==='signal_expired').length,256);
+  socket.receive(['OK',expiredEvent,false,'restricted: late rejection']);await turn();
+  set.sendSignal(target,{type:'rtc_offer'});
+  assert.equal(socket.sent.filter(p=>p[0]==='EVENT').length,257);
+  assert.deepEqual(errors,[]);assert.equal(statuses.some(s=>s.type==='write_blocked'),false);
+ }finally{set.close();}
+});
