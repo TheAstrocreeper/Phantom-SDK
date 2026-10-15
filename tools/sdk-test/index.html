@@ -1,0 +1,24 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Phantom SDK test</title>
+<h1>Phantom SDK test</h1>
+<p>Memory only. Reload ends this peer. Reports contain peer IDs and network addresses.</p>
+<fieldset id="setup"><legend>Connection</legend>
+<label>Name <input id="name" value="Peer"></label><br>
+<label>WebSocket doorway (blank = Nostr discovery) <input id="doorway" size="50" placeholder="wss://your-own-doorway/"></label><br>
+<label>RTC configuration JSON (blank = SDK default)<br><textarea id="rtc" rows="4" cols="65" placeholder='{"iceServers":[{"urls":"turn:YOUR_HOST:3478","username":"...","credential":"..."}]}'></textarea></label><br>
+<label>Admission deadline, seconds <input id="deadline" type="number" min="1" value="60"></label><br>
+<button id="create">Create</button><br>
+<label>Invitation <textarea id="invite" rows="3" cols="65"></textarea></label><br>
+<button id="join">Join</button></fieldset>
+<button id="leave" disabled>Leave / cancel</button>
+<h2>State</h2><pre id="state">Idle</pre>
+<h2>Peers</h2><p>Select file recipients below. Messaging target is entered separately.</p><div id="peers"></div>
+<label>Message target peer ID <input id="target" size="20"></label>
+<label>Text <input id="text" value="test"></label><button id="send">Send</button>
+<h2>File</h2><input id="file" type="file"><button id="publish">Distribute to selected peers</button>
+<p>Downloads appear only after getDistributedFile returns actual bytes. Compare sender and receiver SHA-256 in their reports.</p><div id="files"></div>
+<h2>Data</h2><button id="snapshot">Record snapshot</button><button id="report">Download JSON report</button><a id="reportLink" hidden>Download report</a>
+<p id="notice" role="status"></p><pre id="log" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre>
+<script type="module" src="app.js"></script>
