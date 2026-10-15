@@ -106,7 +106,7 @@ try{
     const recovered=await page.evaluate(args=>contracts.open(args),{label,invite:source.invite,rtcConfiguration});
     assert.equal(recovered.peerId,failed.state.peerId,'fresh join retains failed identity');
     await until(async()=>{const r=await page.evaluate(()=>contracts.inspect());return r.state.state==='admitted'&&r.connections.some(p=>p.peerId===source.peerId&&p.state==='ready');},'failed TURN identity recovers with valid configuration');
-    await page.evaluate(to=>contracts.send({to,text:'recovered-'+fault}),source.peerId);
+    await page.evaluate(args=>contracts.send(args),{to:source.peerId,text:'recovered-'+fault});
     await until(async()=>(await inspect(source)).messages.some(m=>m.from===recovered.peerId&&m.text==='recovered-'+fault),'message from recovered TURN identity');
     await page.evaluate(()=>contracts.close());
     assert.deepEqual((await page.evaluate(()=>contracts.inspect())).nativeConnections,[]);
