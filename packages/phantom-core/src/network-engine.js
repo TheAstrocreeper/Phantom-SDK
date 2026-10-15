@@ -8342,9 +8342,11 @@ export function createNetworkEngine(host) {
       dc.binaryType = "arraybuffer";
     } catch {}
 
+    const wiredEntry=phantomSysPeers.get(key),wiredPc=wiredEntry?.pc;
+    let openedOnce=false;
     const ownsPrimarySysState = phantomOwnsPrimarySysState(key);
 
-    if (ownsPrimarySysState) {
+    if (ownsPrimarySysState&&wiredEntry?.sysdc===dc) {
       concierge.sysPeer = key;
       concierge.sysPipeState = dc.readyState || "connecting";
     }
@@ -8354,6 +8356,24 @@ export function createNetworkEngine(host) {
     );
 
     dc.onopen = () => {
+      if(openedOnce)return;
+      const current=phantomSysPeers.get(key);
+      if(!current||current!==wiredEntry||current.pc!==wiredPc)return;
+      if(current.sysdc!==dc){
+        const prior=current.sysdc;
+        const live=prior&&['open','connecting'].includes(prior.readyState);
+        // Both ends observe the same SCTP stream IDs. Crossed DCEP opens
+        // must select the same channel instead of each retaining the last arrival.
+        if(live&&(!Number.isInteger(dc.id)||!Number.isInteger(prior.id)||dc.id>=prior.id)){
+          emitSnapshot('sysdc_crossed_channel_ignored');
+          if(Number.isInteger(dc.id)&&Number.isInteger(prior.id))try{dc.close();}catch{}
+          return;
+        }
+        current.sysdc=dc;
+        if(prior&&prior!==dc)try{prior.close();}catch{}
+        emitSnapshot('sysdc_crossed_channel_selected');
+      }
+      openedOnce=true;
       const diagnosticEntry=phantomSysPeers.get(phantomShortKey(remoteHKey));
       if(diagnosticEntry?.sysdc===dc)rtcDiagnostics.capture(diagnosticEntry.pc,"datachannel_open");
       const ent = phantomSysPeers.get(key);
@@ -8582,6 +8602,7 @@ export function createNetworkEngine(host) {
     };
 
     dc.onmessage = (ev) => {
+      if(phantomSysPeers.get(key)!==wiredEntry||wiredEntry?.pc!==wiredPc||wiredEntry?.sysdc!==dc)return;
       let msg = null;
       try {
         msg = JSON.parse(String(ev?.data || ""));
@@ -9323,7 +9344,9 @@ export function createNetworkEngine(host) {
       const ch = ev?.channel || null;
       if (!ch || String(ch.label || "") !== COMPATIBILITY_WIRE.systemChannel) return;
 
-      ent.sysdc = ch;
+      if(phantomSysPeers.get(k)!==ent||ent.pc!==pc){try{ch.close();}catch{}return;}
+      if(!ent.sysdc||['closed','closing'].includes(ent.sysdc.readyState))ent.sysdc=ch;
+      if(ent.sysdc===ch){
       const attempt = phantomSysEdgeAttempt(k);
       if (attempt) {
         attempt.role = "acceptor";
@@ -9337,7 +9360,9 @@ export function createNetworkEngine(host) {
         ent.ownerAttemptId = String(concierge.sysAttempt?.id || "") || null;
       }
       ent.sysCarrier = true;
-      phantomWireSysDC(k, ent.sysdc);
+      }
+      phantomWireSysDC(k,ch);
+      if(ch.readyState==='open')ch.onopen?.();
     };
 
     pc.onconnectionstatechange = () => {

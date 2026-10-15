@@ -8,7 +8,7 @@ const leader='c7dae1bca9eea49c',mirror='c44bcafa56a10013',ordinary='eeeeeeeeeeee
 const applied=[],instances=[];
 class RTC {
  constructor(){instances.push(this);this.connectionState='new';this.iceConnectionState='new';this.signalingState='stable';}
- createDataChannel(label){return {label,readyState:'connecting',bufferedAmount:0,close(){},send(){}};}
+ createDataChannel(label){const ch={label,id:null,readyState:'connecting',bufferedAmount:0,sent:[],close(){this.readyState='closed';this.onclose?.();},send(raw){this.sent.push(raw);}};(this.channels??=[]).push(ch);return ch;}
  async getStats(){assert.notEqual(this.connectionState,'closed');return new Map([['pair',{id:'pair',type:'candidate-pair',state:'in-progress',requestsSent:2,responsesReceived:0}]]);}
  async addIceCandidate(c){assert.notEqual(this.connectionState,'closed');applied.push(c.candidate);}
  async createOffer(){return {type:'offer',sdp:'stub-offer'};}
@@ -162,4 +162,24 @@ test('correlated bootstrap advice changes the pending route without waiting or c
   assert.equal(f.core.getState().admitted,false);
   const active=instances.at(-1);f.wire.onSignal(hint);await settle();assert.notEqual(active.connectionState,'closed');
  }finally{f.core.dispose();}
+});
+
+test('crossed SYS channels converge on the same SCTP stream regardless of arrival order',async()=>{
+ for(const localId of [0,1])for(const localFirst of [true,false]){
+  const incomingId=1-localId;
+  const start=instances.length,f=await fixture(leader);
+  try{const pc=instances.slice(start).find(p=>p.channels?.length);assert.ok(pc);
+   const local=pc.channels[0];local.id=localId;if(localFirst){local.readyState='open';local.onopen();}
+   const remote={label:local.label,id:incomingId,readyState:'open',sent:[],send(raw){this.sent.push(raw);},close(){this.readyState='closed';this.onclose?.();}};
+   pc.ondatachannel({channel:remote});remote.onopen();if(!localFirst&&local.readyState!=='closed'){local.readyState='open';local.onopen();}await settle();
+   const chosen=incomingId<local.id?remote:local,other=chosen===remote?local:remote;
+   chosen.sent.length=0;other.sent.length=0;const events=[];const off=f.core.onEvent(e=>events.push(e));
+   f.core.command('PHANTOM_DIST_SEND',{to:mirror,frame:{test:'crossed'}});
+   assert.equal(chosen.sent.filter(v=>JSON.parse(v).t==='PHANTOM_DIST').length,1);assert.equal(other.sent.length,0);assert.equal(chosen.id,0);
+   other.onmessage?.({data:JSON.stringify({t:'PHANTOM_DIST',frame:{test:'stale'}})});
+   assert.equal(events.some(e=>e.type==='PHANTOM_DIST'&&e.payload.frame.test==='stale'),false);
+   chosen.onmessage({data:JSON.stringify({t:'PHANTOM_DIST',frame:{test:'received'}})});
+   assert.ok(events.some(e=>e.type==='PHANTOM_DIST'&&e.payload.frame.test==='received'));off();
+  }finally{f.core.dispose();}
+ }
 });

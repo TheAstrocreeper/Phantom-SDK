@@ -22,3 +22,11 @@ Still unknown: relay throttle quotas/cooldowns and IP/key scope; payload limits 
 [Run 38693321768](https://github.com/TheAstrocreeper/Phantom-SDK/actions/runs/38693321768), head `b6e59c8`: unit tests, browser baseline and forced native successor passed, but Cloudflare repeat 3/5 timed out during the new transfer after blackout leader recovery. The other four repeats completed their stages. The failed run recorded ten failed distribution jobs targeting the same receiver, alternating between two sources, roughly every 15 seconds. For the first failed job, the leader logged the source offer/ICE but the retained event stream did not show the receiver processing that job or opening its channel. This narrows investigation to job/signaling delivery or handling; it does not prove a root cause or implicate Nostr (the failing scenario uses Cloudflare and peer bridges).
 
 Artifacts were downloaded for inspection. Do not treat earlier green runs or passing Nostr probes as resolution of this intermittent transfer failure. Keep the PR in draft while investigating it.
+
+### SYS channel collision follow-up
+
+The failed receiver's native stats include two open `six7-sys` channels on one RTC connection, with different stream IDs and asymmetric traffic. The prior `ondatachannel` handler always replaced the selected channel with the last arrival. If both endpoints created a channel during role transitions, each could select the other's channel; strict distribution/admin receive guards would then discard frames arriving on the unselected channel.
+
+A production-core regression reproduces the selection defect and fails before the fix. It simulates either endpoint creating stream 0 or stream 1, introduces the crossed channel, checks both choose stream 0, verifies distribution send/receive on that channel and rejects stale-channel messages. The fix chooses the lower known SCTP stream ID at open, retires the other channel, and guards stale connection callbacks. Unknown IDs do not cause an arbitrary replacement. Open callbacks are idempotent.
+
+This is a concrete reproduced defect and a mitigation consistent with the native evidence. A deterministic fake-channel test alone does not establish the complete cause of the historical native timeout. Native Cloudflare validation of the changed head is still required; keep the PR in draft.
