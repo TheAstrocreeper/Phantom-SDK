@@ -179,3 +179,5 @@ Third-party dependencies retain their own licenses; see THIRD_PARTY_NOTICES.md.
 
 
 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/theastrocreeper)
+
+A caller-requested admission deadline rejects with `error.code === "ADMISSION_TIMEOUT"` and the existing `Network admission timed out` message. `error.diagnostics` retains `{state, rtc}` captured before cleanup; `rtc` is the existing bounded native RTC history (or `null` when unavailable). Its connection events include browser ICE error codes, text and server URLs when reported. A timeout alone does not identify a TURN, signaling or authority failure. Diagnostics can contain network addresses; review before sharing. No RTC credentials are added.
