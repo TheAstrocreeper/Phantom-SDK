@@ -15,10 +15,11 @@
 <button id="leave" disabled>Leave / cancel</button>
 <h2>State</h2><pre id="state">Idle</pre>
 <h2>Peers</h2><p>Select file recipients below. Messaging target is entered separately.</p><div id="peers"></div>
-<label>Message target peer ID <input id="target" size="20"></label>
+<label>Message target peer ID <select id="target"><option value="">Choose a peer</option></select></label>
 <label>Text <input id="text" value="test"></label><button id="send">Send</button>
-<h2>File</h2><input id="file" type="file"><button id="publish">Distribute to selected peers</button>
-<p>Downloads appear only after getDistributedFile returns actual bytes. Compare sender and receiver SHA-256 in their reports.</p><div id="files"></div>
+<h2>Received messages</h2><pre id="messages">No messages received</pre>
+<h2>File</h2><p id="publishHelp">New files can be published only by the creating page, which holds the admin signing key. Joining pages can receive files.</p><input id="file" type="file"><button id="publish">Publish file (creator only)</button>
+<p>Downloads appear only after getDistributedFile returns actual bytes. Compare sender and receiver SHA-256 in their reports.</p><p id="fileStatus"></p><div id="files"></div>
 <h2>Data</h2><button id="snapshot">Record snapshot</button><button id="report">Download JSON report</button><a id="reportLink" hidden>Download report</a>
 <p id="notice" role="status"></p><pre id="log" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre>
 <script type="module" src="app.js"></script>
