@@ -91,12 +91,12 @@ test('event-specific rejections preserve later writes and expose machine-readabl
   }finally{bus.close();}
  }
 });
-test('rate limit pauses writes, keeps ACK/read processing, then permits fresh messages without replay',async()=>{
+for(const reason of ['rate-limited: slow down','rate limited'])test(`rate limit pauses writes, keeps ACK/read processing, then permits fresh messages without replay: ${reason}`,async()=>{
  const Socket=sockets(),identity=createNostrIdentity(),statuses=[];
  const bus=openNostrBus({roomId:'room',identity,relays:['wss://relay.example'],publicationCooldownMs:30,WebSocket:Socket,onStatus:s=>statuses.push(s)});
  try{bus.announce({row:{bootId:'a'}});await turn();const socket=Socket.all[0],target={nostrKey:identity.nostrKey,s7pPublicKey:identity.publicKey};
   const second=bus.sendSignal(target,{type:'test'});
-  socket.receive(['OK',socket.sent.find(p=>p[0]==='EVENT')[1].id,false,'rate-limited: slow down']);await turn();
+  socket.receive(['OK',socket.sent.find(p=>p[0]==='EVENT')[1].id,false,reason]);await turn();
   assert.throws(()=>bus.sendSignal(target,{}),/temporarily/);
   socket.receive(['OK',second,true,'']);await turn();assert.ok(statuses.some(s=>s.eventId===second&&s.accepted));
   assert.equal(socket.readyState,1);assert.equal(statuses.some(s=>s.type==='write_blocked'),false);
