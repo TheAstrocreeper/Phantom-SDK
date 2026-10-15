@@ -1,0 +1,681 @@
+{
+  "checkedAt": "2026-10-15T06:26:14.275Z",
+  "metadata": [
+    {
+      "url": "wss://nostr.mom/",
+      "available": true,
+      "elapsedMs": 4578,
+      "bytes": 491,
+      "document": {
+        "description": "Spam and nudity filtering. Stricter and more experimental than nos.lol.",
+        "icon": "https://nostr.mom/favicon.ico",
+        "limitation": {
+          "max_limit": 500,
+          "max_message_length": 131072,
+          "max_subscriptions": 50
+        },
+        "name": "nostr.mom",
+        "negentropy": 1,
+        "pubkey": "c5fadeb5d90d68baffc631455a07ca340ccf1e31110955e16d45eb5f87147cd9",
+        "software": "git+https://github.com/hoytech/strfry.git",
+        "supported_nips": [
+          1,
+          2,
+          4,
+          9,
+          11,
+          28,
+          40,
+          45,
+          70
+        ],
+        "terms_of_service": "https://wikifreedia.xyz/nostr.mom/",
+        "version": "1.1.3"
+      }
+    },
+    {
+      "url": "wss://relay.snort.social/",
+      "available": true,
+      "elapsedMs": 3078,
+      "bytes": 261,
+      "document": {
+        "description": "High-performance in-memory Nostr relay",
+        "limitation": {
+          "idle_timeout": 10,
+          "max_limit": 5000,
+          "max_message_length": 524288,
+          "max_subscriptions": 300
+        },
+        "name": "memlay",
+        "software": "https://github.com/v0l/memlay",
+        "supported_nips": [
+          1,
+          9,
+          11
+        ],
+        "version": "0.2.0"
+      }
+    },
+    {
+      "url": "wss://relay.primal.net/",
+      "available": true,
+      "elapsedMs": 3088,
+      "bytes": 483,
+      "document": {
+        "contact": "primal.net",
+        "description": "Primal Public Relay",
+        "icon": "https://blossom.primal.net/4aa623c632c62f0ae442547e263931ca58c58acf79c718f79ba943e4591c6076.png",
+        "limitation": {
+          "max_limit": 500,
+          "max_message_length": 1000000,
+          "max_subscriptions": 20
+        },
+        "name": "Primal Public Relay",
+        "negentropy": 1,
+        "pubkey": "dd9b989dfe5e0840a92538f3e9f84f674e5f17ab05932efbacb4d8e6c905f302",
+        "software": "git+https://github.com/hoytech/strfry.git",
+        "supported_nips": [
+          1,
+          2,
+          4,
+          9,
+          11,
+          28,
+          40,
+          45,
+          70
+        ],
+        "version": "1.1.3"
+      }
+    }
+  ],
+  "secondPeerDelayMs": 1500,
+  "scope": "Two fresh identities, one unique room, signed discovery and bidirectional signaling. No WebRTC or persistence claim.",
+  "results": [
+    {
+      "url": "wss://nostr.mom/",
+      "passed": true,
+      "reason": "bidirectional_signed_delivery",
+      "secondPeerDelayMs": 1500,
+      "timings": [
+        {
+          "peer": 0,
+          "openedMs": 3385,
+          "eoseMs": 3498,
+          "discoveredMs": 3664,
+          "deliveryMs": 352
+        },
+        {
+          "peer": 1,
+          "openedMs": 3370,
+          "eoseMs": 3490,
+          "discoveredMs": 3673,
+          "deliveryMs": 245
+        }
+      ],
+      "latencyMs": 4037,
+      "announcementsReceived": 2,
+      "signalsReceived": 2,
+      "signalsAccepted": 2,
+      "timeline": [
+        {
+          "atMs": 46,
+          "peer": 0,
+          "type": "connecting",
+          "url": "wss://nostr.mom/"
+        },
+        {
+          "atMs": 1549,
+          "peer": 1,
+          "type": "connecting",
+          "url": "wss://nostr.mom/"
+        },
+        {
+          "atMs": 3370,
+          "peer": 1,
+          "type": "open",
+          "url": "wss://nostr.mom/"
+        },
+        {
+          "atMs": 3385,
+          "peer": 0,
+          "type": "open",
+          "url": "wss://nostr.mom/"
+        },
+        {
+          "atMs": 3490,
+          "peer": 1,
+          "type": "subscription_eose"
+        },
+        {
+          "atMs": 3498,
+          "peer": 0,
+          "type": "subscription_eose"
+        },
+        {
+          "atMs": 3611,
+          "peer": 1,
+          "type": "publish",
+          "url": "wss://nostr.mom/",
+          "ackMs": 242,
+          "eventBytes": 1047,
+          "eventId": "37500bcff6bf0a5a85a8128f8812c33e114b4c464f7a5fa15fc96ffc5258d535",
+          "packetType": "ANNOUNCEMENT",
+          "accepted": true,
+          "reason": ""
+        },
+        {
+          "atMs": 3613,
+          "peer": 0,
+          "type": "publish",
+          "url": "wss://nostr.mom/",
+          "ackMs": 228,
+          "eventBytes": 1047,
+          "eventId": "635891634749ce904f370be48cd1e1168ca933e5ad6ff2c7a47ce144cb2f7610",
+          "packetType": "ANNOUNCEMENT",
+          "accepted": true,
+          "reason": ""
+        },
+        {
+          "atMs": 3664,
+          "peer": 0,
+          "type": "peer_discovered"
+        },
+        {
+          "atMs": 3673,
+          "peer": 1,
+          "type": "peer_discovered"
+        },
+        {
+          "atMs": 3679,
+          "peer": 0,
+          "type": "signal_sent"
+        },
+        {
+          "atMs": 3684,
+          "peer": 1,
+          "type": "signal_sent"
+        },
+        {
+          "atMs": 3794,
+          "peer": 0,
+          "type": "publish",
+          "url": "wss://nostr.mom/",
+          "ackMs": 125,
+          "eventBytes": 1067,
+          "eventId": "4c9dac08815f2cbd338f8458aa5a4cdad3e471481a3257a54f28baf49030bb7b",
+          "packetType": "ANNOUNCEMENT",
+          "accepted": true,
+          "reason": ""
+        },
+        {
+          "atMs": 3842,
+          "peer": 1,
+          "type": "publish",
+          "url": "wss://nostr.mom/",
+          "ackMs": 164,
+          "eventBytes": 1067,
+          "eventId": "1b938af929bfc3701d1be94b58d9785f8042b28c47833a4cb4b74cd0d663868e",
+          "packetType": "ANNOUNCEMENT",
+          "accepted": true,
+          "reason": ""
+        },
+        {
+          "atMs": 3909,
+          "peer": 0,
+          "type": "publish",
+          "url": "wss://nostr.mom/",
+          "ackMs": 225,
+          "eventBytes": 1201,
+          "eventId": "f9c0aa53975f4185f230fb53d4c8baeb7a4c359cefe3e4b9e03e41bef9158b7b",
+          "messageId": "probe-0",
+          "packetType": "SIGNAL",
+          "signalType": "phantom_doorway_probe",
+          "from": "ec375ccd58177a85",
+          "to": "6758d3eb9acc7b7a",
+          "accepted": true,
+          "reason": ""
+        },
+        {
+          "atMs": 3924,
+          "peer": 1,
+          "type": "signal_received",
+          "url": "wss://nostr.mom/",
+          "eventId": "f9c0aa53975f4185f230fb53d4c8baeb7a4c359cefe3e4b9e03e41bef9158b7b",
+          "messageId": "probe-0",
+          "signalType": "phantom_doorway_probe",
+          "from": "ec375ccd58177a85",
+          "to": "6758d3eb9acc7b7a"
+        },
+        {
+          "atMs": 3924,
+          "peer": 1,
+          "type": "signal_delivered"
+        },
+        {
+          "atMs": 3932,
+          "peer": 1,
+          "type": "publish",
+          "url": "wss://nostr.mom/",
+          "ackMs": 244,
+          "eventBytes": 1201,
+          "eventId": "b213cbeb1ab3f667e9eb2774ece20a0cb6aa3526aa6a041f6335ede9dabce8ba",
+          "messageId": "probe-1",
+          "packetType": "SIGNAL",
+          "signalType": "phantom_doorway_probe",
+          "from": "6758d3eb9acc7b7a",
+          "to": "ec375ccd58177a85",
+          "accepted": true,
+          "reason": ""
+        },
+        {
+          "atMs": 4036,
+          "peer": 0,
+          "type": "signal_received",
+          "url": "wss://nostr.mom/",
+          "eventId": "b213cbeb1ab3f667e9eb2774ece20a0cb6aa3526aa6a041f6335ede9dabce8ba",
+          "messageId": "probe-1",
+          "signalType": "phantom_doorway_probe",
+          "from": "6758d3eb9acc7b7a",
+          "to": "ec375ccd58177a85"
+        },
+        {
+          "atMs": 4036,
+          "peer": 0,
+          "type": "signal_delivered"
+        }
+      ],
+      "diagnostics": []
+    },
+    {
+      "url": "wss://relay.snort.social/",
+      "passed": true,
+      "reason": "bidirectional_signed_delivery",
+      "secondPeerDelayMs": 1500,
+      "timings": [
+        {
+          "peer": 0,
+          "openedMs": 2835,
+          "eoseMs": 2945,
+          "discoveredMs": 3180,
+          "deliveryMs": 234
+        },
+        {
+          "peer": 1,
+          "openedMs": 2953,
+          "eoseMs": 3062,
+          "discoveredMs": 3313,
+          "deliveryMs": 171
+        }
+      ],
+      "latencyMs": 3556,
+      "announcementsReceived": 2,
+      "signalsReceived": 2,
+      "signalsAccepted": 2,
+      "timeline": [
+        {
+          "atMs": 2,
+          "peer": 0,
+          "type": "connecting",
+          "url": "wss://relay.snort.social/"
+        },
+        {
+          "atMs": 1504,
+          "peer": 1,
+          "type": "connecting",
+          "url": "wss://relay.snort.social/"
+        },
+        {
+          "atMs": 2835,
+          "peer": 0,
+          "type": "open",
+          "url": "wss://relay.snort.social/"
+        },
+        {
+          "atMs": 2945,
+          "peer": 0,
+          "type": "subscription_eose"
+        },
+        {
+          "atMs": 2953,
+          "peer": 1,
+          "type": "open",
+          "url": "wss://relay.snort.social/"
+        },
+        {
+          "atMs": 3059,
+          "peer": 0,
+          "type": "publish",
+          "url": "wss://relay.snort.social/",
+          "ackMs": 224,
+          "eventBytes": 1047,
+          "eventId": "a2d062f630cb790ae01ceedcdf74177bea545bc0ca288bcb6173b6bc8dfc71e9",
+          "packetType": "ANNOUNCEMENT",
+          "accepted": true,
+          "reason": "ephemeral: will not be stored"
+        },
+        {
+          "atMs": 3062,
+          "peer": 1,
+          "type": "subscription_eose"
+        },
+        {
+          "atMs": 3180,
+          "peer": 0,
+          "type": "peer_discovered"
+        },
+        {
+          "atMs": 3184,
+          "peer": 1,
+          "type": "publish",
+          "url": "wss://relay.snort.social/",
+          "ackMs": 231,
+          "eventBytes": 1047,
+          "eventId": "08b6e95c8f55afa4174dfb7bb22ae0a39d6c34849b26e00b932072c71c07d1fb",
+          "packetType": "ANNOUNCEMENT",
+          "accepted": true,
+          "reason": "ephemeral: will not be stored"
+        },
+        {
+          "atMs": 3313,
+          "peer": 1,
+          "type": "peer_discovered"
+        },
+        {
+          "atMs": 3317,
+          "peer": 0,
+          "type": "signal_sent"
+        },
+        {
+          "atMs": 3322,
+          "peer": 1,
+          "type": "signal_sent"
+        },
+        {
+          "atMs": 3326,
+          "peer": 0,
+          "type": "publish",
+          "url": "wss://relay.snort.social/",
+          "ackMs": 142,
+          "eventBytes": 1067,
+          "eventId": "810c21815100870baef7776b9720f1437dfc82a71c13c00443500f25612bbf36",
+          "packetType": "ANNOUNCEMENT",
+          "accepted": true,
+          "reason": "ephemeral: will not be stored"
+        },
+        {
+          "atMs": 3484,
+          "peer": 0,
+          "type": "publish",
+          "url": "wss://relay.snort.social/",
+          "ackMs": 162,
+          "eventBytes": 1201,
+          "eventId": "698af01dff38bf566527c09d625c5a943b1c5c656fb7f250af3c480103359e59",
+          "messageId": "probe-0",
+          "packetType": "SIGNAL",
+          "signalType": "phantom_doorway_probe",
+          "from": "61e12ddabb286f1d",
+          "to": "d1d85d6d8ac52f26",
+          "accepted": true,
+          "reason": "ephemeral: will not be stored"
+        },
+        {
+          "atMs": 3484,
+          "peer": 1,
+          "type": "publish",
+          "url": "wss://relay.snort.social/",
+          "ackMs": 167,
+          "eventBytes": 1067,
+          "eventId": "1eecc3aa1ab880378a57cba6f606423774fc178ed8db275f154235adf4a103f7",
+          "packetType": "ANNOUNCEMENT",
+          "accepted": true,
+          "reason": "ephemeral: will not be stored"
+        },
+        {
+          "atMs": 3488,
+          "peer": 1,
+          "type": "signal_received",
+          "url": "wss://relay.snort.social/",
+          "eventId": "698af01dff38bf566527c09d625c5a943b1c5c656fb7f250af3c480103359e59",
+          "messageId": "probe-0",
+          "signalType": "phantom_doorway_probe",
+          "from": "61e12ddabb286f1d",
+          "to": "d1d85d6d8ac52f26"
+        },
+        {
+          "atMs": 3488,
+          "peer": 1,
+          "type": "signal_delivered"
+        },
+        {
+          "atMs": 3552,
+          "peer": 1,
+          "type": "publish",
+          "url": "wss://relay.snort.social/",
+          "ackMs": 227,
+          "eventBytes": 1201,
+          "eventId": "7231afd106b2b2f0d8d23a972c11dda8f312fd13a65180e0eb339aa7f9831af9",
+          "messageId": "probe-1",
+          "packetType": "SIGNAL",
+          "signalType": "phantom_doorway_probe",
+          "from": "d1d85d6d8ac52f26",
+          "to": "61e12ddabb286f1d",
+          "accepted": true,
+          "reason": "ephemeral: will not be stored"
+        },
+        {
+          "atMs": 3556,
+          "peer": 0,
+          "type": "signal_received",
+          "url": "wss://relay.snort.social/",
+          "eventId": "7231afd106b2b2f0d8d23a972c11dda8f312fd13a65180e0eb339aa7f9831af9",
+          "messageId": "probe-1",
+          "signalType": "phantom_doorway_probe",
+          "from": "d1d85d6d8ac52f26",
+          "to": "61e12ddabb286f1d"
+        },
+        {
+          "atMs": 3556,
+          "peer": 0,
+          "type": "signal_delivered"
+        }
+      ],
+      "diagnostics": []
+    },
+    {
+      "url": "wss://relay.primal.net/",
+      "passed": true,
+      "reason": "bidirectional_signed_delivery",
+      "secondPeerDelayMs": 1500,
+      "timings": [
+        {
+          "peer": 0,
+          "openedMs": 2692,
+          "eoseMs": 2818,
+          "discoveredMs": 2959,
+          "deliveryMs": 223
+        },
+        {
+          "peer": 1,
+          "openedMs": 2665,
+          "eoseMs": 2781,
+          "discoveredMs": 2966,
+          "deliveryMs": 238
+        }
+      ],
+      "latencyMs": 3207,
+      "announcementsReceived": 2,
+      "signalsReceived": 2,
+      "signalsAccepted": 2,
+      "timeline": [
+        {
+          "atMs": 2,
+          "peer": 0,
+          "type": "connecting",
+          "url": "wss://relay.primal.net/"
+        },
+        {
+          "atMs": 1502,
+          "peer": 1,
+          "type": "connecting",
+          "url": "wss://relay.primal.net/"
+        },
+        {
+          "atMs": 2665,
+          "peer": 1,
+          "type": "open",
+          "url": "wss://relay.primal.net/"
+        },
+        {
+          "atMs": 2692,
+          "peer": 0,
+          "type": "open",
+          "url": "wss://relay.primal.net/"
+        },
+        {
+          "atMs": 2781,
+          "peer": 1,
+          "type": "subscription_eose"
+        },
+        {
+          "atMs": 2818,
+          "peer": 0,
+          "type": "subscription_eose"
+        },
+        {
+          "atMs": 2853,
+          "peer": 1,
+          "type": "publish",
+          "url": "wss://relay.primal.net/",
+          "ackMs": 188,
+          "eventBytes": 1047,
+          "eventId": "ce59ddea18d86b3efdb56f4a743e1f8ebfb63efd111a44955aff479fe6044224",
+          "packetType": "ANNOUNCEMENT",
+          "accepted": true,
+          "reason": ""
+        },
+        {
+          "atMs": 2863,
+          "peer": 0,
+          "type": "publish",
+          "url": "wss://relay.primal.net/",
+          "ackMs": 171,
+          "eventBytes": 1047,
+          "eventId": "a4abea023da5791be4257925912f5b92799bf8e98dc6c185d4b6932cc9ef442b",
+          "packetType": "ANNOUNCEMENT",
+          "accepted": true,
+          "reason": ""
+        },
+        {
+          "atMs": 2959,
+          "peer": 0,
+          "type": "peer_discovered"
+        },
+        {
+          "atMs": 2966,
+          "peer": 1,
+          "type": "peer_discovered"
+        },
+        {
+          "atMs": 2969,
+          "peer": 0,
+          "type": "signal_sent"
+        },
+        {
+          "atMs": 2974,
+          "peer": 1,
+          "type": "signal_sent"
+        },
+        {
+          "atMs": 3091,
+          "peer": 1,
+          "type": "publish",
+          "url": "wss://relay.primal.net/",
+          "ackMs": 121,
+          "eventBytes": 1067,
+          "eventId": "216bd136b961dd6d9306c889f2cc6bed83818123e8ef7f4770b1b57f7fc8fd2c",
+          "packetType": "ANNOUNCEMENT",
+          "accepted": true,
+          "reason": ""
+        },
+        {
+          "atMs": 3096,
+          "peer": 0,
+          "type": "publish",
+          "url": "wss://relay.primal.net/",
+          "ackMs": 134,
+          "eventBytes": 1067,
+          "eventId": "64ec98e62bcf0bb7af064ed3ca8b10e3694e4a508c451f10ab56ab99dd6d13e9",
+          "packetType": "ANNOUNCEMENT",
+          "accepted": true,
+          "reason": ""
+        },
+        {
+          "atMs": 3134,
+          "peer": 1,
+          "type": "publish",
+          "url": "wss://relay.primal.net/",
+          "ackMs": 156,
+          "eventBytes": 1201,
+          "eventId": "39378bfcaabc7cb215e894485d811561e5505192ad4b4f9695d1aaad5e86c167",
+          "messageId": "probe-1",
+          "packetType": "SIGNAL",
+          "signalType": "phantom_doorway_probe",
+          "from": "105f58639ac88889",
+          "to": "42a6fa1ca6b73606",
+          "accepted": true,
+          "reason": ""
+        },
+        {
+          "atMs": 3140,
+          "peer": 0,
+          "type": "publish",
+          "url": "wss://relay.primal.net/",
+          "ackMs": 166,
+          "eventBytes": 1201,
+          "eventId": "4ec19d2f5a124f53fd0192017675cbc8721c6ddcd58f84daeaf3209ef4895295",
+          "messageId": "probe-0",
+          "packetType": "SIGNAL",
+          "signalType": "phantom_doorway_probe",
+          "from": "42a6fa1ca6b73606",
+          "to": "105f58639ac88889",
+          "accepted": true,
+          "reason": ""
+        },
+        {
+          "atMs": 3197,
+          "peer": 0,
+          "type": "signal_received",
+          "url": "wss://relay.primal.net/",
+          "eventId": "39378bfcaabc7cb215e894485d811561e5505192ad4b4f9695d1aaad5e86c167",
+          "messageId": "probe-1",
+          "signalType": "phantom_doorway_probe",
+          "from": "105f58639ac88889",
+          "to": "42a6fa1ca6b73606"
+        },
+        {
+          "atMs": 3197,
+          "peer": 0,
+          "type": "signal_delivered"
+        },
+        {
+          "atMs": 3207,
+          "peer": 1,
+          "type": "signal_received",
+          "url": "wss://relay.primal.net/",
+          "eventId": "4ec19d2f5a124f53fd0192017675cbc8721c6ddcd58f84daeaf3209ef4895295",
+          "messageId": "probe-0",
+          "signalType": "phantom_doorway_probe",
+          "from": "42a6fa1ca6b73606",
+          "to": "105f58639ac88889"
+        },
+        {
+          "atMs": 3207,
+          "peer": 1,
+          "type": "signal_delivered"
+        }
+      ],
+      "diagnostics": []
+    }
+  ]
+}

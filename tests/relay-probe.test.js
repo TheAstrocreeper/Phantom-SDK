@@ -21,3 +21,19 @@ test('publication rejection remains distinct from successful delivery',async()=>
  const result=await probeRelay('wss://example.test/',{timeoutMs:500,busFactory:ephemeralBus({reject:true})});
  assert.equal(result.passed,false);assert.match(result.reason,/publication_rejected: blocked/);assert.equal(result.signalsReceived,0);
 });
+test('explicitly delayed second peer still discovers and timeout prevents late creation',async()=>{
+ const result=await probeRelay('wss://example.test/',{timeoutMs:500,secondPeerDelayMs:60,busFactory:ephemeralBus()});
+ assert.equal(result.passed,true);assert.ok(result.timings[1].openedMs>=60);
+ let creations=0;
+ const fail=await probeRelay('wss://example.test/',{timeoutMs:100,secondPeerDelayMs:50,busFactory:c=>{creations++;queueMicrotask(()=>c.onStatus({type:'exhausted'}));return {announce(){},close(){}};}});
+ await new Promise(r=>setTimeout(r,70));assert.equal(fail.reason,'connection_exhausted');assert.equal(creations,1);
+});
+test('stagger delay starts at first open, rather than first connection construction',async()=>{
+ const start=Date.now();let creations=0,secondAt;
+ const result=await probeRelay('wss://example.test/',{timeoutMs:300,secondPeerDelayMs:40,busFactory:c=>{
+  creations++;if(creations===2){secondAt=Date.now()-start;queueMicrotask(()=>c.onStatus({type:'exhausted'}));}
+  const timer=creations===1?setTimeout(()=>c.onStatus({type:'open'}),60):null;
+  return {announce(){},close(){clearTimeout(timer);}};
+ }});
+ assert.equal(result.reason,'connection_exhausted');assert.ok(secondAt>=100,`second connection created at ${secondAt}ms`);
+});
