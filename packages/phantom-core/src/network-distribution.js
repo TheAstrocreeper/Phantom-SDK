@@ -45,7 +45,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
     if(type==='SEND_FILE_BIN_CHUNK')void sendBinary(link,payload).catch(error);
   }};
   const files=createFileDistribution({core:transport,crypto,allowed,emit:(type,payload)=>{
-    if(type==='fileOffer'){const asset=assets.get(payload.manifest.id);if(!asset||asset.total!==payload.manifest.total||asset.distributionId!==payload.manifest.distributionId){error(Error('Authorized manifest metadata mismatch'));return;}const link=[...links.values()].find(l=>l.job.asset===payload.manifest.id&&l.job.receiver===self()&&l.peer===payload.from);if(link&&!link.started){link.started=true;void receive(link).catch(error);}}
+    if(type==='fileOffer'){const asset=assets.get(payload.manifest.id);if(!asset||asset.total!==payload.manifest.total||asset.distributionId!==payload.manifest.distributionId){error(Error('Authorized manifest metadata mismatch'));return;}const link=[...links.values()].find(l=>l.job.asset===payload.manifest.id&&l.job.receiver===self()&&l.peer===payload.from);if(link)startReceiver(link);}
     emit(type==='fileProgress'?'distributionProgress':type==='fileError'?'distributionError':'distributionFileEvent',{fileEvent:type,...payload});
   },...Object.fromEntries(Object.entries(options).filter(([key])=>['chunkStore','requestTimeoutMs','maxFileBytes'].includes(key)))});
   async function sendBinary(link,payload){let ok=false,reason='Distribution connection unavailable';try{
@@ -54,7 +54,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
     if(closed||links.get(link.job.id)!==link||!allowed(payload.file.id,payload.file.distributionId)||link.dc.readyState!=='open')throw Error('Distribution revoked or disconnected');
     link.dc.send(JSON.stringify({kind:'binary',file:payload.file}));link.dc.send(payload.bytes);ok=true;
   }catch(e){reason=e.message;}fire('FILE_BIN_CHUNK_SENT',{...payload,ok,error:ok?undefined:reason});}
-  function closeLink(id){pendingSignals.delete(id);closedJobs.set(id,Date.now());const link=links.get(id);if(!link)return;links.delete(id);link.pc.onicecandidate=null;link.pc.onconnectionstatechange=null;link.pc.ondatachannel=null;if(link.dc){link.dc.onopen=null;link.dc.onmessage=null;link.dc.onclose=null;try{link.dc.close();}catch{}}try{link.pc.close();}catch{}link.pendingIce.length=0;link.binary=null;emit('distributionConnectionClosed',{jobId:id,peer:link.peer});}
+  function closeLink(id){pendingSignals.delete(id);closedJobs.set(id,Date.now());const link=links.get(id);if(!link)return;links.delete(id);if(link.readyTimer)clearTimeout(link.readyTimer);link.readyTimer=null;link.pc.onicecandidate=null;link.pc.onconnectionstatechange=null;link.pc.ondatachannel=null;if(link.dc){link.dc.onopen=null;link.dc.onmessage=null;link.dc.onclose=null;try{link.dc.close();}catch{}}try{link.pc.close();}catch{}link.pendingIce.length=0;link.binary=null;emit('distributionConnectionClosed',{jobId:id,peer:link.peer});}
   async function receive(link){try{
     await files.request(link.job.asset,{peers:[link.peer],indexes:link.job.indexes});
     const asset=assets.get(link.job.asset);if(!asset)throw Error('Unknown distribution');
@@ -64,12 +64,33 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
       const blob=await files.request(asset.id,{peers:[link.peer]});finished.add(asset.id);emit('distributionComplete',{id:asset.id,blob});
     }
   }catch(e){frame(leader(),{type:'failed',jobId:link.job.id,reason:'receive_failed'});emit('distributionConnectionFailed',{jobId:link.job.id,peer:link.peer,reason:'receive_failed',error:e.message});error(e);}finally{frame(link.peer,{type:'close',jobId:link.job.id});closeLink(link.job.id);}}
+  function startReceiver(link){
+    if(links.get(link.job.id)!==link||link.job.receiver!==self()||!link.sourceReady||link.started||link.dc?.readyState!=='open')return;
+    try{files.getManifest(link.job.asset);}catch{return;}
+    link.started=true;void receive(link).catch(error);
+  }
+  function probeSource(link){
+    if(links.get(link.job.id)!==link||link.sourceReady||link.dc?.readyState!=='open'||Date.now()>link.job.deadline)return;
+    traceChunk({direction:'send',kind:'ready_probe',jobId:link.job.id,peer:link.peer});
+    link.dc.send(JSON.stringify({kind:'ready_probe',jobId:link.job.id,file:{id:link.job.asset}}));
+    link.readyTimer=setTimeout(()=>{link.readyTimer=null;probeSource(link);},100);
+  }
   function bind(link,dc){if(dc.label!=='phantom-distribution'){dc.close();return;}link.dc=dc;dc.binaryType='arraybuffer';
-    dc.onopen=()=>{if(links.get(link.job.id)!==link)return;emit('distributionConnectionOpened',{jobId:link.job.id,peer:link.peer});if(link.job.source===self()&&link.job.needsManifest)void files.share(link.peer,link.job.asset).catch(error);else if(link.job.receiver===self()&&!link.started){try{files.getManifest(link.job.asset);link.started=true;void receive(link).catch(error);}catch{}}};
+    dc.onopen=()=>{if(links.get(link.job.id)!==link)return;emit('distributionConnectionOpened',{jobId:link.job.id,peer:link.peer});
+      if(link.job.receiver===self()){probeSource(link);startReceiver(link);}
+    };
     dc.onmessage=event=>{if(links.get(link.job.id)!==link||!allowed(link.job.asset,assets.get(link.job.asset)?.distributionId))return;
       if(event.data instanceof ArrayBuffer){const file=link.binary;link.binary=null;if(file?.id===link.job.asset){traceChunk({direction:'receive',kind:'binary',jobId:link.job.id,peer:link.peer,index:file.index});fire('FILE_BIN_CHUNK',{from:link.peer,file,bytes:event.data});}return;}
       let m;try{m=JSON.parse(event.data);}catch{return;}
       if(m.file?.id!==link.job.asset)return;
+      if(m.kind==='ready_probe'&&m.jobId===link.job.id&&link.job.source===self()){
+        if(link.job.needsManifest&&!link.manifestShared){link.manifestShared=true;void files.share(link.peer,link.job.asset).catch(error);}
+        dc.send(JSON.stringify({kind:'ready',jobId:link.job.id,file:{id:link.job.asset}}));return;
+      }
+      if(m.kind==='ready'&&m.jobId===link.job.id&&link.job.receiver===self()){
+        traceChunk({direction:'receive',kind:'ready',jobId:link.job.id,peer:link.peer});
+        link.sourceReady=true;if(link.readyTimer)clearTimeout(link.readyTimer);link.readyTimer=null;startReceiver(link);return;
+      }
       if(m.kind==='binary')link.binary=m.file;
       else if(m.kind==='message'){if(['PHANTOM_FILE_REQUEST','PHANTOM_FILE_MISSING'].includes(m.sys))traceChunk({direction:'receive',kind:m.sys,jobId:link.job.id,peer:link.peer,index:m.file.index});fire('INCOMING_MSG',{from:link.peer,sys:m.sys,file:m.file});}
     };

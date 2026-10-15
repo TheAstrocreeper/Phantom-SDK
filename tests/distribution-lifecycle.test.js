@@ -14,7 +14,7 @@ async function fixture({intervalMs=1000,onSend}={}){
  for(const fn of callbacks.values())fn({type:'PRESENCE_ROSTER',payload:{list:[...ids,leader].map(hKey=>({hKey}))}});
  const file=new Blob([Uint8Array.from({length:65536},(_,i)=>i%251)]),manifest=await ds[0].publish(file);
  await ds[1].publish(file);
- function job(id,source,receiver,indexes){const job={id,source,receiver,indexes,asset:manifest.id,needsManifest:false,deadline:Date.now()+2000};const body={type:'job',job,asset:{...manifest,proof:frames.find(f=>f.body.type==='inventory').body.proof}};for(const to of [receiver,source])deliver(to,leader,body);}
+ function job(id,source,receiver,indexes,deadlineMs=2000){const job={id,source,receiver,indexes,asset:manifest.id,needsManifest:false,deadline:Date.now()+deadlineMs};const body={type:'job',job,asset:{...manifest,proof:frames.find(f=>f.body.type==='inventory').body.proof}};for(const to of [receiver,source])deliver(to,leader,body);}
  return {ds,events,frames,states,job,close(){ds.forEach(d=>d.close());}};
 }
 test('opposite-direction jobs keep requests and binary replies on their assigned channels',async()=>{
@@ -66,5 +66,35 @@ test('a chunk queued during teardown does not block the next job to that peer',a
   const at=Date.now();f.job('next-send',ids[0],ids[1],[1]);
   await until(()=>f.frames.some(f=>f.body.type==='done'&&f.body.jobId==='next-send'));
   assert.ok(Date.now()-at<500,'next job did not wait for the retired send timeout');
+ }finally{f.close();}
+});
+test('loss of the first application frame recovers before starting chunk requests',async()=>{
+ let dropped=false;
+ const f=await fixture({onSend(data,ch){let m;try{m=JSON.parse(data);}catch{return true;}
+  if(!dropped&&(m.kind==='ready_probe'||m.sys==='PHANTOM_FILE_REQUEST')){dropped=true;return false;}return true;
+ }});
+ try{
+  const at=Date.now();f.job('first-frame-boundary',ids[0],ids[1],[0,1,2,3]);
+  await until(()=>f.frames.some(f=>f.body.type==='done')||f.events.some(e=>e.type==='distributionError'));
+  assert.ok(dropped);
+  assert.deepEqual(f.events.filter(e=>e.type==='distributionError'),[]);
+  assert.ok(f.frames.some(f=>f.body.type==='done'&&f.body.jobId==='first-frame-boundary'));
+  assert.ok(Date.now()-at<500,'readiness recovered before the chunk timeout');
+ }finally{f.close();}
+});
+
+test('unanswered readiness stops at the job deadline and releases its probe timer',async()=>{
+ let probes=0,requests=0;
+ const f=await fixture({intervalMs:10,onSend(data){let m;try{m=JSON.parse(data);}catch{return true;}
+  if(m.kind==='ready_probe')probes++;
+  if(m.sys==='PHANTOM_FILE_REQUEST')requests++;
+  return m.kind!=='ready';
+ }});
+ try{
+  f.job('no-source-readiness',ids[0],ids[1],[0],160);
+  await until(()=>f.frames.some(f=>f.body.type==='failed'));
+  assert.equal(requests,0,'no chunk request before source acknowledgement');
+  assert.ok(f.ds.every(d=>d.snapshot().connections.length===0));
+  const stopped=probes;await pause(150);assert.equal(probes,stopped,'probe timer released');
  }finally{f.close();}
 });
