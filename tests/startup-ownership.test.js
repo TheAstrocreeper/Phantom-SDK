@@ -183,3 +183,17 @@ test('crossed SYS channels converge on the same SCTP stream regardless of arriva
   }finally{f.core.dispose();}
  }
 });
+
+test('leader mirror change preserves a candidate tether before its admission frame arrives',async()=>{
+ const start=instances.length,f=await fixture(leader),events=[];const off=f.core.onEvent(e=>events.push(e));
+ try{
+  const pc=instances.slice(start).find(p=>p.channels?.length),channel=pc.channels[0];
+  channel.readyState='open';channel.onopen();await settle();
+  f.wire.onDiscovery({kind:'concierge_update',roomId:room,epoch:3,leader,mirror:ordinary,
+   peers:[leader,mirror,ordinary].map((hKey,i)=>({hKey,handle:'Peer',bootId:hKey,roomJoinedAt:i+1}))});
+  await settle();
+  assert.equal(channel.readyState,'open','a new primary target must not close the legal candidate tether');
+  assert.ok(events.some(e=>e.type==='SNAPSHOT'&&e.payload.reason==='sys_birth_preserved_peer_tether'));
+  assert.equal(f.core.getPeerConnections().some(p=>p.peerId===mirror),false,'preserving a transport does not admit its candidate');
+ }finally{off();f.core.dispose();}
+});
