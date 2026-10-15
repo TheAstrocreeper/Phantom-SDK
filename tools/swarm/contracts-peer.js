@@ -6,12 +6,32 @@ import {COMPATIBILITY_WIRE} from '../../packages/phantom-core/src/compatibility.
 // Test-only durable storage; reloads use the browser's real IndexedDB backend.
 const db=await new Promise((resolve,reject)=>{const r=indexedDB.open('phantom-contracts',1);r.onupgradeneeded=()=>{r.result.createObjectStore('chunks');r.result.createObjectStore('records');};r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);});
 function stored(table,mode,action){return new Promise((resolve,reject)=>{const tx=db.transaction(table,mode),r=action(tx.objectStore(table));tx.oncomplete=()=>resolve(r.result);tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error??Error('Storage transaction aborted'));});}
-let network,lastState,lastSnapshot,interrupted=false,interrupt=false;
+let network,lastState,lastSnapshot,interrupted=false,interrupt=false,turnOnly=false;
 const trace=[],messages=[],connections=[],errors=[],native=new Set();
 const log=(type,data)=>{void globalThis.harnessLog({type,data});};
 class RTC extends RTCPeerConnection{
- constructor(config){super(config);native.add(this);this.addEventListener('datachannel',e=>{if(e.channel.label===COMPATIBILITY_WIRE.chatChannel)this.chat=e.channel;});}
- createDataChannel(...args){const dc=super.createDataChannel(...args);if(dc.label===COMPATIBILITY_WIRE.chatChannel)this.chat=dc;return dc;}
+ constructor(config){
+  super(config);native.add(this);
+  if(turnOnly&&this.getConfiguration().iceTransportPolicy!=='relay')throw Error('SDK connection did not retain relay-only policy');
+  this.addEventListener('connectionstatechange',()=>{if(this.connectionState==='connected')void this.capturePair();});
+  this.addEventListener('datachannel',e=>this.observeChannel(e.channel));
+ }
+ observeChannel(dc){
+  if(dc.label===COMPATIBILITY_WIRE.chatChannel)this.chat=dc;
+  this.kind=({[COMPATIBILITY_WIRE.systemChannel]:'system',[COMPATIBILITY_WIRE.chatChannel]:'messaging','phantom-distribution':'distribution'})[dc.label];
+  dc.addEventListener('open',()=>void this.capturePair());
+ }
+ createDataChannel(...args){const dc=super.createDataChannel(...args);this.observeChannel(dc);return dc;}
+ async capturePair(){
+  if(!turnOnly||!this.kind)return;
+  try{
+   const stats=await this.getStats();
+   for(const transport of stats.values())if(transport.type==='transport'&&transport.selectedCandidatePairId){
+    const pair=stats.get(transport.selectedCandidatePairId),local=stats.get(pair?.localCandidateId),remote=stats.get(pair?.remoteCandidateId);
+    if(pair&&local&&remote)log('rtc.selectedPair',{kind:this.kind,state:pair.state,localType:local.candidateType,remoteType:remote.candidateType,relayProtocol:local.relayProtocol,policy:this.getConfiguration().iceTransportPolicy});
+   }
+  }catch(error){log('rtc.statsError',{kind:this.kind,error:error.message});}
+ }
  close(){native.delete(this);super.close();}
 }
 const chunkStore={
@@ -22,9 +42,10 @@ const chunkStore={
 };
 const sha=async bytes=>Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),b=>b.toString(16).padStart(2,'0')).join('');
 globalThis.contracts={
- async open({invite,label}){
+ async open({invite,label,rtcConfiguration={iceServers:[]}}){
+  turnOnly=rtcConfiguration.iceTransportPolicy==='relay';
   let identity=JSON.parse(localStorage.getItem('identity')??'null');if(!identity){identity=createBrowserIdentity();localStorage.setItem('identity',JSON.stringify(identity));}
-  const sdk=createBrowserPhantom({identity,messaging:'automatic',rtcConfiguration:{iceServers:[]},...(!invite?{adminIdentity:await createAdminIdentity()}:{}),
+  const sdk=createBrowserPhantom({identity,messaging:'automatic',rtcConfiguration,...(!invite?{adminIdentity:await createAdminIdentity()}:{}),
    distribution:{chunkStore,batchSize:1,maxConnections:1,intervalMs:50,traceChunks:true},
    runtime:{crypto,RTCPeerConnection:RTC,setTimeout,clearTimeout,setInterval,clearInterval,localStorage},
    doorways:[{type:'harness'}],adapters:{harness:()=>adaptWebSocketDoorway(createWebSocketDoorway({url:location.origin.replace('http:','ws:')+'/' }))}});

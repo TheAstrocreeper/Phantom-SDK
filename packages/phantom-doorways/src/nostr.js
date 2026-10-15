@@ -2,7 +2,7 @@ import { verifyNostrEnvelope } from './nostr-crypto.js';
 export function classifyNostrRejection(reason='') {
  const text=String(reason).trim();
  // Compatibility with observed relay policy replies; not a general text heuristic.
- const category=/^Policy violated and pubkey is not in our web of trust\.?$/i.test(text)?'restricted':text.split(':',1)[0].trim().toLowerCase();
+ const category=/^rate limited$/i.test(text)?'rate-limited':/^Policy violated and pubkey is not in our web of trust\.?$/i.test(text)?'restricted':text.split(':',1)[0].trim().toLowerCase();
  return {category:category||'unknown',scope:category==='rate-limited'?'temporary':['blocked','restricted','auth-required','banned'].includes(category)?'session':'event'};
 }
 /** Signed discovery/signaling bus. Does not elect leaders or confer room authority. */

@@ -43,12 +43,16 @@ test('idle and reconnect require three separately acknowledged and delivered rou
  assert.deepEqual(result.stages.map(s=>s.stage),['initial','after_idle','reconnect']);
  assert.equal(result.timeline.filter(e=>e.type==='signal_delivered').length,6);
 });
-test('initial success cannot hide missing delivery after idle',async()=>{
+test('initial success cannot hide missing delivery after idle',async({mock})=>{
+ mock.timers.enable({apis:['Date','setTimeout']});
  const factory=ephemeralBus();
- const result=await probeRelay('wss://example.test/',{timeoutMs:180,idleReconnectMs:10,busFactory:config=>{
+ const probing=probeRelay('wss://example.test/',{timeoutMs:180,idleReconnectMs:10,busFactory:config=>{
   const bus=factory(config),send=bus.sendSignal;
   bus.sendSignal=(target,control)=>{if(control.probeStage==='after_idle')return;return send(target,control);};return bus;
  }});
+ mock.timers.tick(30);await new Promise(setImmediate);
+ mock.timers.tick(10);await new Promise(setImmediate);
+ mock.timers.tick(180);const result=await probing;
  assert.equal(result.passed,false);assert.deepEqual(result.stages.map(s=>s.stage),['initial']);
  assert.equal(result.signalsReceived,0);assert.equal(result.reason,'delivery_timeout');
 });

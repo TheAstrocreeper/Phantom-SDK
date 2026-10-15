@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import {spawn} from 'node:child_process';
+import {createConnection} from 'node:net';
 import {chromium} from 'playwright';
 import {build} from 'esbuild';
 import {startServer} from './server.mjs';
@@ -11,7 +13,10 @@ const root=fileURLToPath(new URL('../../',import.meta.url));
 const output=resolve(process.argv[2]??join(root,'tools/swarm/reports',new Date().toISOString().replaceAll(':','-')+'-contracts'));
 mkdirSync(output,{recursive:true});
 const clients=[],steps=[],events=[];
-const summary={scenario:'sdk-contracts',status:'running',network:'single-host loopback; native WebRTC; no NAT/loss emulation',steps};
+const turnTransport=process.env.PHANTOM_TURN_TRANSPORT;
+if(turnTransport!==undefined&&!['udp','tcp'].includes(turnTransport))throw Error('PHANTOM_TURN_TRANSPORT must be udp or tcp');
+const rtcConfiguration=turnTransport?{iceTransportPolicy:'relay',iceServers:[{urls:`turn:127.0.0.1:34789?transport=${turnTransport}`,username:'phantom-test',credential:crypto.randomUUID()}]}:{iceServers:[]};
+const summary={scenario:turnTransport?'turn-sdk-contracts':'sdk-contracts',turnTransport,status:'running',network:'single-host loopback; native WebRTC; no NAT/loss emulation',steps};
 function hashes(directory){const result={};for(const e of readdirSync(directory,{withFileTypes:true})){const p=join(directory,e.name);if(e.isDirectory()&&e.name!=='node_modules')Object.assign(result,hashes(p));else if(e.isFile()&&/\.(js|mjs|json)$/.test(e.name))result[p.slice(root.length)]=createHash('sha256').update(readFileSync(p)).digest('hex');}return result;}
 summary.sdkSourceHashes=hashes(join(root,'packages'));summary.harnessSourceHashes=Object.fromEntries(['contracts.mjs','contracts-peer.js','server.mjs','package-lock.json'].map(n=>[n,createHash('sha256').update(readFileSync(join(root,'tools/swarm',n))).digest('hex')]));
 summary.sdkRevision=execFileSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'}).trim();summary.dirty=!!execFileSync('git',['status','--porcelain'],{cwd:root,encoding:'utf8'}).trim();
@@ -19,12 +24,22 @@ const save=()=>writeFileSync(join(output,'summary.json'),JSON.stringify(summary,
 function log(peer,type,data){const row={at:new Date().toISOString(),peer,type,data};events.push(row);appendFileSync(join(output,'events.jsonl'),JSON.stringify(row)+'\n');}
 async function until(check,label){const end=Date.now()+60000;let last;while(Date.now()<end){last=await check();if(last)return last;await new Promise(r=>setTimeout(r,100));}throw Error('Timed out: '+label);}
 async function step(name,action){console.log('RUN',name);const start=Date.now();try{const evidence=await action();steps.push({name,status:'passed',durationMs:Date.now()-start,evidence});console.log('PASS',name);}catch(e){steps.push({name,status:'failed',error:e.stack});throw e;}finally{save();}}
-let browser,server;
+let browser,server,turn,turnError;
 const inspect=c=>c.page.evaluate(()=>contracts.inspect());
-async function open(label,invite){const context=await browser.newContext(),page=await context.newPage(),c={label,context,page};clients.push(c);await page.exposeBinding('harnessLog',(_,e)=>log(label,e.type,e.data));page.on('pageerror',e=>log(label,'pageerror',{error:e.stack}));await page.goto(server.url);await page.waitForFunction(()=>!!globalThis.contracts);Object.assign(c,await page.evaluate(v=>contracts.open(v),{label,invite}));return c;}
+async function open(label,invite){const context=await browser.newContext(),page=await context.newPage(),c={label,context,page};clients.push(c);await page.exposeBinding('harnessLog',(_,e)=>log(label,e.type,e.data));page.on('pageerror',e=>log(label,'pageerror',{error:e.stack}));await page.goto(server.url);await page.waitForFunction(()=>!!globalThis.contracts);Object.assign(c,await page.evaluate(v=>contracts.open(v),{label,invite,rtcConfiguration}));return c;}
 async function ready(){return until(async()=>{const rows=await Promise.all(clients.map(inspect));return rows.every(r=>r.state.state==='admitted'&&r.connections.length===2&&r.connections.every(p=>p.state==='ready'))&&rows;},'three peers admitted with automatic messaging ready');}
-async function reload(c,invite){await c.page.reload();await c.page.waitForFunction(()=>!!globalThis.contracts);const info=await c.page.evaluate(v=>contracts.open(v),{label:c.label,invite});assert.equal(info.peerId,c.peerId,'reloaded peer retains identity');return info;}
+async function reload(c,invite){await c.page.reload();await c.page.waitForFunction(()=>!!globalThis.contracts);const info=await c.page.evaluate(v=>contracts.open(v),{label:c.label,invite,rtcConfiguration});assert.equal(info.peerId,c.peerId,'reloaded peer retains identity');return info;}
 try{
+ if(turnTransport){
+  summary.turnVersion=execFileSync('turnserver',['--version'],{encoding:'utf8'}).trim();
+  turn=spawn('turnserver',['-n','--listening-ip=127.0.0.1','--relay-ip=127.0.0.1','--listening-port=34789','--min-port=49160','--max-port=49260','--realm=phantom-test','--lt-cred-mech','--user=phantom-test:'+rtcConfiguration.iceServers[0].credential,'--fingerprint','--allow-loopback-peers','--cli-password='+crypto.randomUUID(),'--no-cli','--no-tls','--no-dtls','--no-multicast-peers','--log-file=stdout','--simple-log','--pidfile='+join(output,'coturn.pid')]);
+  turn.stdout.on('data',data=>appendFileSync(join(output,'coturn.log'),data));turn.stderr.on('data',data=>appendFileSync(join(output,'coturn.log'),data));turn.on('error',error=>{turnError=error;});
+  await until(()=>new Promise(resolve=>{
+   if(turnError)throw turnError;if(turn.exitCode!==null)throw Error('Coturn exited: '+turn.exitCode);
+   const socket=createConnection({host:'127.0.0.1',port:34789});socket.setTimeout(1000);
+   socket.once('connect',()=>{socket.destroy();resolve(true);});socket.once('error',()=>{socket.destroy();resolve(false);});socket.once('timeout',()=>{socket.destroy();resolve(false);});
+  }),'Coturn TCP listener ready');
+ }
  const bundle=await build({entryPoints:[join(root,'tools/swarm/contracts-peer.js')],bundle:true,write:false,format:'esm',target:'es2022'});
  server=await startServer(bundle.outputFiles[0].text,(type,data)=>log('relay',type,data));
  browser=await chromium.launch({headless:true,...(process.env.PHANTOM_CHROMIUM_PATH?{executablePath:process.env.PHANTOM_CHROMIUM_PATH}:{}),args:['--no-sandbox','--disable-dev-shm-usage']});summary.browserVersion=browser.version();
@@ -69,9 +84,15 @@ try{
   assert.equal(events.some(e=>e.type==='pageerror'),false,'no browser script errors');
   return {excluded:excluded.peerId,chunks:0,receiverJobs:0,allPeersReady:rows.length};
  });
+ if(turnTransport)await step('selected native pairs use TURN for system, messaging and distribution',async()=>{
+  const evidence=events.filter(e=>e.type==='rtc.selectedPair').map(e=>({peer:e.peer,...e.data}));
+  for(const kind of ['system','messaging','distribution'])assert.ok(evidence.some(e=>e.kind===kind),'missing selected pair for '+kind);
+  for(const e of evidence){assert.equal(e.policy,'relay');assert.equal(e.state,'succeeded');assert.equal(e.localType,'relay');assert.equal(e.remoteType,'relay');assert.equal(e.relayProtocol,turnTransport);}
+  return evidence;
+ });
  summary.status='passed';
 }catch(e){summary.status='failed';summary.error=e.stack;console.error(e);process.exitCode=1;}
 finally{
  summary.final=await Promise.all(clients.map(async c=>{try{return {peer:c.label,...await inspect(c)};}catch(e){return {peer:c.label,error:e.message};}}));save();
- await browser?.close();await server?.close();console.log('Report:',output);
+ await browser?.close();await server?.close();if(turn?.pid&&turn.exitCode===null&&turn.signalCode===null){turn.kill('SIGTERM');await new Promise(resolve=>turn.once('exit',resolve));}console.log('Report:',output);
 }
