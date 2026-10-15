@@ -57,3 +57,16 @@ test('changed authority discards a waiting successor proof; oversized proofs can
  f.q.resume({isLeader:()=>true,eligible:()=>false,waiting:()=>true,accept:()=>assert.fail('stale authority resumed')});
  assert.equal(f.q.snapshot().length,0);
 });
+
+test('handoff and successor offers share capacity, supersession and ICE ownership',()=>{
+ const {q,timers}=fixture({maxPeers:1});
+ q.hold(peer,offer,meta('a'),'successor');q.ice(peer,candidate,meta('a'));
+ assert.ok(q.hold(peer,offer,meta('b'),'handoff'));
+ assert.equal(q.snapshot().length,1);assert.equal(q.snapshot()[0].kind,'handoff');assert.equal(timers.size,1);
+ assert.equal(q.hold(peer,offer,meta('a'),'successor'),false);
+ assert.equal(q.ice(peer,candidate,meta('a')),'mismatch');
+ assert.equal(q.ice(peer,candidate,meta('b')),'held');
+ assert.equal(q.hold(other,offer,meta('c'),'successor'),false);
+ let accepted;q.resume({isLeader:()=>true,eligible:()=>true,accept:row=>{accepted=row;}});
+ assert.equal(accepted.kind,'handoff');assert.equal(accepted.ice.length,1);assert.equal(timers.size,0);
+});
