@@ -42,3 +42,29 @@ jobs:
           name: swarm-reports
           path: tools/swarm/reports/
           if-no-files-found: warn
+  turn:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    strategy:
+      fail-fast: false
+      matrix:
+        transport: [udp, tcp]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci
+      - run: npm ci --prefix tools/swarm
+      - run: sudo apt-get update && sudo apt-get install -y coturn
+      - run: cd tools/swarm && npx playwright install --with-deps chromium --only-shell
+      - name: Verify SDK connections through TURN only
+        run: node tools/swarm/contracts.mjs
+        env:
+          PHANTOM_TURN_TRANSPORT: ${{ matrix.transport }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: turn-${{ matrix.transport }}-reports
+          path: tools/swarm/reports/
+          if-no-files-found: warn
