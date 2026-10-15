@@ -62,6 +62,7 @@ jobs:
         run: node tools/swarm/contracts.mjs
         env:
           PHANTOM_TURN_TRANSPORT: ${{ matrix.transport }}
+          PHANTOM_TURN_FAILURES: '1'
       - uses: actions/upload-artifact@v4
         if: always()
         with:
