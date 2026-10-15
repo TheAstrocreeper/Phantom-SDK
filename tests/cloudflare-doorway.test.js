@@ -110,3 +110,12 @@ test('a close event that wakes a hibernated object still creates the departure l
  assert.equal(woke.pending.get(a.s.a.hKey).endpointId,a.s.a.endpointId);
  assert.equal(woke.peers.size,1);
 });
+
+test('restricted relay forwards signed route advice unchanged and rejects a modified target',async()=>{
+ const f=await fixture(),alice=createNostrIdentity(),bob=createNostrIdentity();
+ const a=await add(f,alice),b=await add(f,bob);
+ const payload={type:'rtc_route_hint',pipe:'sys',videoId:room,from:a.s.a.hKey,to:b.s.a.hKey,bootId:a.p.bootId,requestBootId:b.p.bootId,sysAttemptId:'pending-attempt',leader:'3333333333333333'};
+ const packet={...payload,admissionProof:alice.signPeerProof({networkId:room,kind:'signal',credential:a.p.admissionProof.credential,payload,issuedAt:Date.now(),nonce:crypto.randomUUID()})};
+ await f.instance.webSocketMessage(a.s,JSON.stringify(packet));assert.deepEqual(b.s.sent.at(-1),packet);
+ const count=b.s.sent.length;await f.instance.webSocketMessage(a.s,JSON.stringify({...packet,leader:'4444444444444444'}));assert.equal(b.s.sent.length,count);
+});

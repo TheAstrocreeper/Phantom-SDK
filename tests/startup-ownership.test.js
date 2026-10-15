@@ -8,7 +8,7 @@ const leader='c7dae1bca9eea49c',mirror='c44bcafa56a10013',ordinary='eeeeeeeeeeee
 const applied=[],instances=[];
 class RTC {
  constructor(){instances.push(this);this.connectionState='new';this.iceConnectionState='new';this.signalingState='stable';}
- createDataChannel(label){return {label,readyState:'connecting',bufferedAmount:0,close(){},send(){}};}
+ createDataChannel(label){const ch={label,id:null,readyState:'connecting',bufferedAmount:0,sent:[],close(){this.readyState='closed';this.onclose?.();},send(raw){this.sent.push(raw);}};(this.channels??=[]).push(ch);return ch;}
  async getStats(){assert.notEqual(this.connectionState,'closed');return new Map([['pair',{id:'pair',type:'candidate-pair',state:'in-progress',requestsSent:2,responsesReceived:0}]]);}
  async addIceCandidate(c){assert.notEqual(this.connectionState,'closed');applied.push(c.candidate);}
  async createOffer(){return {type:'offer',sdp:'stub-offer'};}
@@ -129,4 +129,57 @@ test('candidate trace correlates generation, local route submission and remote a
   const tx=a.core.snapshot().iceTrace.events.filter(e=>e.candidate.candidate===candidate.candidate),rx=b.core.snapshot().iceTrace.events.filter(e=>e.candidate.candidate===candidate.candidate);
   assert.deepEqual(tx.map(e=>e.stage),['generated','route_submission']);assert.deepEqual(rx.map(e=>e.stage),['received','applied']);assert(tx.every(e=>e.key===rx[0].key));assert.equal(tx[0].candidate.address,'pc-example.local');assert.equal(tx[1].submitted,true);
  }finally{a.core.dispose();b.core.dispose();}
+});
+
+
+test('an unanswered SYS offer retries with a new attempt and ignores the retired answer',async()=>{
+ const c=clock(),before=instances.length,f=await fixture(ordinary,c.timers);
+ try{
+  const original=instances[before],offer=f.packets.find(p=>p.type==='rtc_offer');
+  c.advance(15000);await settle();
+  assert.equal(original.connectionState,'closed');
+  const replacement=f.packets.filter(p=>p.type==='rtc_offer').at(-1);
+  assert.notEqual(replacement.sysAttemptId,offer.sysAttemptId);
+  assert.notEqual(replacement.to,offer.to,'unadmitted peer tries another live discovery hint');
+  assert.equal(f.core.getState().admitted,false,'routing does not commit membership');
+  f.wire.onSignal({...offer,type:'rtc_answer',from:leader,to:ordinary,sdp:{type:'answer',sdp:'retired-answer'}});await settle();
+  const active=instances.at(-1);assert.equal(active.remoteDescription,undefined);
+  f.wire.onSignal({...replacement,type:'rtc_answer',from:replacement.to,to:ordinary,sdp:{type:'answer',sdp:'current-answer'}});await settle();
+  assert.equal(active.remoteDescription.sdp,'current-answer');
+  c.advance(15000);await settle();assert.notEqual(active.connectionState,'closed');
+ }finally{f.core.dispose();}
+ assert.equal(c.pending(),0);
+});
+
+test('correlated bootstrap advice changes the pending route without waiting or committing membership',async()=>{
+ const before=instances.length,f=await fixture(ordinary);
+ try{
+  const offer=f.packets.find(p=>p.type==='rtc_offer'),original=instances[before];
+  const hint={type:'rtc_route_hint',pipe:'sys',videoId:room,from:leader,to:ordinary,bootId:leader,requestBootId:offer.bootId,sysAttemptId:offer.sysAttemptId,leader:mirror};
+  f.wire.onSignal({...hint,sysAttemptId:'retired'});await settle();assert.notEqual(original.connectionState,'closed');
+  f.wire.onSignal(hint);await settle();assert.equal(original.connectionState,'closed');
+  const next=f.packets.filter(p=>p.type==='rtc_offer').at(-1);assert.equal(next.to,mirror);assert.notEqual(next.sysAttemptId,offer.sysAttemptId);
+  assert.equal(f.core.getState().admitted,false);
+  const active=instances.at(-1);f.wire.onSignal(hint);await settle();assert.notEqual(active.connectionState,'closed');
+ }finally{f.core.dispose();}
+});
+
+test('crossed SYS channels converge on the same SCTP stream regardless of arrival order',async()=>{
+ for(const localId of [0,1])for(const localFirst of [true,false]){
+  const incomingId=1-localId;
+  const start=instances.length,f=await fixture(leader);
+  try{const pc=instances.slice(start).find(p=>p.channels?.length);assert.ok(pc);
+   const local=pc.channels[0];local.id=localId;if(localFirst){local.readyState='open';local.onopen();}
+   const remote={label:local.label,id:incomingId,readyState:'open',sent:[],send(raw){this.sent.push(raw);},close(){this.readyState='closed';this.onclose?.();}};
+   pc.ondatachannel({channel:remote});remote.onopen();if(!localFirst&&local.readyState!=='closed'){local.readyState='open';local.onopen();}await settle();
+   const chosen=incomingId<local.id?remote:local,other=chosen===remote?local:remote;
+   chosen.sent.length=0;other.sent.length=0;const events=[];const off=f.core.onEvent(e=>events.push(e));
+   f.core.command('PHANTOM_DIST_SEND',{to:mirror,frame:{test:'crossed'}});
+   assert.equal(chosen.sent.filter(v=>JSON.parse(v).t==='PHANTOM_DIST').length,1);assert.equal(other.sent.length,0);assert.equal(chosen.id,0);
+   other.onmessage?.({data:JSON.stringify({t:'PHANTOM_DIST',frame:{test:'stale'}})});
+   assert.equal(events.some(e=>e.type==='PHANTOM_DIST'&&e.payload.frame.test==='stale'),false);
+   chosen.onmessage({data:JSON.stringify({t:'PHANTOM_DIST',frame:{test:'received'}})});
+   assert.ok(events.some(e=>e.type==='PHANTOM_DIST'&&e.payload.frame.test==='received'));off();
+  }finally{f.core.dispose();}
+ }
 });

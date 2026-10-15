@@ -2,6 +2,7 @@ import {createControlStore} from '../../phantom-core/src/admin-lifecycle.js';
 import {withNativeEntry} from './native-entry.js';
 import {createRelayManager} from './relay-manager.js';
 import {createPhantomEntry} from '../../phantom-core/src/entry.js';
+import {verifyPeerProof} from './peer-proof.js';
 import {createNostrIdentity} from './nostr-crypto.js';
 import {createNostrDoorway} from './nostr-doorway.js';
 import {createWebSocketDoorway} from './index.js';
@@ -41,7 +42,7 @@ export function createBrowserPhantom({admission,authorizationTimeoutMs=5000,admi
   if(types!==undefined){if(!Array.isArray(types)||types.some(t=>typeof t!=='string'))throw new TypeError('doorwayTypes must be an array of adapter types');specs=specs.filter(s=>types.includes(s.type));if(!specs.length)throw new TypeError('No invited doorway matches doorwayTypes');}
   const identity=sdkIdentity??=createNostrIdentity();
   function build(spec){let adapter;
-   if(spec.type==='nostr')adapter=createNostrDoorway({identity,relays:spec.relays,WebSocket});
+   if(spec.type==='nostr')adapter=createNostrDoorway({identity,relays:spec.relays,WebSocket,...(access?{canFollowRelayHint:peer=>access.checkpoint.allows(peer)}:{}),...(spec.discover?{refreshRelays:async()=>{if(access&&!access.checkpoint.allows(identity.publicKey.slice(0,16)))throw new AdmissionError('Local admission credential expired');return manager.refresh();}}:{})});
    else if(spec.type==='websocket')adapter=adaptWebSocketDoorway(createWebSocketDoorway({url:spec.url,WebSocket}));
    else adapter=adapters[spec.type]({spec:structuredClone(spec),networkId:context.networkId,identity,WebSocket,runtime});
    validateDoorway(adapter);
@@ -51,12 +52,12 @@ export function createBrowserPhantom({admission,authorizationTimeoutMs=5000,admi
   const doorway=withNativeEntry(createCompositeDoorway({doorways:initial,mode:doorwayMode,admissionTimeoutMs:doorwayAdmissionTimeoutMs,recover:async index=>{
    const spec=specs[index];if(spec.type!=='nostr'||!spec.discover)return null;
    if(access&&!access.checkpoint.allows(identity.publicKey.slice(0,16)))throw new AdmissionError('Local admission credential expired');
-   const fresh=await manager.refresh();const expanded=[...new Set([...spec.relays,...fresh])];
+   const fresh=await manager.refresh();const expanded=[...new Set([...spec.relays,...fresh])].slice(0,8);
    if(!fresh.length||fresh.every(url=>spec.relays.includes(url)))return null;
    // Keep original invite coordinates while adding discovered alternatives.
    return build({...spec,relays:expanded});
   }}),{onStatus:onDoorwayStatus});
-  return {identity:{version:1,id:identity.publicKey},runtime,doorway,canAdmitPeer:access?peer=>access.checkpoint.allows(peer):undefined,adminIdentity,controlStore:context.adminPublicKey?(controlStore??createControlStore(storage)):undefined,files,distribution,readAdminOrders,retireGraceMs,onNetworkState:state=>doorway.observeNetworkState(state)};
+  return {identity:{version:1,id:identity.publicKey},recoverySignaling:{sign:payload=>identity.signPeerProof({networkId:context.networkId,kind:'sys_recovery_bridge',payload,issuedAt:Date.now(),nonce:crypto.randomUUID()}),verify:(proof,payload,key)=>proof.peerPublicKey===key&&verifyPeerProof(proof,{networkId:context.networkId,kind:'sys_recovery_bridge',payload})},runtime,doorway,canAdmitPeer:access?peer=>access.checkpoint.allows(peer):undefined,adminIdentity,controlStore:context.adminPublicKey?(controlStore??createControlStore(storage)):undefined,files,distribution,readAdminOrders,retireGraceMs,onNetworkState:state=>doorway.observeNetworkState(state)};
  }
  return {
   async join(invite,options){const context=parseInvite(invite);const access=await preflight(context,options,'join');return createPhantomEntry({openContext:context=>openContext(context,options?.doorwayTypes,access),...(coreFactory?{coreFactory}:{})}).join(invite,options);},

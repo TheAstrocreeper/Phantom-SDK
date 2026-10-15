@@ -7,7 +7,7 @@ const JOIN_TIMEOUT_MS = 10_000;
 const REPLACEMENT_GRACE_MS = 10_000;
 const PEER = /^[0-9a-f]{16}$/;
 const NETWORK = /^[0-9a-f]{64}$/;
-const SIGNALS = new Set(['rtc_offer','rtc_answer','rtc_ice','veil_invite','veil_accept','veil_deny','sys_block','sys_unblock','sys_unblock_ack']);
+const SIGNALS = new Set(['rtc_offer','rtc_answer','rtc_ice','rtc_route_hint','veil_invite','veil_accept','veil_deny','sys_block','sys_unblock','sys_unblock_ack']);
 const encoder = new TextEncoder();
 
 function json(value,status=200) {

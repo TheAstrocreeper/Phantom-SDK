@@ -1,0 +1,272 @@
+{
+  "checkedAt": "2026-10-15T06:48:42.640Z",
+  "metadata": [
+    {
+      "url": "wss://nostr.mom/",
+      "available": true,
+      "elapsedMs": 4230,
+      "bytes": 491,
+      "document": {
+        "description": "Spam and nudity filtering. Stricter and more experimental than nos.lol.",
+        "icon": "https://nostr.mom/favicon.ico",
+        "limitation": {
+          "max_limit": 500,
+          "max_message_length": 131072,
+          "max_subscriptions": 50
+        },
+        "name": "nostr.mom",
+        "negentropy": 1,
+        "pubkey": "c5fadeb5d90d68baffc631455a07ca340ccf1e31110955e16d45eb5f87147cd9",
+        "software": "git+https://github.com/hoytech/strfry.git",
+        "supported_nips": [
+          1,
+          2,
+          4,
+          9,
+          11,
+          28,
+          40,
+          45,
+          70
+        ],
+        "terms_of_service": "https://wikifreedia.xyz/nostr.mom/",
+        "version": "1.1.3"
+      }
+    }
+  ],
+  "secondPeerDelayMs": 0,
+  "idleReconnectMs": null,
+  "payloadBytes": 16384,
+  "scope": "Two fresh identities, one unique room, signed discovery and bidirectional signaling. No WebRTC or persistence claim.",
+  "results": [
+    {
+      "url": "wss://nostr.mom/",
+      "passed": true,
+      "reason": "bidirectional_signed_delivery",
+      "secondPeerDelayMs": 0,
+      "idleReconnectMs": null,
+      "payloadBytes": 16384,
+      "stages": [
+        {
+          "stage": "initial",
+          "completedMs": 4201
+        }
+      ],
+      "timings": [
+        {
+          "peer": 0,
+          "openedMs": 3502,
+          "eoseMs": 3624,
+          "discoveredMs": 3830,
+          "deliveryMs": 340
+        },
+        {
+          "peer": 1,
+          "openedMs": 3510,
+          "eoseMs": 3623,
+          "discoveredMs": 3848,
+          "deliveryMs": 349
+        }
+      ],
+      "latencyMs": 4202,
+      "announcementsReceived": 2,
+      "signalsReceived": 2,
+      "signalsAccepted": 2,
+      "timeline": [
+        {
+          "atMs": 52,
+          "peer": 0,
+          "type": "connecting",
+          "stage": "initial",
+          "url": "wss://nostr.mom/"
+        },
+        {
+          "atMs": 53,
+          "peer": 1,
+          "type": "connecting",
+          "stage": "initial",
+          "url": "wss://nostr.mom/"
+        },
+        {
+          "atMs": 3502,
+          "peer": 0,
+          "type": "open",
+          "stage": "initial",
+          "url": "wss://nostr.mom/"
+        },
+        {
+          "atMs": 3510,
+          "peer": 1,
+          "type": "open",
+          "stage": "initial",
+          "url": "wss://nostr.mom/"
+        },
+        {
+          "atMs": 3623,
+          "peer": 1,
+          "type": "subscription_eose",
+          "stage": "initial"
+        },
+        {
+          "atMs": 3624,
+          "peer": 0,
+          "type": "subscription_eose",
+          "stage": "initial"
+        },
+        {
+          "atMs": 3735,
+          "peer": 1,
+          "type": "publish",
+          "stage": "initial",
+          "url": "wss://nostr.mom/",
+          "ackMs": 225,
+          "wireBytes": 1084,
+          "eventBytes": 1074,
+          "eventId": "031bc3d04663461d37d84ae9a5ba8992e44fcf19c21d798f81cf1f907054a24b",
+          "packetType": "ANNOUNCEMENT",
+          "accepted": true,
+          "reason": ""
+        },
+        {
+          "atMs": 3750,
+          "peer": 0,
+          "type": "publish",
+          "stage": "initial",
+          "url": "wss://nostr.mom/",
+          "ackMs": 248,
+          "wireBytes": 1084,
+          "eventBytes": 1074,
+          "eventId": "62e097b87c3122c62a681fa493e46d53fe3c7f5e895b33d850d9d2274e360469",
+          "packetType": "ANNOUNCEMENT",
+          "accepted": true,
+          "reason": ""
+        },
+        {
+          "atMs": 3830,
+          "peer": 0,
+          "type": "peer_discovered",
+          "stage": "initial"
+        },
+        {
+          "atMs": 3848,
+          "peer": 1,
+          "type": "peer_discovered",
+          "stage": "initial"
+        },
+        {
+          "atMs": 3852,
+          "peer": 0,
+          "type": "signal_sent",
+          "stage": "initial"
+        },
+        {
+          "atMs": 3857,
+          "peer": 1,
+          "type": "signal_sent",
+          "stage": "initial"
+        },
+        {
+          "atMs": 3971,
+          "peer": 0,
+          "type": "publish",
+          "stage": "initial",
+          "url": "wss://nostr.mom/",
+          "ackMs": 136,
+          "wireBytes": 1104,
+          "eventBytes": 1094,
+          "eventId": "6481a0ef20146e946311e2a8d2be47812cff0e8205d2a5f4cdfc0e50ea840759",
+          "packetType": "ANNOUNCEMENT",
+          "accepted": true,
+          "reason": ""
+        },
+        {
+          "atMs": 3974,
+          "peer": 1,
+          "type": "publish",
+          "stage": "initial",
+          "url": "wss://nostr.mom/",
+          "ackMs": 122,
+          "wireBytes": 1104,
+          "eventBytes": 1094,
+          "eventId": "ca0fead1e0122982c65526f6a1a5a7f59f1f08ab79b950e01fdc1bf2b3a0af5d",
+          "packetType": "ANNOUNCEMENT",
+          "accepted": true,
+          "reason": ""
+        },
+        {
+          "atMs": 4091,
+          "peer": 1,
+          "type": "publish",
+          "stage": "initial",
+          "url": "wss://nostr.mom/",
+          "ackMs": 230,
+          "wireBytes": 17647,
+          "eventBytes": 17637,
+          "eventId": "008882ad3c4c335720b9e1b96b260a9dcb6f4f3865020201362386fbb7ee5849",
+          "messageId": "probe-initial-1",
+          "packetType": "SIGNAL",
+          "signalType": "phantom_doorway_probe",
+          "from": "20e4c9369cd4631e",
+          "to": "50d81c9a388cd588",
+          "accepted": true,
+          "reason": ""
+        },
+        {
+          "atMs": 4096,
+          "peer": 0,
+          "type": "publish",
+          "stage": "initial",
+          "url": "wss://nostr.mom/",
+          "ackMs": 240,
+          "wireBytes": 17647,
+          "eventBytes": 17637,
+          "eventId": "a9a9ddc898dc63048a000eca10be603f0c0ad64d77b1eca6c1b77adcd49cb030",
+          "messageId": "probe-initial-0",
+          "packetType": "SIGNAL",
+          "signalType": "phantom_doorway_probe",
+          "from": "50d81c9a388cd588",
+          "to": "20e4c9369cd4631e",
+          "accepted": true,
+          "reason": ""
+        },
+        {
+          "atMs": 4197,
+          "peer": 0,
+          "type": "signal_received",
+          "stage": "initial",
+          "url": "wss://nostr.mom/",
+          "eventId": "008882ad3c4c335720b9e1b96b260a9dcb6f4f3865020201362386fbb7ee5849",
+          "messageId": "probe-initial-1",
+          "signalType": "phantom_doorway_probe",
+          "from": "20e4c9369cd4631e",
+          "to": "50d81c9a388cd588"
+        },
+        {
+          "atMs": 4197,
+          "peer": 0,
+          "type": "signal_delivered",
+          "stage": "initial"
+        },
+        {
+          "atMs": 4201,
+          "peer": 1,
+          "type": "signal_received",
+          "stage": "initial",
+          "url": "wss://nostr.mom/",
+          "eventId": "a9a9ddc898dc63048a000eca10be603f0c0ad64d77b1eca6c1b77adcd49cb030",
+          "messageId": "probe-initial-0",
+          "signalType": "phantom_doorway_probe",
+          "from": "50d81c9a388cd588",
+          "to": "20e4c9369cd4631e"
+        },
+        {
+          "atMs": 4201,
+          "peer": 1,
+          "type": "signal_delivered",
+          "stage": "initial"
+        }
+      ],
+      "diagnostics": []
+    }
+  ]
+}

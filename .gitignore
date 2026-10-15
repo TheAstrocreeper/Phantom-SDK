@@ -8,3 +8,6 @@ node_modules/
 !**/.dev.vars.example
 
 demos/*/dist/
+
+# Swarm harness generated diagnostics
+tools/swarm/reports/

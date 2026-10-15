@@ -1,0 +1,39 @@
+name: Browser swarm
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'packages/**'
+      - 'tools/swarm/**'
+      - 'tools/nostr/*.mjs'
+      - 'tests/**'
+      - 'package*.json'
+      - '.github/workflows/swarm.yml'
+permissions:
+  contents: read
+jobs:
+  swarm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci
+      - run: npm ci --prefix tools/swarm
+      - run: npm test
+      - run: node --test tools/swarm/*.test.mjs
+      - run: node --test tools/nostr/*.test.mjs
+      - run: cd tools/swarm && npx playwright install --with-deps chromium --only-shell
+      - run: node tools/swarm/launch.mjs --peers 5 --bytes 4194304 --timeout 90000
+      - name: Force native early-successor offer retention
+        run: node tools/swarm/launch.mjs --scenario early-successor --peers 4 --bytes 65536 --timeout 90000
+      - name: Repeat Cloudflare peer-bridge recovery
+        run: node tools/swarm/launch.mjs --stress --runs 5 --cf wss://switchboard.primer187.workers.dev/ --scenario peer-bridge --peers 5 --bytes 4194304 --timeout 180000
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: swarm-reports
+          path: tools/swarm/reports/
+          if-no-files-found: warn

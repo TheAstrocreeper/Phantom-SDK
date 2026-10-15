@@ -1,0 +1,511 @@
+{
+  "checkedAt": "2026-10-15T06:41:22.967Z",
+  "metadata": [
+    {
+      "url": "wss://relay.snort.social/",
+      "available": true,
+      "elapsedMs": 4297,
+      "bytes": 261,
+      "document": {
+        "description": "High-performance in-memory Nostr relay",
+        "limitation": {
+          "idle_timeout": 10,
+          "max_limit": 5000,
+          "max_message_length": 524288,
+          "max_subscriptions": 300
+        },
+        "name": "memlay",
+        "software": "https://github.com/v0l/memlay",
+        "supported_nips": [
+          1,
+          9,
+          11
+        ],
+        "version": "0.2.0"
+      }
+    }
+  ],
+  "secondPeerDelayMs": 0,
+  "idleReconnectMs": 15000,
+  "scope": "Two fresh identities, one unique room, signed discovery and bidirectional signaling. No WebRTC or persistence claim.",
+  "results": [
+    {
+      "url": "wss://relay.snort.social/",
+      "passed": true,
+      "reason": "idle_and_reconnect_delivery",
+      "secondPeerDelayMs": 0,
+      "idleReconnectMs": 15000,
+      "stages": [
+        {
+          "stage": "initial",
+          "completedMs": 5720
+        },
+        {
+          "stage": "after_idle",
+          "completedMs": 20982
+        },
+        {
+          "stage": "reconnect",
+          "completedMs": 25301
+        }
+      ],
+      "timings": [
+        {
+          "peer": 0,
+          "openedMs": 5026,
+          "eoseMs": 5152,
+          "discoveredMs": 5391,
+          "deliveryMs": 189
+        },
+        {
+          "peer": 1,
+          "openedMs": 4870,
+          "eoseMs": 5017,
+          "discoveredMs": 5258,
+          "deliveryMs": 325
+        }
+      ],
+      "latencyMs": 25302,
+      "announcementsReceived": 2,
+      "signalsReceived": 2,
+      "signalsAccepted": 2,
+      "timeline": [
+        {
+          "atMs": 63,
+          "peer": 0,
+          "type": "connecting",
+          "stage": "initial",
+          "url": "wss://relay.snort.social/"
+        },
+        {
+          "atMs": 65,
+          "peer": 1,
+          "type": "connecting",
+          "stage": "initial",
+          "url": "wss://relay.snort.social/"
+        },
+        {
+          "atMs": 4870,
+          "peer": 1,
+          "type": "open",
+          "stage": "initial",
+          "url": "wss://relay.snort.social/"
+        },
+        {
+          "atMs": 5017,
+          "peer": 1,
+          "type": "subscription_eose",
+          "stage": "initial"
+        },
+        {
+          "atMs": 5026,
+          "peer": 0,
+          "type": "open",
+          "stage": "initial",
+          "url": "wss://relay.snort.social/"
+        },
+        {
+          "atMs": 5152,
+          "peer": 1,
+          "type": "publish",
+          "stage": "initial",
+          "url": "wss://relay.snort.social/",
+          "ackMs": 282,
+          "eventBytes": 1074,
+          "eventId": "681c1ec209e1b6ad1ebad26c4dc457852e544b31b80bb9a0c2eda655f3827e87",
+          "packetType": "ANNOUNCEMENT",
+          "accepted": true,
+          "reason": "ephemeral: will not be stored"
+        },
+        {
+          "atMs": 5152,
+          "peer": 0,
+          "type": "subscription_eose",
+          "stage": "initial"
+        },
+        {
+          "atMs": 5258,
+          "peer": 1,
+          "type": "peer_discovered",
+          "stage": "initial"
+        },
+        {
+          "atMs": 5269,
+          "peer": 0,
+          "type": "publish",
+          "stage": "initial",
+          "url": "wss://relay.snort.social/",
+          "ackMs": 243,
+          "eventBytes": 1074,
+          "eventId": "3cae9ede89540b0021b93f867ae77edacf1d267aa12fd1e1a7e44d5371c5132c",
+          "packetType": "ANNOUNCEMENT",
+          "accepted": true,
+          "reason": "ephemeral: will not be stored"
+        },
+        {
+          "atMs": 5391,
+          "peer": 0,
+          "type": "peer_discovered",
+          "stage": "initial"
+        },
+        {
+          "atMs": 5395,
+          "peer": 0,
+          "type": "signal_sent",
+          "stage": "initial"
+        },
+        {
+          "atMs": 5400,
+          "peer": 1,
+          "type": "signal_sent",
+          "stage": "initial"
+        },
+        {
+          "atMs": 5408,
+          "peer": 1,
+          "type": "publish",
+          "stage": "initial",
+          "url": "wss://relay.snort.social/",
+          "ackMs": 145,
+          "eventBytes": 1094,
+          "eventId": "a5d4ea5d3de0d57e767a07b1a60600e76b435f7ddfc21717df815c3a5dea3537",
+          "packetType": "ANNOUNCEMENT",
+          "accepted": true,
+          "reason": "ephemeral: will not be stored"
+        },
+        {
+          "atMs": 5585,
+          "peer": 0,
+          "type": "publish",
+          "stage": "initial",
+          "url": "wss://relay.snort.social/",
+          "ackMs": 190,
+          "eventBytes": 1094,
+          "eventId": "ef5cb08eb8fe659f85d6a42dba4a3e5e1d0f1d8a7b7358e0fb243d236861b71f",
+          "packetType": "ANNOUNCEMENT",
+          "accepted": true,
+          "reason": "ephemeral: will not be stored"
+        },
+        {
+          "atMs": 5588,
+          "peer": 0,
+          "type": "signal_received",
+          "stage": "initial",
+          "url": "wss://relay.snort.social/",
+          "eventId": "2dde40e4f461294c9e55afc69cfeb6b741a71c7112c089e674a821e94ae382f7",
+          "messageId": "probe-initial-1",
+          "signalType": "phantom_doorway_probe",
+          "from": "34cf03d8ea10c19f",
+          "to": "6a221b5416884889"
+        },
+        {
+          "atMs": 5589,
+          "peer": 0,
+          "type": "signal_delivered",
+          "stage": "initial"
+        },
+        {
+          "atMs": 5638,
+          "peer": 1,
+          "type": "publish",
+          "stage": "initial",
+          "url": "wss://relay.snort.social/",
+          "ackMs": 235,
+          "eventBytes": 1236,
+          "eventId": "2dde40e4f461294c9e55afc69cfeb6b741a71c7112c089e674a821e94ae382f7",
+          "messageId": "probe-initial-1",
+          "packetType": "SIGNAL",
+          "signalType": "phantom_doorway_probe",
+          "from": "34cf03d8ea10c19f",
+          "to": "6a221b5416884889",
+          "accepted": true,
+          "reason": "ephemeral: will not be stored"
+        },
+        {
+          "atMs": 5716,
+          "peer": 0,
+          "type": "publish",
+          "stage": "initial",
+          "url": "wss://relay.snort.social/",
+          "ackMs": 316,
+          "eventBytes": 1236,
+          "eventId": "6a5244eff7486a12bda6aa71232845098051c29799f302d7c0f7e28500016b05",
+          "messageId": "probe-initial-0",
+          "packetType": "SIGNAL",
+          "signalType": "phantom_doorway_probe",
+          "from": "6a221b5416884889",
+          "to": "34cf03d8ea10c19f",
+          "accepted": true,
+          "reason": "ephemeral: will not be stored"
+        },
+        {
+          "atMs": 5720,
+          "peer": 1,
+          "type": "signal_received",
+          "stage": "initial",
+          "url": "wss://relay.snort.social/",
+          "eventId": "6a5244eff7486a12bda6aa71232845098051c29799f302d7c0f7e28500016b05",
+          "messageId": "probe-initial-0",
+          "signalType": "phantom_doorway_probe",
+          "from": "6a221b5416884889",
+          "to": "34cf03d8ea10c19f"
+        },
+        {
+          "atMs": 5720,
+          "peer": 1,
+          "type": "signal_delivered",
+          "stage": "initial"
+        },
+        {
+          "atMs": 5720,
+          "peer": null,
+          "type": "idle_started",
+          "stage": "idle_wait",
+          "idleMs": 15000
+        },
+        {
+          "atMs": 20720,
+          "peer": 0,
+          "type": "signal_sent",
+          "stage": "after_idle"
+        },
+        {
+          "atMs": 20725,
+          "peer": 1,
+          "type": "signal_sent",
+          "stage": "after_idle"
+        },
+        {
+          "atMs": 20964,
+          "peer": 0,
+          "type": "publish",
+          "stage": "after_idle",
+          "url": "wss://relay.snort.social/",
+          "ackMs": 240,
+          "eventBytes": 1242,
+          "eventId": "84ba2708ca6b575c692ef1f7c351c04fe1cd629e74dfa716ded5892bcffb9853",
+          "messageId": "probe-after_idle-0",
+          "packetType": "SIGNAL",
+          "signalType": "phantom_doorway_probe",
+          "from": "6a221b5416884889",
+          "to": "34cf03d8ea10c19f",
+          "accepted": true,
+          "reason": "ephemeral: will not be stored"
+        },
+        {
+          "atMs": 20969,
+          "peer": 0,
+          "type": "signal_received",
+          "stage": "after_idle",
+          "url": "wss://relay.snort.social/",
+          "eventId": "525697f91469338622cc2ecd8a07d212b76b99051c2027b6c33b6c184e1c1ad1",
+          "messageId": "probe-after_idle-1",
+          "signalType": "phantom_doorway_probe",
+          "from": "34cf03d8ea10c19f",
+          "to": "6a221b5416884889"
+        },
+        {
+          "atMs": 20969,
+          "peer": 0,
+          "type": "signal_delivered",
+          "stage": "after_idle"
+        },
+        {
+          "atMs": 20976,
+          "peer": 1,
+          "type": "signal_received",
+          "stage": "after_idle",
+          "url": "wss://relay.snort.social/",
+          "eventId": "84ba2708ca6b575c692ef1f7c351c04fe1cd629e74dfa716ded5892bcffb9853",
+          "messageId": "probe-after_idle-0",
+          "signalType": "phantom_doorway_probe",
+          "from": "6a221b5416884889",
+          "to": "34cf03d8ea10c19f"
+        },
+        {
+          "atMs": 20976,
+          "peer": 1,
+          "type": "signal_delivered",
+          "stage": "after_idle"
+        },
+        {
+          "atMs": 20982,
+          "peer": 1,
+          "type": "publish",
+          "stage": "after_idle",
+          "url": "wss://relay.snort.social/",
+          "ackMs": 254,
+          "eventBytes": 1242,
+          "eventId": "525697f91469338622cc2ecd8a07d212b76b99051c2027b6c33b6c184e1c1ad1",
+          "messageId": "probe-after_idle-1",
+          "packetType": "SIGNAL",
+          "signalType": "phantom_doorway_probe",
+          "from": "34cf03d8ea10c19f",
+          "to": "6a221b5416884889",
+          "accepted": true,
+          "reason": "ephemeral: will not be stored"
+        },
+        {
+          "atMs": 20982,
+          "peer": 1,
+          "type": "reconnect_requested",
+          "stage": "reconnect"
+        },
+        {
+          "atMs": 20982,
+          "peer": 1,
+          "type": "connecting",
+          "stage": "reconnect",
+          "url": "wss://relay.snort.social/"
+        },
+        {
+          "atMs": 24623,
+          "peer": 1,
+          "type": "open",
+          "stage": "reconnect",
+          "url": "wss://relay.snort.social/"
+        },
+        {
+          "atMs": 24800,
+          "peer": 1,
+          "type": "subscription_eose",
+          "stage": "reconnect"
+        },
+        {
+          "atMs": 24904,
+          "peer": 1,
+          "type": "publish",
+          "stage": "reconnect",
+          "url": "wss://relay.snort.social/",
+          "ackMs": 281,
+          "eventBytes": 1076,
+          "eventId": "2c132f39d3264e67db5e73ab51d9964a1421c7549612744948c67373815c79b7",
+          "packetType": "ANNOUNCEMENT",
+          "accepted": true,
+          "reason": "ephemeral: will not be stored"
+        },
+        {
+          "atMs": 24907,
+          "peer": 0,
+          "type": "peer_discovered",
+          "stage": "reconnect"
+        },
+        {
+          "atMs": 25049,
+          "peer": 1,
+          "type": "peer_discovered",
+          "stage": "reconnect"
+        },
+        {
+          "atMs": 25053,
+          "peer": 0,
+          "type": "signal_sent",
+          "stage": "reconnect"
+        },
+        {
+          "atMs": 25059,
+          "peer": 1,
+          "type": "signal_sent",
+          "stage": "reconnect"
+        },
+        {
+          "atMs": 25068,
+          "peer": 0,
+          "type": "publish",
+          "stage": "reconnect",
+          "url": "wss://relay.snort.social/",
+          "ackMs": 157,
+          "eventBytes": 1096,
+          "eventId": "0c34e812d716cf4d57d87c46b688824c48d3028fbf2b54363abd1cab3f70039b",
+          "packetType": "ANNOUNCEMENT",
+          "accepted": true,
+          "reason": "ephemeral: will not be stored"
+        },
+        {
+          "atMs": 25219,
+          "peer": 1,
+          "type": "publish",
+          "stage": "reconnect",
+          "url": "wss://relay.snort.social/",
+          "ackMs": 166,
+          "eventBytes": 1096,
+          "eventId": "1096bd77101d969a13e6b10a2551f7e62089fe3397b6aa2b2ed9b980549cb049",
+          "packetType": "ANNOUNCEMENT",
+          "accepted": true,
+          "reason": "ephemeral: will not be stored"
+        },
+        {
+          "atMs": 25223,
+          "peer": 1,
+          "type": "signal_received",
+          "stage": "reconnect",
+          "url": "wss://relay.snort.social/",
+          "eventId": "5fe7f34f4090366870654b2b569960c43199a09f11a29583d636a62039e4c8bf",
+          "messageId": "probe-reconnect-0",
+          "signalType": "phantom_doorway_probe",
+          "from": "6a221b5416884889",
+          "to": "34cf03d8ea10c19f"
+        },
+        {
+          "atMs": 25223,
+          "peer": 1,
+          "type": "signal_delivered",
+          "stage": "reconnect"
+        },
+        {
+          "atMs": 25224,
+          "peer": 0,
+          "type": "publish",
+          "stage": "reconnect",
+          "url": "wss://relay.snort.social/",
+          "ackMs": 165,
+          "eventBytes": 1240,
+          "eventId": "5fe7f34f4090366870654b2b569960c43199a09f11a29583d636a62039e4c8bf",
+          "messageId": "probe-reconnect-0",
+          "packetType": "SIGNAL",
+          "signalType": "phantom_doorway_probe",
+          "from": "6a221b5416884889",
+          "to": "34cf03d8ea10c19f",
+          "accepted": true,
+          "reason": "ephemeral: will not be stored"
+        },
+        {
+          "atMs": 25297,
+          "peer": 0,
+          "type": "signal_received",
+          "stage": "reconnect",
+          "url": "wss://relay.snort.social/",
+          "eventId": "8fb08bcf711d3596364aa29326b3a418ea5536683b0b8901d355d73860337526",
+          "messageId": "probe-reconnect-1",
+          "signalType": "phantom_doorway_probe",
+          "from": "34cf03d8ea10c19f",
+          "to": "6a221b5416884889"
+        },
+        {
+          "atMs": 25297,
+          "peer": 0,
+          "type": "signal_delivered",
+          "stage": "reconnect"
+        },
+        {
+          "atMs": 25301,
+          "peer": 1,
+          "type": "publish",
+          "stage": "reconnect",
+          "url": "wss://relay.snort.social/",
+          "ackMs": 238,
+          "eventBytes": 1240,
+          "eventId": "8fb08bcf711d3596364aa29326b3a418ea5536683b0b8901d355d73860337526",
+          "messageId": "probe-reconnect-1",
+          "packetType": "SIGNAL",
+          "signalType": "phantom_doorway_probe",
+          "from": "34cf03d8ea10c19f",
+          "to": "6a221b5416884889",
+          "accepted": true,
+          "reason": "ephemeral: will not be stored"
+        }
+      ],
+      "diagnostics": []
+    }
+  ]
+}
