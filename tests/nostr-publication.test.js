@@ -91,7 +91,8 @@ test('event-specific rejections preserve later writes and expose machine-readabl
   }finally{bus.close();}
  }
 });
-for(const reason of ['rate-limited: slow down','rate limited'])test(`rate limit pauses writes, keeps ACK/read processing, then permits fresh messages without replay: ${reason}`,async()=>{
+for(const reason of ['rate-limited: slow down','rate limited'])test(`rate limit pauses writes, keeps ACK/read processing, then permits fresh messages without replay: ${reason}`,async({mock})=>{
+ mock.timers.enable({apis:['Date','setTimeout']});
  const Socket=sockets(),identity=createNostrIdentity(),statuses=[];
  const bus=openNostrBus({roomId:'room',identity,relays:['wss://relay.example'],publicationCooldownMs:30,WebSocket:Socket,onStatus:s=>statuses.push(s)});
  try{bus.announce({row:{bootId:'a'}});await turn();const socket=Socket.all[0],target={nostrKey:identity.nostrKey,s7pPublicKey:identity.publicKey};
@@ -100,7 +101,7 @@ for(const reason of ['rate-limited: slow down','rate limited'])test(`rate limit 
   assert.throws(()=>bus.sendSignal(target,{}),/temporarily/);
   socket.receive(['OK',second,true,'']);await turn();assert.ok(statuses.some(s=>s.eventId===second&&s.accepted));
   assert.equal(socket.readyState,1);assert.equal(statuses.some(s=>s.type==='write_blocked'),false);
-  await new Promise(r=>setTimeout(r,45));assert.ok(statuses.some(s=>s.type==='publication_resumed'));
+  mock.timers.tick(30);await turn();assert.ok(statuses.some(s=>s.type==='publication_resumed'));
   assert.equal(socket.sent.filter(p=>p[0]==='EVENT').length,2,'cooldown does not replay rejected messages');
   bus.sendSignal(target,{type:'fresh'});assert.equal(socket.sent.filter(p=>p[0]==='EVENT').length,3);
  }finally{bus.close();}
@@ -153,11 +154,12 @@ test('cooldown resume refreshes discovery before fresh queued signals',async()=>
  }finally{set.close();}
  }
 });
-test('cooldown with only expired work does not create a discovery retry loop',async()=>{
+test('cooldown with only expired work does not create a discovery retry loop',async({mock})=>{
+ mock.timers.enable({apis:['Date','setTimeout']});
  const Socket=sockets(),identity=createNostrIdentity(),statuses=[];
  const set=openNostrRelaySet({roomId:'room',identity,relays:['wss://relay.example'],publicationCooldownMs:60,publicationLifetimeMs:20,WebSocket:Socket,onStatus:s=>statuses.push(s)});
  try{set.announce({row:{bootId:'a'}});await turn();const socket=Socket.all[0];socket.receive(['OK',socket.sent.find(p=>p[0]==='EVENT')[1].id,false,'rate-limited: pause']);await turn();
-  set.sendSignal({nostrKey:identity.nostrKey,s7pPublicKey:identity.publicKey},{type:'rtc_offer'});await new Promise(r=>setTimeout(r,85));
+  set.sendSignal({nostrKey:identity.nostrKey,s7pPublicKey:identity.publicKey},{type:'rtc_offer'});mock.timers.tick(20);await turn();mock.timers.tick(40);await turn();
   assert.equal(socket.sent.filter(p=>p[0]==='EVENT').length,1);assert.ok(statuses.some(s=>s.type==='signal_expired'));assert.ok(statuses.some(s=>s.type==='publication_resumed'));
  }finally{set.close();}
 });
