@@ -133,3 +133,31 @@ test('closing from rejection callback cannot install a cooldown timer afterwards
  socket.receive(['OK',socket.sent.find(p=>p[0]==='EVENT')[1].id,false,'rate-limited: pause']);await turn();
  assert.equal(socket.readyState,3);assert.equal(statuses.some(s=>s.type==='publication_paused'),false);
 });
+test('expired queued signaling is not submitted when a relay finally opens',async()=>{
+ const Socket=sockets({auto:false}),identity=createNostrIdentity(),statuses=[];
+ const set=openNostrRelaySet({roomId:'room',identity,relays:['wss://relay.example'],publicationLifetimeMs:25,WebSocket:Socket,onStatus:s=>statuses.push(s)});
+ try{const id=set.sendSignal({nostrKey:identity.nostrKey,s7pPublicKey:identity.publicKey},{type:'rtc_offer',sysAttemptId:'old'});
+  await new Promise(r=>setTimeout(r,40));Socket.all[0].open();await turn();
+  assert.equal(Socket.all[0].sent.filter(p=>p[0]==='EVENT').length,0);assert.ok(statuses.some(s=>s.type==='signal_expired'&&s.messageId===id));
+ }finally{set.close();}
+});
+test('cooldown resume refreshes discovery before fresh queued signals',async()=>{
+ for(const change of [true,false]){
+ const Socket=sockets(),identity=createNostrIdentity();
+ const set=openNostrRelaySet({roomId:'room',identity,relays:['wss://relay.example'],publicationCooldownMs:30,WebSocket:Socket});
+ try{set.announce({row:{bootId:'before'}});await turn();const socket=Socket.all[0];
+  socket.receive(['OK',socket.sent.find(p=>p[0]==='EVENT')[1].id,false,'rate-limited: pause']);await turn();
+  if(change)set.announce({row:{bootId:'after'}});set.sendSignal({nostrKey:identity.nostrKey,s7pPublicKey:identity.publicKey},{type:'rtc_offer'});
+  await new Promise(r=>setTimeout(r,45));const packets=socket.sent.filter(p=>p[0]==='EVENT').map(p=>JSON.parse(p[1].content));
+  assert.deepEqual(packets.map(p=>p.type),['ANNOUNCEMENT','ANNOUNCEMENT','SIGNAL']);assert.equal(packets[1].row.bootId,change?'after':'before');
+ }finally{set.close();}
+ }
+});
+test('cooldown with only expired work does not create a discovery retry loop',async()=>{
+ const Socket=sockets(),identity=createNostrIdentity(),statuses=[];
+ const set=openNostrRelaySet({roomId:'room',identity,relays:['wss://relay.example'],publicationCooldownMs:60,publicationLifetimeMs:20,WebSocket:Socket,onStatus:s=>statuses.push(s)});
+ try{set.announce({row:{bootId:'a'}});await turn();const socket=Socket.all[0];socket.receive(['OK',socket.sent.find(p=>p[0]==='EVENT')[1].id,false,'rate-limited: pause']);await turn();
+  set.sendSignal({nostrKey:identity.nostrKey,s7pPublicKey:identity.publicKey},{type:'rtc_offer'});await new Promise(r=>setTimeout(r,85));
+  assert.equal(socket.sent.filter(p=>p[0]==='EVENT').length,1);assert.ok(statuses.some(s=>s.type==='signal_expired'));assert.ok(statuses.some(s=>s.type==='publication_resumed'));
+ }finally{set.close();}
+});

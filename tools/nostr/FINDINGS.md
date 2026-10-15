@@ -15,13 +15,13 @@ These are small observations from 2026-10-15, not reliability rankings or measur
 
 Implemented from the findings: probe late-discovery reply, publication timelines and message sizing, rejection classification, bounded local rate-limit cooldown, preserved read/ACK processing, AUTH challenge terminology, and explicit idle/reconnect/payload modes. Probe behavior is not a claim that all production discovery recovery paths have been changed.
 
-Still unknown: relay throttle quotas/cooldowns and IP/key scope; payload limits and throughput; long idle periods; involuntary reconnect and network switching; behavior under loss; compatibility across more relay implementations. NIP-66 monitoring can supply candidates but is not yet integrated or trusted as a substitute for verification. Direct-peer → bridge → relay ordering remains separate work.
+Still unknown: relay throttle quotas/cooldowns and IP/key scope; payload limits and throughput; long idle periods; involuntary reconnect and network switching; behavior under loss; compatibility across more relay implementations. NIP-66 monitoring can supply candidates but is not yet integrated or trusted as a substitute for verification. Direct-peer → bridge → relay ordering is implemented and validated at `979b0e1`, with a bounded local grace interval and route telemetry.
 
 ## CI follow-up discovered during exploration
 
 [Run 38693321768](https://github.com/TheAstrocreeper/Phantom-SDK/actions/runs/38693321768), head `b6e59c8`: unit tests, browser baseline and forced native successor passed, but Cloudflare repeat 3/5 timed out during the new transfer after blackout leader recovery. The other four repeats completed their stages. The failed run recorded ten failed distribution jobs targeting the same receiver, alternating between two sources, roughly every 15 seconds. For the first failed job, the leader logged the source offer/ICE but the retained event stream did not show the receiver processing that job or opening its channel. This narrows investigation to job/signaling delivery or handling; it does not prove a root cause or implicate Nostr (the failing scenario uses Cloudflare and peer bridges).
 
-Artifacts were downloaded for inspection. Do not treat earlier green runs or passing Nostr probes as resolution of this intermittent transfer failure. Keep the PR in draft while investigating it.
+Artifacts were downloaded for inspection. Do not treat earlier green runs or passing Nostr probes as resolution of this intermittent transfer failure. This prompted the SYS collision investigation below.
 
 ### SYS channel collision follow-up
 
@@ -29,4 +29,4 @@ The failed receiver's native stats include two open `six7-sys` channels on one R
 
 A production-core regression reproduces the selection defect and fails before the fix. It simulates either endpoint creating stream 0 or stream 1, introduces the crossed channel, checks both choose stream 0, verifies distribution send/receive on that channel and rejects stale-channel messages. The fix chooses the lower known SCTP stream ID at open, retires the other channel, and guards stale connection callbacks. Unknown IDs do not cause an arbitrary replacement. Open callbacks are idempotent.
 
-This is a concrete reproduced defect and a mitigation consistent with the native evidence. A deterministic fake-channel test alone does not establish the complete cause of the historical native timeout. Native Cloudflare validation of the changed head is still required; keep the PR in draft.
+This is a concrete reproduced defect and a mitigation consistent with the native evidence. A deterministic fake-channel test alone does not establish the complete cause of the historical native timeout. Native validation at `47031c7` then passed the baseline, forced successor case and all five Cloudflare repeats (1280 jobs, zero recorded job or bridge failures). Sequential routing at `979b0e1` passed the same suite and counts again. These results support the fix without proving universal reliability.

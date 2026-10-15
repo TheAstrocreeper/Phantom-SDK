@@ -13,9 +13,11 @@ The SDK implements generic recovery and distribution behavior; fault injection a
 
 ## Automated checks
 
-75 SDK tests pass, including paired-RTC recovery, interrupted mirror admission, signed survivor publication, immediate routing, constructor/offer failure and endpoint cleanup. Four harness checks pass: observer cleanup, publish authorization correlation, real WebSocket blackout/restoration and failed-run reporting. The paired RTC fixture tests protocol behavior and does not emulate browser ICE/NAT.
+At `979b0e1`, 127 SDK tests and eight harness tests passed locally and in CI. The native five-peer 4 MiB baseline, forced successor offer/ICE retention case and five Cloudflare peer-bridge repeats passed. Across the repeats, all 40 stages and 1280 jobs passed, with zero recorded job or bridge failures and 2560 endpoint opens matched by 2560 closes. Reports are attached to [CI run 38698249320](https://github.com/TheAstrocreeper/Phantom-SDK/actions/runs/38698249320).
 
-CI runs the SDK/harness checks and a four-peer native Chromium smoke scenario on pull requests and manual dispatch, retaining browser reports even after failure. The workflow is prepared here; no GitHub Actions execution has been observed for this update.
+The current review adds Nostr queue expiry, discovery refresh after cooldown, and metadata tests to CI. Two regressions failed before the queue/discovery fixes and pass after them. Validation of that follow-up head is recorded in the PR; the native counts above apply specifically to `979b0e1`.
+
+CI runs SDK, swarm-harness and Nostr-tool tests, the native baseline, the forced successor case and the five-run Cloudflare repeat. Reports are uploaded even after a step fails. The paired RTC fixture tests protocol behavior and does not emulate browser ICE/NAT.
 
 ## Native evidence — 2026-10-14
 
@@ -34,6 +36,6 @@ The final newcomer downloads four accumulated 4 MiB assets; the final stage wait
 
 This is repeatable single-host recovery evidence. One Chromium process contains isolated browser contexts. Real RTC carries payloads; loopback WebSocket discovery/signaling does not transport file content. Context closure lets the relay observe departure immediately. The blackout drops signaling frames while keeping sockets and RTC paths open.
 
-Nostr relays, cross-host discovery, real NAT traversal, Wi-Fi/mobile switching, network partitions and collective incomplete-replica survival remain unvalidated. Existing Cloudflare doorway deployments must deploy the updated signal allowlist to forward routing advice; older deployments retain the unanswered-offer fallback. Browser failure detection and election replacement windows remain unchanged.
+Small public Nostr discovery, delivery, idle, explicit reconnect and payload samples are documented under `tools/nostr`; they do not validate full Nostr swarm recovery. Cross-host discovery, real NAT traversal, Wi-Fi/mobile switching, network partitions and collective incomplete-replica survival remain follow-ups. Existing Cloudflare doorway deployments must deploy the updated signal allowlist to forward routing advice; older deployments retain the unanswered-offer fallback. Outage credit requires confirmed failure on the exact native transport. Discovery hints and retained signaling do not grant election authority.
 
 Run `bash tools/swarm/run.sh` for smoke, or `bash tools/swarm/run.sh --stress --runs 3` for the repeatable stress set. Full diagnostic artifacts remain local under `tools/swarm/reports/` and are excluded from git.

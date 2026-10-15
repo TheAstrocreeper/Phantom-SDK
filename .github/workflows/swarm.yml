@@ -5,6 +5,7 @@ on:
     paths:
       - 'packages/**'
       - 'tools/swarm/**'
+      - 'tools/nostr/*.mjs'
       - 'tests/**'
       - 'package*.json'
       - '.github/workflows/swarm.yml'
@@ -23,6 +24,7 @@ jobs:
       - run: npm ci --prefix tools/swarm
       - run: npm test
       - run: node --test tools/swarm/*.test.mjs
+      - run: node --test tools/nostr/*.test.mjs
       - run: cd tools/swarm && npx playwright install --with-deps chromium --only-shell
       - run: node tools/swarm/launch.mjs --peers 5 --bytes 4194304 --timeout 90000
       - name: Force native early-successor offer retention

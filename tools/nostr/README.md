@@ -38,7 +38,7 @@ The SDK classifies NIP-01/NIP-42 rejection prefixes separately from the original
 | `blocked`, `restricted`, `auth-required` | Stop writes for this bus session, keep reading, and request alternative relay paths. No automatic authentication. |
 | `mute`, `invalid`, `pow`, `error`, unknown | Reject that publication, keep the path eligible for future messages. No automatic replay. |
 
-The 30-second pause is a conservative local policy, not a measured relay cooldown or a server-supplied retry time. The relay set can queue fresh messages while paused (within its existing 256-entry bound), and sends them when a path becomes eligible. Rejected messages are not automatically replayed on the rejecting path; other opening paths can still carry the original message. All-path temporary pauses do not declare permanent exhaustion. Event-specific rejection does not prove later messages will succeed.
+The 30-second pause is a conservative local policy, not a measured relay cooldown or a server-supplied retry time. The relay set can queue fresh messages while paused (within its existing 256-entry bound), and sends them when a path becomes eligible, provided their 10-second publication lifetime has not expired. Rejected messages are not automatically replayed on the rejecting path; other opening paths can still carry the original message. All-path temporary pauses do not declare permanent exhaustion. Event-specific rejection does not prove later messages will succeed.
 
 An incoming NIP-42 `AUTH` message emits `authentication_challenge`, not `authentication_required`: a challenge alone does not establish that our operation is restricted. A subsequent `auth-required` rejection does. Challenges are observed without signing an AUTH response.
 
@@ -55,3 +55,10 @@ Observed Snort run (`results/2026-10-15-idle-reconnect.json`): initial delivery 
 `--payload=8192` adds 8192 ASCII padding bytes to each targeted control and verifies their exact contents after signed-envelope verification. The option is capped at 16384 padding bytes; it does not search for rejection boundaries or generate sustained traffic. Actual serialized events include the control, signed identity binding, tags and JSON overhead. New runs record `wireBytes` for the complete UTF-8 `["EVENT", event]` JSON message, alongside `eventBytes` for the signed event alone (neither includes WebSocket/TLS framing).
 
 Primal accepted and delivered both 8 KiB-padding controls in `results/2026-10-15-payload-8k.json`. Events were 9445 bytes each, implying 9455-byte compact EVENT messages (the wire-size field was added after this sample). ACKs took 156/209ms. This is a compatibility observation at one size, not a measured maximum, throughput benchmark or controlled latency comparison with the earlier baseline.
+
+
+## Queue lifetime and cooldown discovery
+
+Relay-set signals expire after 10 seconds by default (`publicationLifetimeMs`, positive and at most 15000 ms). Expiration releases the queue entry and emits `signal_expired` with the message/attempt identifiers. Expired offers and ICE cannot flush on a late opening or cooldown resume. This is a queue lifetime, not delivery confirmation; receiving-side attempt checks still apply.
+
+When fresh queued work survives a cooldown, the relay set refreshes its cached announcement before flushing signals. Announcement coalescing tracks what was actually submitted, so updates cached during a pause are not mistakenly treated as already sent. It does not schedule discovery retries when no live queued work remains. Departure, reconnect and close clear queue-expiry timers.

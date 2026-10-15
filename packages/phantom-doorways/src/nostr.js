@@ -31,7 +31,7 @@ export function openNostrBus({roomId,identity,relays,WebSocket=globalThis.WebSoc
   current.onopen=()=>{
    if(closed||token!==generation)return;
    current.send(JSON.stringify(['REQ',subscription,{kinds:[20001],'#t':[roomId],since:Math.floor(Date.now()/1000)-60,limit:100}]));
-   announcementAt=0;if(announcement&&!writeBlocked){announcementAt=Date.now();publish(announcement);}status('open',{url});
+   announcementAt=0;if(announcement&&!writeBlocked){publish(announcement);announcementAt=Date.now();announcementFingerprint=JSON.stringify(announcement);}status('open',{url});
   };
   current.onmessage=({data})=>{
    chain=chain.then(()=>{
@@ -72,7 +72,7 @@ export function openNostrBus({roomId,identity,relays,WebSocket=globalThis.WebSoc
  }
  connect();
  return {
-  announce(fields={}){const next={...fields,type:'ANNOUNCEMENT'},fingerprint=JSON.stringify(next);const changed=fingerprint!==announcementFingerprint;announcement=next;announcementFingerprint=fingerprint;if(!writeBlocked&&Date.now()>=pausedUntil&&socket?.readyState===1&&(changed||Date.now()-announcementAt>=15000)){announcementAt=Date.now();return publish(announcement);}},
+  announce(fields={},{force=false}={}){const next={...fields,type:'ANNOUNCEMENT'},fingerprint=JSON.stringify(next);const changed=fingerprint!==announcementFingerprint;announcement=next;if(!writeBlocked&&Date.now()>=pausedUntil&&socket?.readyState===1&&(force||changed||Date.now()-announcementAt>=15000)){const id=publish(announcement);announcementAt=Date.now();announcementFingerprint=fingerprint;return id;}},
   sendSignal(target,control,messageId=crypto.randomUUID()){return publish({messageId,type:'SIGNAL',targetNostrKey:target.nostrKey,targetS7pKey:target.s7pPublicKey,control});},
   depart(fields){if(closed)return;clearTimeout(pauseTimer);if(writeBlocked||Date.now()<pausedUntil||socket?.readyState!==1){closed=true;generation++;socket?.close();pending.clear();return;}departureId=publish({...fields,type:'ANNOUNCEMENT',departed:true});},
   reconnect(){if(closed)throw new Error('Bus closed');generation++;clearTimeout(pauseTimer);pausedUntil=0;socket?.close();pending.clear();index=0;connect();},
@@ -82,8 +82,15 @@ export function openNostrBus({roomId,identity,relays,WebSocket=globalThis.WebSoc
 
 /** A relay list is a shared meeting set, not an assumption of relay federation. */
 export function openNostrRelaySet(config) {
+ const publicationLifetimeMs=config.publicationLifetimeMs??10000;
+ if(!Number.isFinite(publicationLifetimeMs)||publicationLifetimeMs<=0||publicationLifetimeMs>15000)throw new TypeError('Publication lifetime must be within 15000ms');
+ let expiryTimer;
  const seen=new Set(),children=[],urls=[],open=new Set(),publications=new Map(),exhausted=new Set(),blocked=new Set();let closed=false,announced;
+ function clearPublications(){clearTimeout(expiryTimer);expiryTimer=null;publications.clear();}
+ function prunePublications(){for(const [id,p]of publications)if(Date.now()>=p.expiresAt){publications.delete(id);config.onStatus?.({type:'signal_expired',messageId:id,signalType:p.control.type,attemptId:p.control.sysAttemptId,reason:'publication_lifetime_expired'});}}
+ function armExpiry(){clearTimeout(expiryTimer);expiryTimer=null;if(closed||!publications.size)return;const next=Math.min(...[...publications.values()].map(p=>p.expiresAt));expiryTimer=setTimeout(()=>{prunePublications();armExpiry();},Math.max(1,next-Date.now()));}
  function submit(child,url,publication){
+  if(closed)return;if(Date.now()>=publication.expiresAt){prunePublications();armExpiry();return;}
   if(publication.attempted.has(url))return;
   publication.attempted.add(url);
   try{child.sendSignal(publication.target,publication.control,publication.messageId);}catch(error){publication.attempted.delete(url);config.onError?.(error);}
@@ -97,11 +104,11 @@ export function openNostrRelaySet(config) {
     if(closed)return;
     if(s.type==='open'){if(blocked.has(url)){config.onStatus?.({...s,type:'relay_open',readOnly:true});return;}const first=open.size===0;open.add(url);config.onStatus?.({...s,type:first?'open':'relay_open'});for(const p of publications.values())submit(child,url,p);}
     else if(s.type==='publication_paused'){open.delete(url);config.onStatus?.(s);}
-    else if(s.type==='publication_resumed'){if(!blocked.has(url)){open.add(url);for(const p of publications.values())submit(child,url,p);}config.onStatus?.(s);}
-    else if(s.type==='write_blocked'){blocked.add(url);open.delete(url);config.onStatus?.(s);if(blocked.size+ [...exhausted].filter(value=>!blocked.has(value)).length===urls.length){publications.clear();config.onStatus?.({type:'exhausted',reason:'all_publication_paths_rejected'});}}
+    else if(s.type==='publication_resumed'){prunePublications();armExpiry();if(!closed&&!blocked.has(url)){open.add(url);if(publications.size&&announced)child.announce(announced,{force:true});for(const p of publications.values())submit(child,url,p);}config.onStatus?.(s);}
+    else if(s.type==='write_blocked'){blocked.add(url);open.delete(url);config.onStatus?.(s);if(blocked.size+ [...exhausted].filter(value=>!blocked.has(value)).length===urls.length){clearPublications();config.onStatus?.({type:'exhausted',reason:'all_publication_paths_rejected'});}}
     else if(s.type==='closed'){open.delete(url);config.onStatus?.({...s,type:'relay_closed'});}
     else if(s.type==='exhausted'){exhausted.add(url);config.onStatus?.({...s,type:'relay_exhausted',url});if(new Set([...blocked,...exhausted]).size===urls.length)config.onStatus?.({type:'exhausted'});}
-    else {if(s.type==='publish'&&s.messageId){const p=publications.get(s.messageId);if(s.accepted||(p&&urls.every(value=>p.attempted.has(value)||blocked.has(value)||exhausted.has(value))))publications.delete(s.messageId);}config.onStatus?.({...s,url});}
+    else {if(s.type==='publish'&&s.messageId){const p=publications.get(s.messageId);if(s.accepted||(p&&urls.every(value=>p.attempted.has(value)||blocked.has(value)||exhausted.has(value))))publications.delete(s.messageId);armExpiry();}config.onStatus?.({...s,url});}
    }
   });children.push(child);if(announced)child.announce(announced);
  }
@@ -112,15 +119,16 @@ export function openNostrRelaySet(config) {
   sendSignal(target,control){
    if(closed)throw new Error('Relay set closed');
    if(!open.size&&new Set([...blocked,...exhausted]).size===urls.length)throw new Error('No open relays');
+   prunePublications();if(closed)throw new Error('Relay set closed');
    if(publications.size>=256)throw new Error('Too many unaccepted signaling publications');
-   const p={messageId:crypto.randomUUID(),target:structuredClone(target),control:structuredClone(control),attempted:new Set()};
-   publications.set(p.messageId,p);
+   const p={messageId:crypto.randomUUID(),target:structuredClone(target),control:structuredClone(control),attempted:new Set(),expiresAt:Date.now()+publicationLifetimeMs};
+   publications.set(p.messageId,p);armExpiry();
    if(!open.size)config.onStatus?.({type:'signal_queued',messageId:p.messageId,reason:'relay_paths_opening',signalType:p.control.type,attemptId:p.control.sysAttemptId,pending:publications.size});
    for(const [i,url] of urls.entries())if(open.has(url))submit(children[i],url,p);
    return p.messageId;
   },
-  depart(p){publications.clear();closed=true;for(const b of children)b.depart(p);seen.clear();},
-  reconnect(){publications.clear();open.clear();exhausted.clear();for(const b of children){b.reconnect();if(announced)b.announce(announced);}},
-  close(){publications.clear();closed=true;for(const b of children)b.close();seen.clear();}
+  depart(p){clearPublications();closed=true;for(const b of children)b.depart(p);seen.clear();},
+  reconnect(){clearPublications();open.clear();exhausted.clear();for(const b of children){b.reconnect();if(announced)b.announce(announced);}},
+  close(){clearPublications();closed=true;for(const b of children)b.close();seen.clear();}
  };
 }
