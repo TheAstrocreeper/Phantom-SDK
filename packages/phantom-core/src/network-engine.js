@@ -5452,7 +5452,7 @@ export function createNetworkEngine(host) {
       } catch {}
 
       const exited = __phantomMembershipExitApplied.get(newKey);
-      const admittedBoot = String(roster.find(row => row.hKey === newKey)?.bootId || "");
+      const admittedBoot = String(phantomRemoteBootIds.get(newKey) || "");
       const relationship = phantomRelationships.get(newKey);
       if (host.messaging === "automatic" && relationship?.endReason === "ROOM_EXITED" &&
           exited?.bootId && admittedBoot && admittedBoot !== exited.bootId) {
