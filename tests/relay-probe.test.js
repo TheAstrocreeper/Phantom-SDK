@@ -7,7 +7,7 @@ function ephemeralBus({reject=false}={}){
   const slot={config,open:false,announcement:null};clients.push(slot);
   const emit=()=>{for(const other of clients)if(other!==slot&&other.open)other.config.onAnnouncement({...slot.announcement,s7pPublicKey:config.identity.publicKey});};
   const timer=setTimeout(()=>{slot.open=true;config.onStatus({type:'open'});if(slot.announcement)emit();},clients.length===1?1:30);
-  return {announce(p){slot.announcement=p;if(slot.open)queueMicrotask(emit);},close(){slot.open=false;clearTimeout(timer);},sendSignal(target,control){
+  return {reconnect(){slot.open=false;setTimeout(()=>{slot.open=true;config.onStatus({type:'open'});if(slot.announcement)emit();},1);},announce(p){slot.announcement=p;if(slot.open)queueMicrotask(emit);},close(){slot.open=false;clearTimeout(timer);},sendSignal(target,control){
    queueMicrotask(()=>{config.onStatus({type:'publish',packetType:'SIGNAL',accepted:!reject,reason:reject?'blocked: test policy':''});if(!reject)for(const other of clients)if(other.open&&other.config.identity.publicKey===target.s7pPublicKey)other.config.onSignal({s7pPublicKey:config.identity.publicKey,control});});
   }};
  };
@@ -36,4 +36,19 @@ test('stagger delay starts at first open, rather than first connection construct
   return {announce(){},close(){clearTimeout(timer);}};
  }});
  assert.equal(result.reason,'connection_exhausted');assert.ok(secondAt>=100,`second connection created at ${secondAt}ms`);
+});
+test('idle and reconnect require three separately acknowledged and delivered rounds',async()=>{
+ const result=await probeRelay('wss://example.test/',{timeoutMs:600,idleReconnectMs:15,busFactory:ephemeralBus()});
+ assert.equal(result.passed,true);assert.equal(result.reason,'idle_and_reconnect_delivery');
+ assert.deepEqual(result.stages.map(s=>s.stage),['initial','after_idle','reconnect']);
+ assert.equal(result.timeline.filter(e=>e.type==='signal_delivered').length,6);
+});
+test('initial success cannot hide missing delivery after idle',async()=>{
+ const factory=ephemeralBus();
+ const result=await probeRelay('wss://example.test/',{timeoutMs:180,idleReconnectMs:10,busFactory:config=>{
+  const bus=factory(config),send=bus.sendSignal;
+  bus.sendSignal=(target,control)=>{if(control.probeStage==='after_idle')return;return send(target,control);};return bus;
+ }});
+ assert.equal(result.passed,false);assert.deepEqual(result.stages.map(s=>s.stage),['initial']);
+ assert.equal(result.signalsReceived,0);assert.equal(result.reason,'delivery_timeout');
 });

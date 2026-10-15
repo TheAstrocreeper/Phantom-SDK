@@ -43,3 +43,9 @@ The 30-second pause is a conservative local policy, not a measured relay cooldow
 An incoming NIP-42 `AUTH` message emits `authentication_challenge`, not `authentication_required`: a challenge alone does not establish that our operation is restricted. A subsequent `auth-required` rejection does. Challenges are observed without signing an AUTH response.
 
 [NIP-66](https://github.com/nostr-protocol/nips/blob/master/66.md) describes existing relay-monitor observations and explicitly allows measured policy to differ from NIP-11 metadata. Such data is a future source of candidates, not an implemented dependency or a trusted replacement for probing.
+
+## Idle and reconnect
+
+`--idle-reconnect=15000` requires three independent bidirectional signal rounds: initial, after 15 seconds without application writes, and after explicitly reconnecting peer 1. The overall budget is the idle interval plus 25 seconds. Each round requires both ACKs and verified peer delivery. After reconnection, discovery must occur again via the probe's stage-specific announcement/reply exchange; earlier deliveries cannot satisfy the new round. Temporary relay throttling or closure fails the check rather than causing a retry loop. WebSocket control-frame keepalives are outside this application-idle measurement. This exercises an explicit client reconnect, not an unplanned network outage or mobile network switch.
+
+Observed Snort run (`results/2026-10-15-idle-reconnect.json`): initial delivery 189/325ms; after-idle delivery 244/256ms; reconnect delivery 170/238ms. Reconnect was requested at 20982ms, peer 1 reopened at 24623ms and the final round completed at 25301ms (4319ms total recovery including handshake and rediscovery). All six signals were acknowledged and received. No idle closure was observed during this 15-second application-idle sample; it does not establish the relay's general idle policy.
