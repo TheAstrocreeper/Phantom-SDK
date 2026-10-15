@@ -1,0 +1,157 @@
+{
+  "checkedAt": "2026-10-15T06:21:21.374Z",
+  "scope": "Two fresh identities, one unique room, signed discovery and bidirectional signaling. No WebRTC or persistence claim.",
+  "results": [
+    {
+      "url": "wss://relay.damus.io/",
+      "passed": false,
+      "reason": "publication_rejected: rate-limited: you are noting too much",
+      "timings": [
+        {
+          "peer": 0,
+          "openedMs": 6138,
+          "eoseMs": 6227,
+          "discoveredMs": 6349
+        },
+        {
+          "peer": 1,
+          "openedMs": 6181,
+          "eoseMs": 6268,
+          "discoveredMs": 6261
+        }
+      ],
+      "latencyMs": 6423,
+      "announcementsReceived": 2,
+      "signalsReceived": 0,
+      "signalsAccepted": 0,
+      "timeline": [
+        {
+          "atMs": 49,
+          "peer": 0,
+          "type": "connecting",
+          "url": "wss://relay.damus.io/"
+        },
+        {
+          "atMs": 56,
+          "peer": 1,
+          "type": "connecting",
+          "url": "wss://relay.damus.io/"
+        },
+        {
+          "atMs": 6138,
+          "peer": 0,
+          "type": "open",
+          "url": "wss://relay.damus.io/"
+        },
+        {
+          "atMs": 6181,
+          "peer": 1,
+          "type": "open",
+          "url": "wss://relay.damus.io/"
+        },
+        {
+          "atMs": 6227,
+          "peer": 0,
+          "type": "subscription_eose"
+        },
+        {
+          "atMs": 6261,
+          "peer": 1,
+          "type": "peer_discovered"
+        },
+        {
+          "atMs": 6268,
+          "peer": 1,
+          "type": "subscription_eose"
+        },
+        {
+          "atMs": 6268,
+          "peer": 0,
+          "type": "publish",
+          "url": "wss://relay.damus.io/",
+          "ackMs": 130,
+          "eventBytes": 1047,
+          "eventId": "a7cf76f153c56fe317ff63783f6656a11f5155c57202b7bae3ad2e041096d40d",
+          "packetType": "ANNOUNCEMENT",
+          "accepted": true,
+          "reason": ""
+        },
+        {
+          "atMs": 6312,
+          "peer": 1,
+          "type": "publish",
+          "url": "wss://relay.damus.io/",
+          "ackMs": 132,
+          "eventBytes": 1047,
+          "eventId": "ac1aec4d438eb0ac5a2d0fcd3916634ad20fd3fd270eee4377c7f1af77547297",
+          "packetType": "ANNOUNCEMENT",
+          "accepted": true,
+          "reason": ""
+        },
+        {
+          "atMs": 6349,
+          "peer": 0,
+          "type": "peer_discovered"
+        },
+        {
+          "atMs": 6353,
+          "peer": 0,
+          "type": "signal_sent"
+        },
+        {
+          "atMs": 6357,
+          "peer": 1,
+          "type": "signal_sent"
+        },
+        {
+          "atMs": 6365,
+          "peer": 1,
+          "type": "publish",
+          "url": "wss://relay.damus.io/",
+          "ackMs": 99,
+          "eventBytes": 1067,
+          "eventId": "51740d6ae6ec5f15f25659b7cdfa2412fd6394d68ada1609d37781214b2c3fe8",
+          "packetType": "ANNOUNCEMENT",
+          "accepted": true,
+          "reason": ""
+        },
+        {
+          "atMs": 6416,
+          "peer": 0,
+          "type": "publish",
+          "url": "wss://relay.damus.io/",
+          "ackMs": 63,
+          "eventBytes": 1067,
+          "eventId": "88b0e4df22ae1771f3802bdf246f2282c3728fd7201056c95a99de355a1e88de",
+          "packetType": "ANNOUNCEMENT",
+          "accepted": true,
+          "reason": ""
+        },
+        {
+          "atMs": 6421,
+          "peer": 1,
+          "type": "publish",
+          "url": "wss://relay.damus.io/",
+          "ackMs": 60,
+          "eventBytes": 1201,
+          "eventId": "21c6c14d19e838e972f872c2ee41de828326be8ab4802849aa04f080c4c69049",
+          "messageId": "probe-1",
+          "packetType": "SIGNAL",
+          "signalType": "phantom_doorway_probe",
+          "from": "19831ca96c89a932",
+          "to": "920bfea17351c42e",
+          "accepted": false,
+          "reason": "rate-limited: you are noting too much"
+        },
+        {
+          "atMs": 6423,
+          "peer": 1,
+          "type": "write_blocked",
+          "url": "wss://relay.damus.io/",
+          "reason": "rate-limited: you are noting too much"
+        }
+      ],
+      "diagnostics": []
+    }
+  ]
+}

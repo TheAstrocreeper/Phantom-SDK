@@ -11,7 +11,7 @@ export function openNostrBus({roomId,identity,relays,WebSocket=globalThis.WebSoc
  function publish(payload) {
   if(closed||socket?.readyState!==1)throw new Error('Relay is not open');
   if(writeBlocked)throw new Error('Relay publication path rejected for this session');
-  const event=identity.sign(roomId,payload);pending.set(event.id,event);
+  const event=identity.sign(roomId,payload);pending.set(event.id,{event,sentAt:Date.now()});
   if(pending.size>256){pending.delete(event.id);throw new Error('Too many unacknowledged relay publications');}
   socket.send(JSON.stringify(['EVENT',event]));return event.id;
  }
@@ -33,14 +33,16 @@ export function openNostrBus({roomId,identity,relays,WebSocket=globalThis.WebSoc
     if(!Array.isArray(packet))return;
     if(packet[0]==='OK'){
      if(!pending.has(packet[1]))return;
-     const event=pending.get(packet[1]);
+     const {event,sentAt}=pending.get(packet[1]);
      const payload=JSON.parse(event.content);
      pending.delete(packet[1]);
-     status('publish',{url,eventId:packet[1],messageId:payload.messageId,packetType:payload.type,signalType:payload.control?.type,attemptId:payload.control?.sysAttemptId,from:payload.control?.from,to:payload.control?.to,accepted:packet[2]===true,reason:packet[3]});
+     status('publish',{url,ackMs:Date.now()-sentAt,eventBytes:new TextEncoder().encode(JSON.stringify(event)).length,eventId:packet[1],messageId:payload.messageId,packetType:payload.type,signalType:payload.control?.type,attemptId:payload.control?.sysAttemptId,from:payload.control?.from,to:payload.control?.to,accepted:packet[2]===true,reason:packet[3]});
      if(packet[2]===false&&!writeBlocked){writeBlocked=true;pending.clear();status('write_blocked',{url,reason:packet[3]??'publication_rejected'});}
      if(packet[1]===departureId){closed=true;generation++;current.close();pending.clear();}
      return;
     }
+    if(packet[0]==='NOTICE'){status('notice',{url,reason:packet[1]});return;}
+    if(packet[0]==='AUTH'){status('authentication_required',{url});return;}
     if(packet[1]!==subscription)return;
     if(packet[0]==='EOSE'){onSync();return;} // Subscription remains open.
     if(packet[0]==='CLOSED'){status('subscription_closed',{reason:packet[2]});current.close();return;}
