@@ -177,3 +177,19 @@ test('expired unacknowledged publications release bus capacity and late ACKs can
   assert.deepEqual(errors,[]);assert.equal(statuses.some(s=>s.type==='write_blocked'),false);
  }finally{set.close();}
 });
+
+for(const reason of ['banned: too many rate-limit violations, try again later','Policy violated and pubkey is not in our web of trust.'])test(`observed relay policy stops session writes: ${reason}`,async()=>{
+ const Socket=sockets(),identity=createNostrIdentity(),remote=createNostrIdentity(),statuses=[],received=[];
+ const bus=openNostrBus({roomId:'room',identity,relays:['wss://relay.example'],WebSocket:Socket,onStatus:s=>statuses.push(s),onAnnouncement:p=>received.push(p)});
+ try{
+  bus.announce({row:{bootId:'a'}});await turn();let socket=Socket.all.at(-1);
+  socket.receive(['OK',socket.sent.find(p=>p[0]==='EVENT')[1].id,false,reason]);await turn();
+  for(let i=0;i<20;i++)bus.announce({row:{bootId:String(i)}});
+  assert.throws(()=>bus.sendSignal({nostrKey:remote.nostrKey,s7pPublicKey:remote.publicKey},{}),/rejected/);
+  assert.equal(socket.sent.filter(p=>p[0]==='EVENT').length,1);
+  const subscription=socket.sent.find(p=>p[0]==='REQ')[1];socket.receive(['EVENT',subscription,remote.sign('room',{type:'ANNOUNCEMENT',row:{bootId:'remote'}})]);await turn();
+  assert.equal(received.length,1,'read path remains active');assert.ok(statuses.some(s=>s.type==='write_blocked'&&s.reason===reason));
+  bus.reconnect();await turn();socket=Socket.all.at(-1);bus.announce({row:{bootId:'after-reconnect'}});
+  assert.equal(socket.sent.filter(p=>p[0]==='EVENT').length,0,'reconnecting does not bypass the session write block');
+ }finally{bus.close();}
+});

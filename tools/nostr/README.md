@@ -35,7 +35,7 @@ The SDK classifies NIP-01/NIP-42 rejection prefixes separately from the original
 | Prefix | Local behavior |
 | --- | --- |
 | `rate-limited` | Pause new writes for 30 seconds by default (`publicationCooldownMs`); keep reading and processing outstanding ACKs. Emit `publication_paused` / `publication_resumed`. |
-| `blocked`, `restricted`, `auth-required` | Stop writes for this bus session, keep reading, and request alternative relay paths. No automatic authentication. |
+| `blocked`, `restricted`, `auth-required`, `banned` | Stop writes for this bus session, keep reading, and request alternative relay paths. No automatic authentication. |
 | `mute`, `invalid`, `pow`, `error`, unknown | Reject that publication, keep the path eligible for future messages. No automatic replay. |
 
 The 30-second pause is a conservative local policy, not a measured relay cooldown or a server-supplied retry time. The relay set can queue fresh messages while paused (within its existing 256-entry bound), and sends them when a path becomes eligible, provided their 10-second publication lifetime has not expired. Rejected messages are not automatically replayed on the rejecting path; other opening paths can still carry the original message. All-path temporary pauses do not declare permanent exhaustion. Event-specific rejection does not prove later messages will succeed.
@@ -62,3 +62,5 @@ Primal accepted and delivered both 8 KiB-padding controls in `results/2026-10-15
 Relay-set signals expire after 10 seconds by default (`publicationLifetimeMs`, positive and at most 15000 ms). Expiration releases the queue entry and emits `signal_expired` with the message/attempt identifiers. Expired offers and ICE cannot flush on a late opening or cooldown resume. This is a queue lifetime, not delivery confirmation; receiving-side attempt checks still apply.
 
 When fresh queued work survives a cooldown, the relay set refreshes its cached announcement before flushing signals. Announcement coalescing tracks what was actually submitted, so updates cached during a pause are not mistakenly treated as already sent. It does not schedule discovery retries when no live queued work remains. Departure, reconnect and close clear queue-expiry timers.
+
+The `banned:` prefix and the exact observed reply `Policy violated and pubkey is not in our web of trust.` are compatibility cases in the local classifier. The latter maps to `restricted`. Both stop new writes for that bus session while reads and outstanding ACK processing remain active; reconnecting that bus does not clear the write block. They do not create a persistent relay blacklist or infer a server ban duration. Other unknown replies retain event-scoped handling.
