@@ -52,3 +52,8 @@ test('initial success cannot hide missing delivery after idle',async()=>{
  assert.equal(result.passed,false);assert.deepEqual(result.stages.map(s=>s.stage),['initial']);
  assert.equal(result.signalsReceived,0);assert.equal(result.reason,'delivery_timeout');
 });
+test('sized probe verifies exact payload delivery and rejects altered contents',async()=>{
+ const good=await probeRelay('wss://example.test/',{timeoutMs:400,payloadBytes:8192,busFactory:ephemeralBus()});assert.equal(good.passed,true);assert.equal(good.payloadBytes,8192);
+ const factory=ephemeralBus();const bad=await probeRelay('wss://example.test/',{timeoutMs:150,payloadBytes:64,busFactory:c=>factory({...c,onSignal:p=>c.onSignal({...p,control:{...p.control,padding:'wrong'}})})});assert.equal(bad.passed,false);assert.equal(bad.signalsReceived,0);assert.equal(bad.signalsAccepted,2);
+ assert.throws(()=>probeRelay('wss://example.test/',{payloadBytes:16385}),/payload/);
+});
