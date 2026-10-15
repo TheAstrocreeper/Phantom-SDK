@@ -27,7 +27,7 @@ export async function createAdminLifecycle({networkId,adminPublicKey,adminIdenti
   get retired(){return !!retirement;},get retirement(){return retirement;},isRevoked:id=>revoked.has(id),
   records:()=>[...records.values()].map(r=>({...r})),
   apply(raw){const result=chain.then(()=>apply(raw));chain=result.catch(()=>{});return result;},
-  async issue(action,target){if(!adminIdentity)throw new Error('Admin seed required');if(retirement)throw new Error('Network retired');const record=await adminIdentity.sign({networkId,action,target,operationId:crypto.randomUUID()});await this.apply(record);return record;},
+  async issue(action,target,{recipients}={}){if(!adminIdentity)throw new Error('Admin seed required');if(retirement)throw new Error('Network retired');const record=await adminIdentity.sign({networkId,action,target,operationId:crypto.randomUUID(),recipients});await this.apply(record);return record;},
   sync(to){for(const r of records.values())send(r,to);}
  };
 }
