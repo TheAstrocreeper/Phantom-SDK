@@ -5451,6 +5451,15 @@ export function createNetworkEngine(host) {
         if (replacement?.timer) clearTimeout(replacement.timer);
       } catch {}
 
+      const exited = __phantomMembershipExitApplied.get(newKey);
+      const admittedBoot = String(roster.find(row => row.hKey === newKey)?.bootId || "");
+      const relationship = phantomRelationships.get(newKey);
+      if (host.messaging === "automatic" && relationship?.endReason === "ROOM_EXITED" &&
+          exited?.bootId && admittedBoot && admittedBoot !== exited.bootId) {
+        // A newly admitted incarnation starts a new automatic messaging cycle.
+        // Explicit chat ends and block state retain their existing owners.
+        phantomRelationships.delete(newKey);
+      }
       phantomPendingTerminalExits.delete(newKey);
       phantomSysReplacementWindows.delete(newKey);
       __phantomGoneNotified.delete(newKey);
