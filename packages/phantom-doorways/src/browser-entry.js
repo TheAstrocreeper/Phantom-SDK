@@ -11,13 +11,17 @@ import {createCompositeDoorway} from './composite.js';
 import {createAdmissionCheckpoint, AdmissionError} from '../../phantom-core/src/admission.js';
 import {withAdmissionDoorway} from './admission-doorway.js';
 import {parseInvite, encodeInvite} from '../../phantom-core/src/invite.js';
+/** Private reusable identity seed. Applications own its storage and custody. */
+export function createBrowserIdentity(){return createNostrIdentity().exportSeed();}
 /** One entry API; service selection belongs to the adapter composition layer. */
-export function createBrowserPhantom({admission,authorizationTimeoutMs=5000,adminIdentity,adminPublicKey=adminIdentity?.publicKey,controlStore,files,distribution,readAdminOrders,retireGraceMs,relays,doorways,doorwayMode='failover',doorwayAdmissionTimeoutMs=10000,adapters={},storage,WebSocket=globalThis.WebSocket,runtime=globalThis,onRelayProgress=()=>{},onDoorwayStatus=()=>{},relayFinder,relayMaxAgeMs,now,coreFactory}={}) {
+export function createBrowserPhantom({identity,admission,authorizationTimeoutMs=5000,adminIdentity,adminPublicKey=adminIdentity?.publicKey,controlStore,files,distribution,readAdminOrders,retireGraceMs,rtcConfiguration,messaging='manual',relays,doorways,doorwayMode='failover',doorwayAdmissionTimeoutMs=10000,adapters={},storage,WebSocket=globalThis.WebSocket,runtime=globalThis,onRelayProgress=()=>{},onDoorwayStatus=()=>{},relayFinder,relayMaxAgeMs,now,coreFactory}={}) {
+ if(!['manual','automatic'].includes(messaging))throw new TypeError('messaging must be manual or automatic');
+ if(rtcConfiguration!==undefined&&(!rtcConfiguration||typeof rtcConfiguration!=='object'||Array.isArray(rtcConfiguration)))throw new TypeError('rtcConfiguration must be an object');
  if(admission!==undefined&&(!admission||typeof admission.authorize!=='function'||typeof admission.verify!=='function'))throw new TypeError('admission requires authorize and verify functions');
  if(relays!==undefined&&doorways!==undefined)throw new TypeError('Use relays or doorways, not both');
  try{storage??=runtime.localStorage;}catch{}
  const manager=createRelayManager({storage,WebSocket,onProgress:onRelayProgress,...(relayFinder?{relayFinder}:{}),...(relayMaxAgeMs!==undefined?{maxAgeMs:relayMaxAgeMs}:{}),...(now?{now}: {})});
- let sdkIdentity;
+ let sdkIdentity=identity===undefined?undefined:createNostrIdentity(identity);
  const configuration=doorways??[{type:'nostr',...(relays!==undefined?{relays}:{discover:true})}];
  function validateSpec(spec){
   if(!spec||typeof spec.type!=='string')throw new TypeError('Doorway type required');
@@ -57,7 +61,7 @@ export function createBrowserPhantom({admission,authorizationTimeoutMs=5000,admi
    // Keep original invite coordinates while adding discovered alternatives.
    return build({...spec,relays:expanded});
   }}),{onStatus:onDoorwayStatus});
-  return {identity:{version:1,id:identity.publicKey},recoverySignaling:{sign:payload=>identity.signPeerProof({networkId:context.networkId,kind:'sys_recovery_bridge',payload,issuedAt:Date.now(),nonce:crypto.randomUUID()}),verify:(proof,payload,key)=>proof.peerPublicKey===key&&verifyPeerProof(proof,{networkId:context.networkId,kind:'sys_recovery_bridge',payload})},runtime,doorway,canAdmitPeer:access?peer=>access.checkpoint.allows(peer):undefined,adminIdentity,controlStore:context.adminPublicKey?(controlStore??createControlStore(storage)):undefined,files,distribution,readAdminOrders,retireGraceMs,onNetworkState:state=>doorway.observeNetworkState(state)};
+  return {identity:{version:1,id:identity.publicKey},recoverySignaling:{sign:payload=>identity.signPeerProof({networkId:context.networkId,kind:'sys_recovery_bridge',payload,issuedAt:Date.now(),nonce:crypto.randomUUID()}),verify:(proof,payload,key)=>proof.peerPublicKey===key&&verifyPeerProof(proof,{networkId:context.networkId,kind:'sys_recovery_bridge',payload})},runtime,doorway,canAdmitPeer:access?peer=>access.checkpoint.allows(peer):undefined,adminIdentity,controlStore:context.adminPublicKey?(controlStore??createControlStore(storage)):undefined,files,distribution,rtcConfiguration,messaging,readAdminOrders,retireGraceMs,onNetworkState:state=>doorway.observeNetworkState(state)};
  }
  return {
   async join(invite,options){const context=parseInvite(invite);const access=await preflight(context,options,'join');return createPhantomEntry({openContext:context=>openContext(context,options?.doorwayTypes,access),...(coreFactory?{coreFactory}:{})}).join(invite,options);},

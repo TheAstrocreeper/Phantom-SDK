@@ -6,10 +6,10 @@ import {memoryRTC} from './fixtures/memory-rtc.js';
 const ids=['1111111111111111','2222222222222222'],leader='3333333333333333';
 const pause=ms=>new Promise(r=>setTimeout(r,ms));
 async function until(check){const end=Date.now()+2000;while(Date.now()<end){if(check())return;await pause(5);}assert.fail('distribution did not settle');}
-async function fixture({intervalMs=1000,onSend}={}){
+async function fixture({intervalMs=1000,onSend,legacyProtocol=false}={}){
  const admin=await createAdminIdentity(),callbacks=new Map(),events=[],frames=[],RTC=memoryRTC({onSend});
  const states=ids.map(peerId=>({peerId,leader,mirror:ids[0],role:'peer',state:'admitted',admitted:true}));
- const deliver=(to,from,body)=>callbacks.get(to)?.({type:'PHANTOM_DIST',payload:{from:leader,frame:{networkId:'room',from,to,body}}});
+ const deliver=(to,from,body)=>{if(legacyProtocol&&body.type==='signal')body={...body,readyProtocol:undefined};return callbacks.get(to)?.({type:'PHANTOM_DIST',payload:{from:leader,frame:{networkId:'room',from,to,body}}});};
  const ds=ids.map((id,i)=>createNetworkDistribution({core:{getState:()=>states[i],onEvent(fn){callbacks.set(id,fn);return()=>callbacks.delete(id);},command(type,{frame}){if(type!=='PHANTOM_DIST_SEND')return;frames.push(frame);queueMicrotask(()=>deliver(frame.to,frame.from,frame.body));}},networkId:'room',adminPublicKey:admin.publicKey,lifecycle:{issue:(action,target)=>admin.sign({networkId:'room',action,target,operationId:crypto.randomUUID()})},runtime:{crypto,RTCPeerConnection:RTC},options:{intervalMs,requestTimeoutMs:1000},emit:(type,data)=>events.push({peer:id,type,data})}));
  for(const fn of callbacks.values())fn({type:'PRESENCE_ROSTER',payload:{list:[...ids,leader].map(hKey=>({hKey}))}});
  const file=new Blob([Uint8Array.from({length:65536},(_,i)=>i%251)]),manifest=await ds[0].publish(file);
@@ -108,4 +108,10 @@ test('duplicate channel-open callbacks do not duplicate endpoint events or readi
   assert.equal(f.events.filter(e=>e.type==='distributionConnectionOpened').length,2);
   assert.equal(probes,1);
  }finally{f.close();}
+});
+
+test('peers without readiness capability transfer without the new handshake',async()=>{
+ let probes=0;
+ const f=await fixture({legacyProtocol:true,onSend(data){let m;try{m=JSON.parse(data);}catch{return true;}if(m.kind==='ready_probe'||m.kind==='ready'){probes++;return false;}return true;}});
+ try{f.job('legacy-protocol',ids[0],ids[1],[0]);await until(()=>f.frames.some(f=>f.body.type==='done'));assert.equal(probes,0);assert.deepEqual(f.events.filter(e=>e.type==='distributionError'),[]);}finally{f.close();}
 });

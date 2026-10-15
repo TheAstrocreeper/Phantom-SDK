@@ -60,8 +60,7 @@ export function createNetworkEngine(host) {
   const phantomRemoteEndpointIds = new Map();
   let phantomSysTransportAttemptSeq = 0;
   const phantomDoorwayAdmittedPeers = new Set();
-  const sdkSuccessorOffers=createDeferredSysOffers({setTimeout,clearTimeout,heldReason:'old_leader_pipe_open',resumedReason:'old_leader_pipe_lost',emit:detail=>post('SYS_SUCCESSOR_OFFER',detail)});
-  const sdkHandoffOffers=createDeferredSysOffers({setTimeout,clearTimeout,emit:detail=>post('SYS_HANDOFF_OFFER',detail)});
+  const sdkDeferredOffers=createDeferredSysOffers({setTimeout,clearTimeout,emit:detail=>post(detail.kind==='successor'?'SYS_SUCCESSOR_OFFER':'SYS_HANDOFF_OFFER',detail)});
   let sdkBootstrapTarget = null;
   const sdkBootstrapUnanswered = new Set();
   // Terminal membership commands are authority evidence waiting for the
@@ -549,7 +548,7 @@ export function createNetworkEngine(host) {
     }
 
     const changed = bootChanged || endpointChanged || offerAttemptChanged;
-    if(bootChanged||endpointChanged){sdkHandoffOffers.drop(key,'incarnation_changed');sdkSuccessorOffers.drop(key,'incarnation_changed');}
+    if(bootChanged||endpointChanged){sdkDeferredOffers.drop(key,'incarnation_changed');}
     const committed = phantomCommittedMember(key);
 
     if (!changed) {
@@ -2620,7 +2619,7 @@ export function createNetworkEngine(host) {
   // ======================================================
 
   // NOTE: STUN is optional. With empty iceServers, some NAT pairs won't connect.
-  const RTC_CFG = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
+  const RTC_CFG = host.rtcConfiguration;
 
   // remoteHKey -> { pc, dc }
   const phantomSysPeers = new Map();
@@ -4121,6 +4120,7 @@ export function createNetworkEngine(host) {
       });
       setState(from, VEIL.INVITE_RECEIVED, true);
       post("VEIL_INVITE_RECEIVED", { from });
+      if(host.messaging==='automatic')queueMicrotask(phantomReconcileMessaging);
       return true;
     }
 
@@ -5491,8 +5491,7 @@ export function createNetworkEngine(host) {
     }
 
     phantomEmitPresenceRoster("committed_sys_authority_apply");
-    queueMicrotask(sdkResumeHandoffOffers);
-    queueMicrotask(sdkResumeSuccessorOffers);
+    queueMicrotask(sdkResumeDeferredOffers);
     return true;
   }
   function phantomAuthoritySnapshotId(snapshot) {
@@ -7440,7 +7439,7 @@ export function createNetworkEngine(host) {
         phantomMaybeRelinkSysconPair("sys_transport_fault_" + why);
       }
 
-      queueMicrotask(sdkResumeSuccessorOffers);
+      queueMicrotask(sdkResumeDeferredOffers);
       emitSnapshot("sys_transport_fault_" + why);
       return;
     }
@@ -8030,6 +8029,38 @@ export function createNetworkEngine(host) {
     return merged;
   }
 
+  // Automatic messaging reuses the existing relationship and transport owners.
+  function phantomReconcileMessaging() {
+    const self=phantomShortKey(selfHKey);
+    if(host.messaging!=='automatic'||!enabled||__phantomExitSent||!phantomCommittedMember(self))return;
+    for(const key of lastRoster){
+      if(key===self||!phantomCommittedMember(key)||!host.canAdmitPeer(key)||
+          phantomPendingTerminalExits.has(key)||__phantomGoneNotified.has(key)||
+          phantomIsBlocked(key)||phantomIsBlockedBy(key)||phantomRelationshipRevoked.has(key))continue;
+      const relationship=phantomRelationshipGet(key);
+      if(relationship.endedAt)continue;
+      if(relationship.state===VEIL.INVITE_RECEIVED){
+        window.dispatchEvent({type:'message',data:{phantom:1,type:'VEIL_ACCEPT',payload:{from:key}}});
+      }else if(relationship.state===VEIL.OUTSIDE&&self<key){
+        window.dispatchEvent({type:'message',data:{phantom:1,type:'VEIL_INVITE',payload:{hKey:key}}});
+      }else if(phantomRelationshipIsAccepted(relationship)){
+        void phantomRequestChatPipe(key,'automatic_messaging_roster');
+      }
+    }
+  }
+
+  function phantomPeerConnections() {
+    const self=phantomShortKey(selfHKey);
+    return [...lastRoster].filter(key=>key!==self&&phantomCommittedMember(key)).map(peerId=>{
+      const ent=phantomChatPeers.get(peerId),relationship=phantomRelationships.get(peerId);
+      const blocked=!host.canAdmitPeer(peerId)||phantomIsBlocked(peerId)||phantomIsBlockedBy(peerId)||phantomRelationshipRevoked.has(peerId)||phantomPendingTerminalExits.has(peerId)||__phantomGoneNotified.has(peerId);
+      const ready=!blocked&&phantomRelationshipIsAccepted(relationship)&&ent?.dc?.readyState==='open'&&ent.chatState==='ready'&&ent.chatProof==='chat_hello';
+      const state=blocked?'blocked':ready?'ready':ent?.chatAttemptState==='terminal'?'failed':reconnectingPeers.has(peerId)?'recovering':relationship?.endedAt?'closed':relationship?.state&&relationship.state!==VEIL.OUTSIDE?'connecting':'idle';
+      return {peerId,state,reason:ready?'chat_hello_verified':blocked?'relationship_unavailable':ent?.chatFault&&ent.chatFault!=='none'?ent.chatFault:relationship?.endReason&&relationship.endReason!=='none'?relationship.endReason:state,
+        attemptId:ent?.chatAttemptId||null};
+    });
+  }
+
   function phantomEmitPresenceRoster(reason = "presence_roster") {
     const self = phantomShortKey(selfHKey);
     if (!self) return false;
@@ -8070,6 +8101,7 @@ export function createNetworkEngine(host) {
     phantomRefreshSysCandidates(list, reason);
 
     emitSnapshot(reason);
+    if(host.messaging==='automatic')queueMicrotask(phantomReconcileMessaging);
     return true;
   }
 
@@ -9390,6 +9422,7 @@ export function createNetworkEngine(host) {
 
       sysOutageClock.observe(pc);
       const st = pc.connectionState;
+      if(st==="connected")networkFirstSignaling.cancel(k,"native_connection_ready");
       if (st === "failed" || st === "closed") {
         if (current.temporary === true || phantomTemporarySysTransactions.has(k)) {
           phantomCloseTemporarySysTransaction(k, "pc_" + st);
@@ -9451,6 +9484,7 @@ export function createNetworkEngine(host) {
     const key = phantomShortKey(hKey);
     if (!key) return;
 
+    networkFirstSignaling.cancel(key);
     const ent = phantomSysPeers.get(key);
     const temporary = phantomTemporarySysTransactions.get(key);
     if (ent?.signalResponseTimer) clearTimeout(ent.signalResponseTimer);
@@ -9572,13 +9606,14 @@ export function createNetworkEngine(host) {
       concierge.chatLastDropAt = now();
       concierge.chatLastDropPeer = key;
 
-      phantomScheduleReconnect(key, "chat_dc_closed");
+      phantomHandleTransportLoss(key, "chat_dc_closed");
       emitSnapshot("chat_pipe_closed");
     };
 
     dc.onerror = () => {
       const key = phantomShortKey(remoteHKey);
       const ent = key ? phantomChatPeers.get(key) : null;
+      if(!ent||ent.dc!==dc)return;
 
       if (ent) {
         ent.chatState = "lost";
@@ -9587,7 +9622,7 @@ export function createNetworkEngine(host) {
         ent.chatFault = "dc_error";
       }
 
-      phantomScheduleReconnect(key, "chat_dc_error");
+      phantomHandleTransportLoss(key, "chat_dc_error");
       emitSnapshot("chat_pipe_lost_dc_error");
     };
 
@@ -11028,24 +11063,20 @@ export function createNetworkEngine(host) {
       ['connected','completed'].includes(leader.pc.iceConnectionState);
     return !healthy&&sdkHandoffPeerEligible(key,meta);
   }
-  function sdkResumeHandoffOffers() {
-    sdkHandoffOffers.resume({
-      isLeader:()=>phantomShortKey(phantomLocalCommittedAuthority()?.syscon1)===phantomShortKey(selfHKey)&&
-        String(concierge.localRoleCandidate||concierge.role)==='syscon1',
-      eligible:row=>sdkHandoffPeerEligible(row.peer,row.meta)&&!phantomHasOpenSysPipe(row.peer)&&
-        phantomSysBirthRole(row.peer)==='acceptor',
-      accept:row=>{rtcOnOffer(row.peer,row.offer,row.meta);for(const ice of row.ice)rtcOnIce(row.peer,ice.candidate,ice.meta);}
-    });
-  }
   function sdkValidSuccessorOffer(key,meta) {
     if(phantomRtcPipeFromMeta(meta)!=='sys'||meta.sysTemporary===true||!sdkHandoffPeerEligible(key,meta))return false;
     return acceptsSuccessorHandshake({proof:meta.successorProof,base:phantomLocalCommittedAuthority(),
       sender:key,self:phantomShortKey(selfHKey),room:videoId,bootId:String(meta.bootId||''),leaderPipeOpen:false});
   }
-  function sdkResumeSuccessorOffers() {
-    sdkSuccessorOffers.resume({isLeader:()=>true,
-      eligible:row=>sdkValidSuccessorOffer(row.peer,row.meta)&&!phantomHasOpenSysPipe(row.peer),
-      waiting:()=>phantomHasOpenSysPipe(phantomLocalCommittedAuthority()?.syscon1),
+  function sdkResumeDeferredOffers() {
+    const isLeader=()=>phantomShortKey(phantomLocalCommittedAuthority()?.syscon1)===phantomShortKey(selfHKey)&&
+      String(concierge.localRoleCandidate||concierge.role)==='syscon1';
+    sdkDeferredOffers.resume({isLeader:()=>true,
+      eligible:row=>!phantomHasOpenSysPipe(row.peer)&&(row.kind==='successor'
+        ?sdkValidSuccessorOffer(row.peer,row.meta)
+        :sdkHandoffPeerEligible(row.peer,row.meta)&&(!isLeader()||phantomSysBirthRole(row.peer)==='acceptor')),
+      waiting:row=>row.kind==='successor'
+        ?phantomHasOpenSysPipe(phantomLocalCommittedAuthority()?.syscon1):!isLeader(),
       accept:row=>{rtcOnOffer(row.peer,row.offer,row.meta);for(const ice of row.ice)rtcOnIce(row.peer,ice.candidate,ice.meta);}
     });
   }
@@ -11053,17 +11084,17 @@ export function createNetworkEngine(host) {
     if (!host.canAdmitPeer(phantomShortKey(fromHKey))) return;
     const key=phantomShortKey(fromHKey);
     if(phantomSysBirthRole(key)!=='acceptor'&&sdkValidSuccessorOffer(key,meta)&&phantomHasOpenSysPipe(phantomLocalCommittedAuthority()?.syscon1)) {
-      if(!sdkSuccessorOffers.hold(key,offer,meta))post('SYS_SUCCESSOR_OFFER',{action:'rejected',peer:key,reason:'invalid_or_capacity'});
+      if(!sdkDeferredOffers.hold(key,offer,meta,'successor'))post('SYS_SUCCESSOR_OFFER',{action:'rejected',peer:key,reason:'invalid_or_capacity'});
       return;
     }
     if(sdkShouldDeferHandoffOffer(key,meta)) {
-      if(!sdkHandoffOffers.hold(key,offer,meta))post('SYS_HANDOFF_OFFER',{action:'rejected',peer:key,reason:'invalid_or_capacity'});
+      if(!sdkDeferredOffers.hold(key,offer,meta,'handoff'))post('SYS_HANDOFF_OFFER',{action:'rejected',peer:key,reason:'invalid_or_capacity'});
       return;
     }
     // Replace the old SYS incarnation before any work captures its queue.
     // Following ICE then binds to the same connection as the incoming offer.
     if (!phantomPrepareSysOffer(fromHKey, meta)) return;
-    if(phantomRtcPipeFromMeta(meta)==='sys'){sdkHandoffOffers.drop(key,'accepted_new_offer');sdkSuccessorOffers.drop(key,'accepted_new_offer');}
+    if(phantomRtcPipeFromMeta(meta)==='sys'){sdkDeferredOffers.drop(key,'accepted_new_offer');}
     return phantomQueueInboundRtc(fromHKey, meta, "offer", () =>
       phantomApplyRtcOffer(fromHKey, offer, meta),
     );
@@ -11084,14 +11115,9 @@ export function createNetworkEngine(host) {
     traceIce('received',fromHKey,phantomRtcPipeFromMeta(meta),cand,meta);
     if (!host.canAdmitPeer(phantomShortKey(fromHKey))) {traceIce('rejected_admission',fromHKey,phantomRtcPipeFromMeta(meta),cand,meta);return;}
     const key=phantomShortKey(fromHKey);
-    if(phantomRtcPipeFromMeta(meta)==='sys'&&sdkSuccessorOffers.has(key)) {
-      const result=sdkSuccessorOffers.ice(key,cand,meta);
-      traceIce('successor_'+result,key,'sys',cand,meta);
-      return;
-    }
-    if(phantomRtcPipeFromMeta(meta)==='sys'&&sdkHandoffOffers.has(key)) {
-      const result=sdkHandoffOffers.ice(key,cand,meta);
-      traceIce(result==='held'||result==='duplicate'?'buffered_handoff':'discarded_handoff_'+result,key,'sys',cand,meta);
+    if(phantomRtcPipeFromMeta(meta)==='sys'&&sdkDeferredOffers.has(key)) {
+      const result=sdkDeferredOffers.ice(key,cand,meta);
+      traceIce(result==='held'||result==='duplicate'?'buffered_deferred':'discarded_deferred_'+result,key,'sys',cand,meta);
       return;
     }
     return phantomQueueInboundRtc(fromHKey, meta, "ice", () =>
@@ -11521,6 +11547,7 @@ export function createNetworkEngine(host) {
       rtcDiagnostics: rtcDiagnostics.snapshot(),
       iceTrace: iceTrace.snapshot(),
 
+      peerConnections: phantomPeerConnections(),
       chatPairs: Array.from(phantomChatPeers.entries())
         .map(([hKey, ent]) => ({
           hKey: phantomShortKey(hKey),
@@ -11625,8 +11652,8 @@ export function createNetworkEngine(host) {
         }),
       ),
 
-      handoffOffers: sdkHandoffOffers.snapshot(),
-      successorOffers: sdkSuccessorOffers.snapshot(),
+      handoffOffers: sdkDeferredOffers.snapshot().filter(row=>row.kind==='handoff'),
+      successorOffers: sdkDeferredOffers.snapshot().filter(row=>row.kind==='successor'),
       gossipRecovery: {
         source: phantomShortKey(phantomGossipRecovery.source) || null,
         targets: Array.isArray(phantomGossipRecovery.targets)
@@ -13289,8 +13316,7 @@ export function createNetworkEngine(host) {
     phantomDoorwayAdmittedPeers.clear();
     sdkBootstrapTarget = null;
     sdkBootstrapUnanswered.clear();
-    sdkHandoffOffers.clear('room_closed');
-    sdkSuccessorOffers.clear('room_closed');
+    sdkDeferredOffers.clear('room_closed');
     sdkDeferredAdmissions.clear();
     networkFirstSignaling.clear();signalingBridge.clear();signalingPeerKeys.clear();
     phantomPendingTerminalExits.clear();
@@ -14291,6 +14317,7 @@ export function createNetworkEngine(host) {
       window.dispatchEvent({ type: "message", data: { phantom: 1, type, payload } });
     },
     snapshot() { return snapshot("sdk_read"); },
+    peerConnections() {return phantomPeerConnections();},
     dispose() {
       networkFirstSignaling.clear();signalingBridge.clear();signalingPeerKeys.clear();
       phantomSendRoomExitedAndTeardown(true);

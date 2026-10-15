@@ -18,8 +18,8 @@ test('native readiness and retired attempts cancel delayed fallback',()=>{
 test('failed submissions fall through and session teardown releases timers',()=>{
  const f=fixture();f.send([false,true,true]);assert.deepEqual(f.calls,['direct','bridge']);f.router.clear();f.tick();assert.deepEqual(f.calls,['direct','bridge']);assert.equal(f.router.pending,0);
 });
-test('bounded queue uses immediate final path rather than retaining additional timers',()=>{
- const f=fixture(1);f.send();f.send();assert.deepEqual(f.calls,['direct','relay']);assert.equal(f.router.pending,1);f.router.clear();assert.equal(f.timers.size,0);
+test('bounded queue rejects additional payloads without bypassing preferred routes',()=>{
+ const f=fixture(1);f.send();assert.equal(f.send(),false);assert.deepEqual(f.calls,['direct']);assert.equal(f.router.pending,1);f.router.clear();assert.equal(f.timers.size,0);
 });
 test('closing from submission telemetry cannot install a timer after teardown',()=>{
  for(const closeOn of ['submitted','waiting']){
@@ -28,4 +28,15 @@ test('closing from submission telemetry cannot install a timer after teardown',(
  router.send({peer:'peer',attemptId:'a',signalType:'rtc_offer',current:()=>true,complete:()=>false,routes:[{name:'direct',send:()=>true},{name:'relay',send:()=>true}]});
  assert.equal(router.pending,0);assert.equal(timers.size,0);
  }
+});
+
+test('offer and ICE share one route and one fallback clock for the native attempt',()=>{
+ const f=fixture();f.send();f.send();f.send();assert.equal(f.timers.size,1);assert.equal(f.router.pending,3);
+ f.tick();assert.deepEqual(f.calls,['direct','direct','direct','bridge','bridge','bridge']);assert.equal(f.timers.size,1);
+ f.send();assert.equal(f.calls.at(-1),'bridge');assert.equal(f.timers.size,1);
+ f.tick();assert.deepEqual(f.calls.slice(-4),['relay','relay','relay','relay']);assert.equal(f.router.pending,0);
+ f.send();assert.equal(f.calls.at(-1),'relay');assert.equal(f.timers.size,0);
+});
+test('explicit attempt teardown releases all retained signals immediately',()=>{
+ const f=fixture();f.send();f.send();f.router.cancel('peer');assert.equal(f.timers.size,0);assert.equal(f.router.pending,0);f.tick();assert.deepEqual(f.calls,['direct','direct']);
 });
