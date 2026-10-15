@@ -6,10 +6,12 @@ import {peerProofStatement} from './peer-proof.js';
 const utf8 = value => new TextEncoder().encode(value);
 const binding = (room,key) => utf8(JSON.stringify(['phantom-nostr-binding-v1',room,key]));
 function hash(e) { return bytesToHex(sha256(utf8(JSON.stringify([0,e.pubkey,e.created_at,e.kind,e.tags,e.content])))); }
-export function createNostrIdentity() {
- const nostrSecret=schnorr.utils.randomSecretKey(), secret=ed25519.utils.randomSecretKey();
+export function createNostrIdentity(seed) {
+ if(seed!==undefined&&(seed?.version!==1||typeof seed.nostrSecret!=='string'||! /^[0-9a-f]{64}$/.test(seed.nostrSecret)||typeof seed.peerSecret!=='string'||! /^[0-9a-f]{64}$/.test(seed.peerSecret)))throw new TypeError('Invalid browser identity seed');
+ const nostrSecret=seed===undefined?schnorr.utils.randomSecretKey():hexToBytes(seed.nostrSecret), secret=seed===undefined?ed25519.utils.randomSecretKey():hexToBytes(seed.peerSecret);
  const nostrKey=bytesToHex(schnorr.getPublicKey(nostrSecret)), publicKey=bytesToHex(ed25519.getPublicKey(secret));
  return Object.freeze({nostrKey,publicKey,
+  exportSeed(){return {version:1,nostrSecret:bytesToHex(nostrSecret),peerSecret:bytesToHex(secret)};},
   signPeerProof(fields) {
    const proof={...fields,version:1,peerPublicKey:publicKey};
    return {...proof,signature:bytesToHex(ed25519.sign(peerProofStatement(proof),secret))};
