@@ -1,14 +1,18 @@
 import { createBrowserPhantom } from "../../packages/phantom-doorways/src/browser-entry.js";
 import { createAdminIdentity } from "../../packages/phantom-core/src/authorization.js";
 import { createWebSocketDoorway, adaptWebSocketDoorway } from "../../packages/phantom-doorways/src/index.js";
-const $ = (id) => document.getElementById(id), events = [], urls = /* @__PURE__ */ new Set(), received = /* @__PURE__ */ new Map();
-let network, controller, opening = false, state, snapshot, dropped = 0, reportUrl;
+const $ = (id) => document.getElementById(id), events = [], messages = [], urls = /* @__PURE__ */ new Set(), received = /* @__PURE__ */ new Map();
+let network, controller, opening = false, state, snapshot, dropped = 0, reportUrl, canPublish = false;
 const build = __SDK_TEST_BUILD__;
 function record(type, data) {
   events.push({ at: (/* @__PURE__ */ new Date()).toISOString(), type, data });
   if (events.length > 1e3) {
     events.shift();
     dropped++;
+  }
+  if(type === "message") {
+    messages.push(data);if(messages.length>100)messages.shift();
+    $("messages").textContent=messages.map(m=>`${m.from}: ${m.text}`).join("\n");
   }
   $("log").textContent = events.slice(-15).map((e) => JSON.stringify(e)).join("\n");
 }
@@ -19,7 +23,9 @@ function failure(error) {
 function controls() {
   $("setup").disabled = opening || !!network;
   $("leave").disabled = !opening && !network;
-  for (const id of ["send", "publish"]) $(id).disabled = !network;
+  $("send").disabled = !network || !network.getPeerConnections().some(p=>p.peerId === $("target").value && p.state === "ready");
+  $("publish").disabled = !network || !canPublish;
+  $("file").disabled = !network || !canPublish;
 }
 function render() {
   if (network) {
@@ -29,9 +35,14 @@ function render() {
   $("state").textContent = JSON.stringify({ state, connections: network?.getPeerConnections(), distribution: network?.getDistributionState() }, null, 2);
   if (!network) return;
   const selected = new Set([...document.querySelectorAll("#peers input:checked")].map((i) => i.value));
+  const target=$("target").value;
+  $("target").replaceChildren(new Option("Choose a peer", ""));
   $("peers").replaceChildren();
   for (const p of network.getPeers()) {
     if (p.hKey === state.peerId) continue;
+    const connection=network.getPeerConnections().find(c=>c.peerId===p.hKey);
+    const option=new Option(`${p.hKey} ${p.handle??""} (${connection?.state??"not ready"})`,p.hKey);
+    option.disabled=connection?.state!=="ready";$("target").append(option);
     const label = document.createElement("label"), input = document.createElement("input");
     input.type = "checkbox";
     input.value = p.hKey;
@@ -39,6 +50,10 @@ function render() {
     label.append(input, document.createTextNode(`${p.hKey} ${p.handle ?? ""} ${network.getPeerConnections().find((c) => c.peerId === p.hKey)?.state ?? "no messaging connection"}`));
     $("peers").append(label, document.createElement("br"));
   }
+  if([...$("target").options].some(o=>o.value===target&&!o.disabled))$("target").value=target;
+  const ready=[...$("target").options].filter(o=>o.value&&!o.disabled);
+  if(!$("target").value&&ready.length===1)$("target").value=ready[0].value;
+  controls();
 }
 async function hash(blob) {
   return Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", await blob.arrayBuffer())), (b) => b.toString(16).padStart(2, "0")).join("");
@@ -54,6 +69,7 @@ async function localFile(id) {
   a.textContent = `Download ${id} (${blob.size} bytes; SHA-256 ${sha256})`;
   $("files").append(a, document.createElement("br"));
   record("file.local", { id, bytes: blob.size, sha256 });
+  $("fileStatus").textContent=`Received ${blob.size} bytes; SHA-256 ${sha256}. Download below.`;
 }
 async function start(join) {
   opening = true;
@@ -75,6 +91,8 @@ async function start(join) {
       } else record("event", e);
     } };
     network = await (join ? sdk.join($("invite").value.trim(), options) : sdk.create(options));
+    canPublish=!join;
+    $("publishHelp").textContent=canPublish?"This creating page holds the admin key and can publish new files. Select recipients below.":"This joining page can receive files. Publish new files from the creating page; this page has no admin signing key.";
     $("invite").value = network.invite;
     network.on("message", (m) => record("message", m));
     for (const type of ["peerConnection", "distributionProgress", "distributionConnectionFailed", "distributionConnectionClosed", "distributionJob", "distributionJobFailed", "distributionError", "distributionComplete"]) network.on(type, (data) => {
@@ -91,6 +109,7 @@ async function start(join) {
     controls();
   }
 }
+$("target").onchange=controls;
 $("create").onclick = () => void start(false);
 $("join").onclick = () => void start(true);
 $("leave").onclick = () => {
@@ -109,18 +128,22 @@ $("leave").onclick = () => {
 };
 $("send").onclick = () => {
   try {
+    if(!network?.getPeerConnections().some(p=>p.peerId===$("target").value&&p.state==="ready"))throw Error("Select a ready peer before sending");
     network.send($("target").value.trim(), $("text").value);
     record("message.submitted", { to: $("target").value.trim(), text: $("text").value });
+    $("notice").textContent="Submitted to "+$("target").value+". Check received messages on that peer for delivery.";
   } catch (error) {
     failure(error);
   }
 };
 $("publish").onclick = async () => {
   try {
+    if(!canPublish)throw Error("Publish new files from the creating page, which holds the admin key");
     const file = $("file").files[0], recipients = [...document.querySelectorAll("#peers input:checked")].map((i) => i.value);
     if (!file || !recipients.length) throw Error("Choose a file and at least one recipient");
     const sha256 = await hash(file), manifest = await network.distributeFile(file, { recipients, name: file.name, type: file.type });
     record("file.published", { manifest, recipients, sha256 });
+    $("fileStatus").textContent=`Published ${file.name}: ${file.size} bytes; SHA-256 ${sha256}. Waiting for recipient completion.`;
   } catch (error) {
     failure(error);
   }
@@ -140,7 +163,7 @@ $("report").onclick = () => {
     reportUrl = URL.createObjectURL(new Blob([JSON.stringify(report, null, 2)], { type: "application/json" }));
     urls.add(reportUrl);
     const a = $("reportLink");
-    a.href = reportUrl;
+    a.href = reportUrl, canPublish = false;
     a.download = "phantom-sdk-test.json";
     a.hidden = false;
     a.click();
