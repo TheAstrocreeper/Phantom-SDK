@@ -43,9 +43,9 @@ test('publisher/leader loss converges with early recovery timers before verified
     assert.ok(held,'resumption matches the retained attempt');
     assert.ok(event.observedAt-held.observedAt<15000,'resumption happened before the caller retry deadline');
   }
-  assert.ok(events.some(e=>e.type==='ICE_TRACE'&&e.payload.stage==='buffered_handoff'),'ICE retained alongside handoff offer');
+  assert.ok(events.some(e=>e.type==='ICE_TRACE'&&e.payload.stage==='buffered_deferred'),'ICE retained alongside handoff offer');
   assert.ok(RTC.appliedCandidates.length>0);
-  const buffered=events.find(e=>e.type==='ICE_TRACE'&&e.payload.stage==='buffered_handoff');
+  const buffered=events.find(e=>e.type==='ICE_TRACE'&&e.payload.stage==='buffered_deferred');
   assert.ok(events.some(e=>e.type==='ICE_TRACE'&&e.observer===buffered.observer&&
     e.payload.key===buffered.payload.key&&['applied','applied_from_buffer'].includes(e.payload.stage)),
     'retained ICE was applied after the retained offer resumed');
