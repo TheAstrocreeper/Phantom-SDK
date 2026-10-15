@@ -26,6 +26,8 @@ jobs:
       - run: node --test tools/swarm/*.test.mjs
       - run: node --test tools/nostr/*.test.mjs
       - run: cd tools/swarm && npx playwright install --with-deps chromium --only-shell
+      - name: Verify native SDK messaging, recipient and reload contracts
+        run: node tools/swarm/contracts.mjs
       - run: node tools/swarm/launch.mjs --peers 5 --bytes 4194304 --timeout 90000
       - name: Force native early-successor offer retention
         run: node tools/swarm/launch.mjs --scenario early-successor --peers 4 --bytes 65536 --timeout 90000
