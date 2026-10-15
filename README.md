@@ -112,7 +112,7 @@ await network.distributeFile(file, {authorization, recipients: [peerA, peerB]});
 
 The prepared manifest must use the same file settings, including `distributionId`. If `recipients` is omitted alongside an external authorization, the signed authorization defines the selection. The signer and selected-recipient options must agree when both are supplied.
 
-Targeted publication uses version 2 admin proofs, with the recipient list included in the signed statement. Old version 1 publications remain unchanged. Older SDKs cannot verify targeted proofs; targeted sharing requires upgraded participants, with no fallback to all-member replication. Recipient selection controls SDK distribution; it is not encryption or a guarantee that a recipient cannot copy or redistribute downloaded content. Persistence and reload restoration remain separate work.
+Targeted publication uses version 2 admin proofs, with the recipient list included in the signed statement. Old version 1 publications remain unchanged. Older SDKs cannot verify targeted proofs; targeted sharing requires upgraded participants, with no fallback to all-member replication. Recipient selection controls SDK distribution; it is not encryption or a guarantee that a recipient cannot copy or redistribute downloaded content. For optional persistence and reload restoration, see the following section.
 
 ## Restoring distributed files
 
