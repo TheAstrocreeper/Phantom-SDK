@@ -55,3 +55,16 @@ test('real source transport loss still cancels and reports the receiver job prom
   assert.ok(f.ds.every(d=>d.snapshot().connections.length===0));
  }finally{f.close();}
 });
+test('a chunk queued during teardown does not block the next job to that peer',async()=>{
+ let held;
+ const f=await fixture({onSend(data,ch){let m;try{m=JSON.parse(data);}catch{return true;}if(m.sys==='PHANTOM_FILE_REQUEST'&&!held){held={data,ch};return false;}return true;}});
+ try{
+  f.job('retired-send',ids[0],ids[1],[0]);await until(()=>held);
+  // Queue source work, then retire the link before its asynchronous chunk read finishes.
+  held.ch.other.onmessage?.({data:held.data});held.ch.close();
+  await until(()=>f.frames.some(f=>f.body.type==='failed'));
+  const at=Date.now();f.job('next-send',ids[0],ids[1],[1]);
+  await until(()=>f.frames.some(f=>f.body.type==='done'&&f.body.jobId==='next-send'));
+  assert.ok(Date.now()-at<500,'next job did not wait for the retired send timeout');
+ }finally{f.close();}
+});

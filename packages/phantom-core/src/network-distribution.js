@@ -31,8 +31,14 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
     // Requests belong to our receiving job; replies belong to our source job.
     const receiving=type==='SEND_DM'&&payload.sys==='PHANTOM_FILE_REQUEST';
     const link=[...links.values()].find(l=>l.peer===payload.to&&l.job.asset===payload.file?.id&&
-      (receiving?l.job.receiver:l.job.source)===self()&&l.dc?.readyState==='open');
-    if(!link)return;
+      (receiving?l.job.receiver:l.job.source)===self()&&l.dc?.readyState==='open'&&
+      (payload.file?.index===undefined||l.job.indexes.includes(payload.file.index)));
+    if(!link){
+      // A source read may finish after its job/channel was retired. Settle the
+      // file service's send immediately so its per-peer queue can keep moving.
+      if(type==='SEND_FILE_BIN_CHUNK')fire('FILE_BIN_CHUNK_SENT',{...payload,ok:false,error:'Distribution job retired before chunk send'});
+      return;
+    }
     if(type==='SEND_DM'){link.dc.send(JSON.stringify({kind:'message',sys:payload.sys,file:payload.file}));return;}
     if(type==='SEND_FILE_BIN_CHUNK')void sendBinary(link,payload).catch(error);
   }};
