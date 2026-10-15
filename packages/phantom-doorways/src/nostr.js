@@ -5,7 +5,8 @@ export function classifyNostrRejection(reason='') {
 }
 /** Signed discovery/signaling bus. Does not elect leaders or confer room authority. */
 export function openNostrBus({roomId,identity,relays,WebSocket=globalThis.WebSocket,
- publicationCooldownMs=30000,onAnnouncement=()=>{},onSignal=()=>{},onSync=()=>{},onStatus=()=>{},onError=()=>{}}) {
+ publicationCooldownMs=30000,publicationLifetimeMs=10000,onAnnouncement=()=>{},onSignal=()=>{},onSync=()=>{},onStatus=()=>{},onError=()=>{}}) {
+ if(!Number.isFinite(publicationLifetimeMs)||publicationLifetimeMs<=0||publicationLifetimeMs>15000)throw new TypeError('Publication lifetime must be within 15000ms');
  if(!Number.isFinite(publicationCooldownMs)||publicationCooldownMs<=0)throw new TypeError('Positive publication cooldown required');
  if(!roomId || !identity?.sign || !Array.isArray(relays)||!relays.length)throw new TypeError('Room, signing identity and explicit relays required');
  const urls=relays.map(url=>{const u=new URL(url);if(!['ws:','wss:'].includes(u.protocol))throw new TypeError('WebSocket relay required');return u.href;});
@@ -14,11 +15,13 @@ export function openNostrBus({roomId,identity,relays,WebSocket=globalThis.WebSoc
  const seen=new Set(),pending=new Map();
  const subscription=`phantom-${crypto.randomUUID()}`;
  function status(type,detail={}){onStatus({type,...detail});}
- function publish(payload) {
+ function publish(payload,expiresAt=Date.now()+publicationLifetimeMs) {
+  // ACK bookkeeping uses the same absolute deadline as the relay-set record.
+  for(const [id,row] of pending)if(Date.now()>=row.expiresAt)pending.delete(id);
   if(closed||socket?.readyState!==1)throw new Error('Relay is not open');
   if(Date.now()<pausedUntil)throw new Error('Relay publication path temporarily rate-limited');
   if(writeBlocked)throw new Error('Relay publication path rejected for this session');
-  const event=identity.sign(roomId,payload);pending.set(event.id,{event,sentAt:Date.now()});
+  const event=identity.sign(roomId,payload);pending.set(event.id,{event,sentAt:Date.now(),expiresAt});
   if(pending.size>256){pending.delete(event.id);throw new Error('Too many unacknowledged relay publications');}
   socket.send(JSON.stringify(['EVENT',event]));return event.id;
  }
@@ -40,7 +43,8 @@ export function openNostrBus({roomId,identity,relays,WebSocket=globalThis.WebSoc
     if(!Array.isArray(packet))return;
     if(packet[0]==='OK'){
      if(!pending.has(packet[1]))return;
-     const {event,sentAt}=pending.get(packet[1]);
+     const {event,sentAt,expiresAt}=pending.get(packet[1]);
+     if(Date.now()>=expiresAt){pending.delete(packet[1]);return;}
      const payload=JSON.parse(event.content);
      pending.delete(packet[1]);
      const rejection=packet[2]===false?classifyNostrRejection(packet[3]):null;
@@ -73,7 +77,7 @@ export function openNostrBus({roomId,identity,relays,WebSocket=globalThis.WebSoc
  connect();
  return {
   announce(fields={},{force=false}={}){const next={...fields,type:'ANNOUNCEMENT'},fingerprint=JSON.stringify(next);const changed=fingerprint!==announcementFingerprint;announcement=next;if(!writeBlocked&&Date.now()>=pausedUntil&&socket?.readyState===1&&(force||changed||Date.now()-announcementAt>=15000)){const id=publish(announcement);announcementAt=Date.now();announcementFingerprint=fingerprint;return id;}},
-  sendSignal(target,control,messageId=crypto.randomUUID()){return publish({messageId,type:'SIGNAL',targetNostrKey:target.nostrKey,targetS7pKey:target.s7pPublicKey,control});},
+  sendSignal(target,control,messageId=crypto.randomUUID(),expiresAt){return publish({messageId,type:'SIGNAL',targetNostrKey:target.nostrKey,targetS7pKey:target.s7pPublicKey,control},expiresAt);},
   depart(fields){if(closed)return;clearTimeout(pauseTimer);if(writeBlocked||Date.now()<pausedUntil||socket?.readyState!==1){closed=true;generation++;socket?.close();pending.clear();return;}departureId=publish({...fields,type:'ANNOUNCEMENT',departed:true});},
   reconnect(){if(closed)throw new Error('Bus closed');generation++;clearTimeout(pauseTimer);pausedUntil=0;socket?.close();pending.clear();index=0;connect();},
   close(){if(closed)return;closed=true;generation++;clearTimeout(pauseTimer);if(socket?.readyState===1)socket.send(JSON.stringify(['CLOSE',subscription]));socket?.close();pending.clear();seen.clear();}
@@ -93,7 +97,7 @@ export function openNostrRelaySet(config) {
   if(closed)return;if(Date.now()>=publication.expiresAt){prunePublications();armExpiry();return;}
   if(publication.attempted.has(url))return;
   publication.attempted.add(url);
-  try{child.sendSignal(publication.target,publication.control,publication.messageId);}catch(error){publication.attempted.delete(url);config.onError?.(error);}
+  try{child.sendSignal(publication.target,publication.control,publication.messageId,publication.expiresAt);}catch(error){publication.attempted.delete(url);config.onError?.(error);}
  }
  function receive(callback,p){const key=JSON.stringify([p.nostrKey,p.type,p.messageId||p.eventId]);if(closed||seen.has(key))return;seen.add(key);if(seen.size>4096)seen.delete(seen.values().next().value);callback?.(p);}
  function addRelay(url) {
