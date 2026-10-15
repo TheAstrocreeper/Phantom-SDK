@@ -1,3 +1,4 @@
+import {createSequentialSignaling} from './sequential-signaling.js';
 import {createSysOutageClock} from './sys-outage-clock.js';
 import {createIceTrace} from './ice-trace.js';
 import {createRtcDiagnostics} from './rtc-diagnostics.js';
@@ -406,6 +407,7 @@ export function createNetworkEngine(host) {
     return [phantomBootId, key, phantomSysTransportAttemptSeq].join(":");
   }
 
+  const networkFirstSignaling=createSequentialSignaling({setTimeout,clearTimeout,now:()=>now(),status:detail=>post('SYS_SIGNAL_ROUTE',detail)});
   const signalingPeerKeys=new Map();
   function bindSignalingPeerKey(key,hex){if(!phantomCommittedMember(key)||typeof hex!=='string'||!/^[0-9a-f]{64}$/.test(hex)||hex.slice(0,16)!==key)return false;const previous=signalingPeerKeys.get(key);if(previous&&previous!==hex)return false;if(!previous&&signalingPeerKeys.size>=256)return false;signalingPeerKeys.set(key,hex);return true;}
   const signalingBridge=createSignalingBridge({self:()=>phantomShortKey(selfHKey),room:()=>videoId,authentication:host.recoverySignaling,bindIdentity:bindSignalingPeerKey,
@@ -7553,17 +7555,30 @@ export function createNetworkEngine(host) {
 
     CORE_DEBUG && console.log("[RTC TX]", msg.type, "→", to);
 
-    // A surviving accepted peer pipe can introduce a replacement SYS edge
-    // even when its two endpoints now use different bootstrap providers.
-    const recoveryChat=phantomChatPeers.get(toKey);
-    if(!phantomHasOpenSysPipe(toKey)&&canCarrySysRecovery({packet:msg,room:videoId,self:fromKey,remote:toKey,
-      member:!!phantomCommittedMember(toKey),terminal:phantomPendingTerminalExits.has(toKey),
-      accepted:phantomRelationshipIsAccepted(phantomRelationshipGet(toKey)),ready:recoveryChat?.dc?.readyState==='open'&&recoveryChat?.chatState==='ready'})){
-      try{recoveryChat.dc.send(JSON.stringify({t:'SYS_RECOVERY_RTC',packet:msg}));emitSnapshot('sys_recovery_signal_existing_peer_pipe');if(kind==='ice')traceIce('route_submission',toKey,pipe,data,{...msg,submitted:true,route:'existing_peer_pipe'});return true;}catch{}
-    }
-    const bridged=!phantomHasOpenSysPipe(toKey)&&signalingBridge.send(msg);
-    const sent = phantomSendControl(msg, msg.type)||bridged;
-    if(kind==='ice')traceIce('route_submission',toKey,pipe,data,{...msg,submitted:sent,route:concierge.lastRouteMode??'unknown'});
+    let sent,sequential=false;
+    if(pipe==='sys'&&!phantomHasOpenSysPipe(toKey)){
+      sequential=true;
+      const entry=phantomSysPeers.get(toKey),attemptId=msg.sysAttemptId,room=videoId;
+      sent=networkFirstSignaling.send({peer:toKey,attemptId,signalType:msg.type,
+        current:()=>videoId===room&&phantomSysPeers.get(toKey)===entry&&
+          String(entry?.attempt?.id||entry?.sysAttemptId||'')===String(attemptId||'')&&
+          !phantomPendingTerminalExits.has(toKey)&&host.canAdmitPeer(toKey)===true,
+        complete:()=>entry?.pc?.connectionState==='connected'||phantomHasOpenSysPipe(toKey),
+        routes:[
+          {name:'existing_peer_pipe',send:()=>{
+            const peer=phantomChatPeers.get(toKey);
+            if(!canCarrySysRecovery({packet:msg,room:videoId,self:fromKey,remote:toKey,
+              member:!!phantomCommittedMember(toKey),terminal:phantomPendingTerminalExits.has(toKey),
+              accepted:phantomRelationshipIsAccepted(phantomRelationshipGet(toKey)),ready:peer?.dc?.readyState==='open'&&peer?.chatState==='ready'}))return false;
+            peer.dc.send(JSON.stringify({t:'SYS_RECOVERY_RTC',packet:msg}));emitSnapshot('sys_recovery_signal_existing_peer_pipe');
+            if(kind==='ice')traceIce('route_submission',toKey,pipe,data,{...msg,submitted:true,route:'existing_peer_pipe'});return true;
+          }},
+          {name:'peer_bridge',send:()=>{const ok=signalingBridge.send(msg);if(kind==='ice'&&ok)traceIce('route_submission',toKey,pipe,data,{...msg,submitted:ok,route:'peer_bridge'});return ok;}},
+          {name:'relay_fallback',send:()=>{const ok=phantomSendControl(msg,msg.type);if(kind==='ice')traceIce('route_submission',toKey,pipe,data,{...msg,submitted:ok,route:concierge.lastRouteMode??'relay_fallback'});return ok;}}
+        ]
+      });
+    }else sent=phantomSendControl(msg,msg.type);
+    if(kind==='ice'&&!sequential)traceIce('route_submission',toKey,pipe,data,{...msg,submitted:sent,route:concierge.lastRouteMode??'unknown'});
 
     if (pipe === "chat") {
       const ent = phantomChatPeers.get(toKey);
@@ -13277,7 +13292,7 @@ export function createNetworkEngine(host) {
     sdkHandoffOffers.clear('room_closed');
     sdkSuccessorOffers.clear('room_closed');
     sdkDeferredAdmissions.clear();
-    signalingBridge.clear();signalingPeerKeys.clear();
+    networkFirstSignaling.clear();signalingBridge.clear();signalingPeerKeys.clear();
     phantomPendingTerminalExits.clear();
     for (const rec of phantomTemporarySysTransactions.values()) {
       try {
@@ -14277,7 +14292,7 @@ export function createNetworkEngine(host) {
     },
     snapshot() { return snapshot("sdk_read"); },
     dispose() {
-      signalingBridge.clear();signalingPeerKeys.clear();
+      networkFirstSignaling.clear();signalingBridge.clear();signalingPeerKeys.clear();
       phantomSendRoomExitedAndTeardown(true);
       wsClose("sdk_dispose");
       rtcTeardownAll("sdk_dispose");

@@ -33,3 +33,17 @@ Success now requires forwarded bridge events, all survivors converging, and a
 new verified transfer while relay signaling remains blacked out. Inspect
 `bridgeCounts` and `SYS_SIGNAL_BRIDGE` events as well as final peer states.
 Native/public-relay validation remains pending.
+
+## Sequential recovery signaling
+
+SYS transport birth/recovery now submits in this order when the target SYS pipe is unavailable:
+
+1. An existing accepted direct peer pipe.
+2. An authenticated one-intermediary peer bridge.
+3. The normal relay/bootstrap control path.
+
+Unavailable or throwing routes advance immediately. Successful local submission starts a 750 ms grace interval before trying the next path. This is a local policy, not a measured RTT guarantee or a delivery acknowledgment. Native connection readiness cancels delayed fallback. Attempt identity, connection-entry identity, room, terminal status and admission are checked again before delayed sends; retired attempts cannot replay old signaling. Session teardown releases timers.
+
+The pending set is capped at 256 messages. At that cap, a new message attempts the final control path immediately rather than retaining more payloads/timers; telemetry records `pending_limit`. Initial bootstrap without peer routes still reaches the relay immediately. Existing open SYS routing and chat relationship authorization keep their existing rules.
+
+`SYS_SIGNAL_ROUTE` events include peer, attempt ID, signal type, action, route, reason, elapsed milliseconds and grace interval. Actions distinguish local submission from skipped paths, waiting and cancellation. ICE trace records actual submissions on each selected route. Successful submission alone does not prove remote delivery. The full-SDK bridge test verifies successful native recovery suppresses the later relay submission; deterministic timer tests verify fallback ordering, blackholed-path advancement, stale-attempt cancellation, capacity bounds and callback-driven teardown.

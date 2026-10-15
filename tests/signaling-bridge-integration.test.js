@@ -24,5 +24,10 @@ test('full SDK verifies sparse bridge identities when doorway signal delivery is
   await wait(()=>events.slice(start).some(e=>e.type==='SYS_SIGNAL_BRIDGE'&&e.payload.action==='received'&&e.payload.to===seed.getState().peerId));
   assert.ok(events.slice(start).some(e=>e.type==='SYS_SIGNAL_BRIDGE'&&e.payload.action==='forwarded'));
   await wait(()=>events.slice(start).some(e=>e.type==='SYS_SIGNAL_BRIDGE'&&e.payload.action==='received'&&e.payload.signalType==='rtc_answer'&&e.payload.to===requester.getState().peerId)&&requester.getState().state==='admitted'&&connections.get(requester).some(pc=>pc!==system&&pc.connectionState==='connected'&&pc.channels.some(ch=>ch.label==='six7-sys')));
+  const routes=events.slice(start).filter(e=>e.type==='SYS_SIGNAL_ROUTE');
+  const bridged=routes.find(e=>e.payload.action==='submitted'&&e.payload.route==='peer_bridge'&&e.payload.signalType==='rtc_offer');
+  assert.ok(bridged,'production SDK must record bridge-first submission');
+  await new Promise(r=>setTimeout(r,800));
+  assert.equal(events.slice(start).some(e=>e.type==='SYS_SIGNAL_ROUTE'&&e.payload.attemptId===bridged.payload.attemptId&&e.payload.action==='submitted'&&e.payload.route==='relay_fallback'),false,'successful native bridge recovery cancels relay fallback');
  }catch(error){console.error('Bridge diagnostics',events.filter(e=>e.type==='SYS_SIGNAL_BRIDGE').map(e=>e.payload));console.error(JSON.stringify(networks.map(n=>({state:n.getState(),pipes:n.snapshot().chatPairs,recovery:n.snapshot().gossipRecovery})),null,2));throw error;}finally{for(const n of networks)n.close();}
 });
