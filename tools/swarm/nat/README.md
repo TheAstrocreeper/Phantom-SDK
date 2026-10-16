@@ -6,7 +6,9 @@ From the repository root, run:
 bash tools/swarm/run-nat-tests.sh
 ```
 
-Requires Docker Engine on Linux, or Docker Desktop using Linux containers. The first run builds an image and downloads Chromium. No phone, hosting, invites or manual pairing are involved. The test container is privileged to create network namespaces; run it only from source you trust. It has no external network after the build. No host networking or Docker socket is mounted. All namespaces and firewall changes are confined to that disposable container.
+Requires Linux (Debian, Ubuntu or Mint), Node.js 22+ and sudo. Run the command as your normal user. First-run setup installs missing network utilities and Chromium dependencies, downloads Chromium, and extracts Coturn into a local test runtime. Coturn is not installed or enabled as a system service. Later runs reuse the setup.
+
+The suite runs in private Linux mount, network and PID namespaces with no external network. Firewall, routing, forwarding and temporary namespace changes stay inside that isolated environment. Remaining test processes die when it exits. Sudo is required to create these kernel namespaces; your normal host network is not used for test traffic.
 
 The command exits nonzero if any scenario fails, prints the report location, and creates a `.tar.gz` containing `summary.json`, per-scenario summaries, JSONL SDK/browser events, selected ICE candidate pairs, Coturn logs, and gateway firewall counters.
 

@@ -11,3 +11,6 @@ demos/*/dist/
 
 # Swarm harness generated diagnostics
 tools/swarm/reports/
+
+# Local headless NAT runtime
+tools/swarm/.nat-runtime/

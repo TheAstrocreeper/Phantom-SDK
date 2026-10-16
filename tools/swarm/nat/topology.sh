@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runs only inside the disposable privileged test container (or an isolated CI VM).
+# Runs inside the runner's private mount, network and PID namespaces.
 set -Eeuo pipefail
 mode=${1:?scenario required}
 report=${2:?report directory required}
@@ -68,7 +68,7 @@ turnserver -n --verbose --listening-ip=198.18.0.1 --relay-ip=198.18.0.1 \
   --listening-port=3478 --min-port=49160 --max-port=49260 \
   --realm=phantom-nat --lt-cred-mech --user=phantom:disposable-test-password \
   --fingerprint --no-cli --no-tls --no-dtls --no-multicast-peers \
-  --pidfile="$report/coturn.pid" --log-file=stdout --simple-log > "$report/coturn.log" 2>&1 &
+  --userdb="$report/turndb" --pidfile="$report/coturn.pid" --log-file=stdout --simple-log > "$report/coturn.log" 2>&1 &
 pids+=("$!")
 for attempt in $(seq 1 50); do
   if nc -z 198.18.0.1 3478; then break; fi
