@@ -7,7 +7,7 @@ function scan(dir) {
   for (const e of readdirSync(dir, { withFileTypes: true })) {
     const p = new URL(e.name + (e.isDirectory() ? "/" : ""), dir);
     if (e.isDirectory() && !["dist","reports"].includes(e.name)) scan(p);
-    else if (/\.(js|mjs|json)$/.test(e.name)) hashes[p.pathname.slice(root.pathname.length)] = createHash("sha256").update(readFileSync(p)).digest("hex");
+    else if (/\.(js|mjs|json|html)$/.test(e.name)) hashes[p.pathname.slice(root.pathname.length)] = createHash("sha256").update(readFileSync(p)).digest("hex");
   }
 }
 scan(new URL("packages/", root));

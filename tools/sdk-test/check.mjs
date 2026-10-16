@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import http from "node:http";
-import { readFileSync, mkdirSync } from "node:fs";
+import { readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { chromium } from "../swarm/node_modules/playwright/index.mjs";
@@ -135,6 +135,7 @@ try {
   assert.ok(JSON.parse(readFileSync(postPath)).events.some((e) => e.type === "before.close"));
   console.log(JSON.stringify({ status: "passed", browser: browser.version(), bytes: bytes.length, sha256: expected, checks: ["three native peers", "message delivered", "selected receiver downloaded exact bytes", "excluded peer no download", "three JSON report downloads", "report after leave", "baseline acknowledgments and file hash", "report export preserves publish authority", "mobile fragment join and layout", "no-interruption recovery is inconclusive", "native channel-close recovery observed and acknowledged", "retained diagnostics collected after reload/rejoin"], reports: output }));
 } catch (error) {
+  for(let i=0;i<pages.length;i++)try{writeFileSync(join(output,`failure-${i}.json`),JSON.stringify(await pages[i].evaluate(()=>({state:document.querySelector("#state").textContent,notice:document.querySelector("#notice").textContent,results:document.querySelector("#results").textContent,log:document.querySelector("#log").textContent})),null,2));}catch{}
   for (let i = 0; i < pages.length; i++) console.error("PAGE", i, await pages[i].locator("#state").textContent(), await pages[i].locator("#notice").textContent(), (await pages[i].locator("#log").textContent()).slice(-3500));
   throw error;
 } finally {
