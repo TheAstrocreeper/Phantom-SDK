@@ -6,22 +6,24 @@ import { createWebSocketDoorway, adaptWebSocketDoorway } from "../../packages/ph
 const $ = (id) => document.getElementById(id), events = [], messages = [], urls = /* @__PURE__ */ new Set(), received = /* @__PURE__ */ new Map();
 let network, controller, opening = false, state, snapshot, dropped = 0, reportUrl, canPublish = false;
 const build = __SDK_TEST_BUILD__;
+const checkpoints=[];
 let journal, retained=null, saveTimer, journalWarning="", closing=false, currentTest=null;
 try {journal=createJournal(sessionStorage,"phantom-test-diagnostics-v1");retained=journal.previous;} catch(e) {journalWarning=e.message;}
 function persist(){
  clearTimeout(saveTimer);
  if(!journal)return;
- const value={version:1,networkId:network?.networkId??retained?.networkId??null,peerId:state?.peerId,at:new Date().toISOString(),state,events:events.slice(-250),results:$("results").textContent,rtc:snapshot?.rtcDiagnostics??null};
+ const value={version:1,networkId:network?.networkId??retained?.networkId??null,peerId:state?.peerId,at:new Date().toISOString(),state,events:events.slice(-250),results:$("results").textContent,checkpoints:checkpoints.slice(-64),trimmedEvents:0,rtc:snapshot?.rtcDiagnostics??null};
  // Bound the stored log and native RTC history without silently exceeding browser quotas.
  if(JSON.stringify(value).length>330000)value.rtc=null;
- while(value.events.length&&JSON.stringify(value).length>330000)value.events.shift();
+ while(value.events.length&&JSON.stringify(value).length>330000){value.events.shift();value.trimmedEvents++;}
  if(!journal.save(value)){journalWarning=journal.error;$("journalStatus").textContent="Log retention unavailable: "+journalWarning;}
  else $("journalStatus").textContent="Diagnostics retained in this tab across reloads. Clear them below when finished.";
 }
 function schedulePersist(){clearTimeout(saveTimer);saveTimer=setTimeout(persist,250);}
 
 function record(type, data) {
-  events.push({ at: (/* @__PURE__ */ new Date()).toISOString(), type, data });
+  const row={ at:new Date().toISOString(),type,data };events.push(row);
+  if(type.startsWith("test.")||["error","state","peerConnection"].includes(type)){checkpoints.push(row);if(checkpoints.length>64)checkpoints.shift();}
   if (events.length > 1e3) {
     events.shift();
     dropped++;
@@ -113,6 +115,9 @@ async function start(join) {
         snapshot = e.payload;
         record("snapshot.reason", { reason: e.payload.reason });
         render();
+      } else if(typeof e.payload?.text==="string"&&e.payload.text.startsWith("PHANTOM_TEST_V1:")) {
+        // Never log report payloads inside the reports being transferred.
+        record("protocol.frame",{type:e.type,characters:e.payload.text.length});
       } else record("event", e);
     } };
     network = await (join ? sdk.join($("invite").value.trim(), options) : sdk.create(options));
@@ -215,7 +220,7 @@ const pending=new Map(), companionReports=new Map(), fixtureChecks=new Map(), re
 const prefix="PHANTOM_TEST_V1:", partSize=6000;
 function testStatus(text){$("results").textContent=text;record("test.status",{text});}
 function compactReport(){
- const report={build,browser:{userAgent:navigator.userAgent,secureContext:isSecureContext,origin:location.origin},networkId:network?.networkId,state:network?.getState()??state,rtc:snapshot?.rtcDiagnostics,distribution:network?.getDistributionState(),received:[...received],events:events.slice(-250),retained,journalWarning,results:$("results").textContent,truncated:[]};
+ const report={build,browser:{userAgent:navigator.userAgent,secureContext:isSecureContext,origin:location.origin},networkId:network?.networkId,state:network?.getState()??state,rtc:snapshot?.rtcDiagnostics,distribution:network?.getDistributionState(),received:[...received],events:events.slice(-250),checkpoints:checkpoints.slice(-64),retained,journalWarning,results:$("results").textContent,truncated:[]};
  while(report.events.length&&JSON.stringify(report).length>1100000){report.events.shift();if(!report.truncated.includes("events"))report.truncated.push("events");}
  if(JSON.stringify(report).length>1100000){report.rtc=null;report.truncated.push("rtc");}
  return report;
@@ -317,7 +322,7 @@ $("verifyRecovery").onclick=()=>void perform(async()=>{
 $("combinedReport").onclick=()=>{
  persist();const a=document.createElement("a"),url=URL.createObjectURL(new Blob([JSON.stringify({controller:compactReport(),companions:[...companionReports].map(([peer,value])=>[peer,value.report]),collection:[...companionReports].map(([peer,value])=>({peer,collectedAt:value.collectedAt})),pendingCompanions:[...deferredReports],results:$("results").textContent},null,2)],{type:"application/json"}));urls.add(url);a.href=url;a.download="phantom-baseline.json";a.click();
 };
-$("clearJournal").onclick=()=>{clearTimeout(saveTimer);journal?.clear();retained=null;events.length=0;$("journalStatus").textContent="Retained diagnostics cleared. Active tests will record new events.";};
+$("clearJournal").onclick=()=>{clearTimeout(saveTimer);journal?.clear();retained=null;events.length=0;checkpoints.length=0;$("journalStatus").textContent="Retained diagnostics cleared. Active tests will record new events.";};
 const timer=setInterval(()=>{for(const id of fixtureChecks.keys())void verifyFixture(id);for(const [id,value] of reportCache)if(value.expires<Date.now())reportCache.delete(id);},1000);
 window.addEventListener("pagehide",()=>{persist();closing=true;cancelRequests("Page hidden or unloaded");controller?.abort();network?.close();clearInterval(timer);void wake?.release();for(const url of urls)URL.revokeObjectURL(url);});
 window.addEventListener("pageshow",e=>{if(e.persisted){$("notice").textContent="This page was restored after leaving. Reload and rejoin to collect retained diagnostics.";}});

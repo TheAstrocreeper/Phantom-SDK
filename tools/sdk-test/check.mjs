@@ -121,8 +121,8 @@ try {
   const retainedDownload=source.waitForEvent("download");await source.locator("#combinedReport").click();
   const retainedPath=join(output,"retained.json");await(await retainedDownload).saveAs(retainedPath);
   const retainedReport=JSON.parse(readFileSync(retainedPath));
-  assert.ok(retainedReport.companions.some(([,r])=>r.retained?.events.some(e=>e.type==="test.recoveryArmed")),"rejoined companion report includes pre-reload evidence");
-  assert.ok(retainedReport.controller.events.some(e=>e.type==="test.recoveryResult"&&e.data.message.startsWith("PASS")));
+  assert.ok(retainedReport.companions.some(([,r])=>r.retained?.checkpoints?.some(e=>e.type==="test.recoveryArmed")),"rejoined companion report includes pre-reload evidence");
+  assert.ok(retainedReport.controller.checkpoints.some(e=>e.type==="test.recoveryResult"&&e.data.message.startsWith("PASS")));
   await receiver.locator("#clearJournal").click();
   assert.equal(await receiver.evaluate(()=>sessionStorage.getItem("phantom-test-diagnostics-v1")),null);
 
