@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {mkdirSync,writeFileSync,appendFileSync,readFileSync} from 'node:fs';
+import {mkdirSync,writeFileSync,appendFileSync,readFileSync,readlinkSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
@@ -126,6 +126,50 @@ try{
    assert.equal(events.some(e=>e.type==='distributionJob'&&e.data.receiver===excluded.peerId),false);
    assert.equal((await inspect(excluded)).trace.some(t=>t.kind==='binary'&&t.direction==='receive'),false);
    return {chunks:0,receiverJobs:0};
+  });
+  await step('live transfer survives twelve seconds of bidirectional packet loss without reload',async()=>{
+   // Only mutate the disposable namespace created by the guarded outer runner.
+   const namespace=readlinkSync('/proc/self/ns/net');
+   assert.equal(process.env.PHANTOM_NAT_ISOLATED_NET_NS,namespace);
+   assert.notEqual(process.env.PHANTOM_NAT_PARENT_NET_NS,namespace);
+   const firewall=(...args)=>execFileSync('ip',['netns','exec','pg2','iptables',...args],{encoding:'utf8'});
+   const rule=['FORWARD','-m','comment','--comment','phantom-live-outage','-j','DROP'];
+   let installed=false,triggered,release;
+   const started=new Promise(resolve=>{triggered=resolve;});
+   const gate=new Promise(resolve=>{release=resolve;});
+   const token=await receiver.page.evaluate(()=>globalThis.liveTestDocument=crypto.randomUUID());
+   const peerId=(await inspect(receiver)).state.peerId;
+   await receiver.page.exposeBinding('harnessOutage',async(_,chunk)=>{
+    firewall('-I',...rule);installed=true;
+    log(receiver.label,'fault.networkDropStarted',chunk);triggered(chunk);
+    await gate;
+   });
+   try{
+    await receiver.page.evaluate(()=>contracts.armLiveOutage());
+    const file=await source.page.evaluate(recipients=>contracts.publish({recipients,size:2097152}),[receiver.peerId]);
+    const first=await Promise.race([started,new Promise((_,reject)=>{const timer=setTimeout(()=>reject(Error('No durable chunk reached outage gate')),15000);timer.unref();})]);
+    assert.equal(first.id,file.id);assert.equal(first.index,0);
+    // Release storage only after the firewall is active: the next chunk request must cross the broken path.
+    release();
+    const before=(await receiver.page.evaluate(()=>contracts.chunkKeys())).filter(k=>k.startsWith(file.id+':'));
+    await new Promise(resolve=>setTimeout(resolve,12000));
+    const during=(await receiver.page.evaluate(()=>contracts.chunkKeys())).filter(k=>k.startsWith(file.id+':'));
+    assert.deepEqual(during,before,'transfer must stall during the outage');
+    assert.ok((await receiver.page.evaluate(id=>contracts.localFile(id),file.id)).error,'file must remain incomplete while blocked');
+    const counters=firewall('-L','FORWARD','-v','-x','-n');
+    const dropped=counters.split('\n').find(line=>line.includes('phantom-live-outage'));
+    assert.ok(Number(dropped?.trim().split(/\s+/)[0])>0,'fault must actually drop packets');
+    firewall('-D',...rule);installed=false;log(receiver.label,'fault.networkRestored',{durationMs:12000,dropped});
+    const complete=await until(async()=>{const result=await receiver.page.evaluate(id=>contracts.localFile(id),file.id);return !result.error&&result;},'live transfer recovery');
+    assert.equal(complete.sha256,file.sha256);assert.equal(complete.size,file.size);
+    assert.equal(await receiver.page.evaluate(()=>globalThis.liveTestDocument),token,'same browser document');
+    assert.equal((await inspect(receiver)).state.peerId,peerId);
+    await ready();
+    await source.page.evaluate(to=>contracts.send({to,text:'after-live-outage'}),receiver.peerId);
+    await until(async()=>(await inspect(receiver)).messages.some(m=>m.text==='after-live-outage'&&m.from===source.peerId),'message after live outage');
+    assert.deepEqual(await excluded.page.evaluate(()=>contracts.chunkKeys()),[]);
+    return {fileId:file.id,outageMs:12000,storedDuringOutage:during,dropped,complete,sameDocument:true,samePeerId:true};
+   }finally{release();if(installed)firewall('-D',...rule);}
   });
   await step('native ICE evidence confirms the expected network path',async()=>{
    const pairs=events.filter(e=>e.type==='rtc.selectedPair').map(e=>({peer:e.peer,...e.data}));
