@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # Runs inside the runner's private mount, network and PID namespaces.
 set -Eeuo pipefail
+[[ -n ${PHANTOM_NAT_ISOLATED_NET_NS:-} && $(readlink /proc/self/ns/net) == "$PHANTOM_NAT_ISOLATED_NET_NS" && $(readlink /proc/self/ns/net) != "${PHANTOM_NAT_PARENT_NET_NS:?missing parent namespace}" ]] || { echo 'Use run-nat-tests.sh: isolated network namespace required.' >&2; exit 2; }
 mode=${1:?scenario required}
 report=${2:?report directory required}
 case "$mode" in direct|blocked|turn-udp|turn-tcp) ;; *) exit 2;; esac
 mkdir -p "$report"
 pids=()
+rootSink=false
 cleanup() {
   status=$?
   trap - EXIT
@@ -21,6 +23,11 @@ cleanup() {
       ip netns del "$ns" 2>/dev/null || true
     done
   done
+  if [[ $rootSink == true ]]; then
+    iptables -D OUTPUT -d 10.0.0.0/8 -j DROP 2>/dev/null || true
+    iptables -D FORWARD -d 10.0.0.0/8 -j DROP 2>/dev/null || true
+    ip route del 10.0.0.0/8 dev pwan 2>/dev/null || true
+  fi
   ip link del pwan 2>/dev/null || true
   exit "$status"
 }
@@ -32,9 +39,12 @@ sysctl -qw net.ipv4.ip_forward=1
 ip link add pwan type bridge
 ip address add 198.18.0.1/24 dev pwan
 ip link set pwan up
-# Unroutable private candidates are silently discarded on the simulated WAN.
-# Do not send premature ICMP network-unreachable errors back to ICE sockets.
-ip route replace blackhole 10.0.0.0/8
+# Route private candidate checks through a silent firewall sink. A blackhole
+# route returns EINVAL to local Coturn sends and can close its allocation.
+ip route add 10.0.0.0/8 dev pwan
+rootSink=true
+iptables -A FORWARD -d 10.0.0.0/8 -j DROP
+iptables -A OUTPUT -d 10.0.0.0/8 -j DROP
 for n in 1 2 3; do
   ip netns add "pp$n"
   ip netns add "pg$n"
@@ -53,6 +63,10 @@ for n in 1 2 3; do
   ip netns exec "pg$n" sysctl -qw net.ipv6.conf.all.disable_ipv6=1
   ip netns exec "pp$n" sysctl -qw net.ipv6.conf.all.disable_ipv6=1
   ip netns exec "pg$n" iptables -t nat -A POSTROUTING -o wan -j MASQUERADE
+  # Unmapped WAN packets must drop before conntrack confirms a local flow.
+  # Otherwise a racing inbound check steals the endpoint's preserved NAT port.
+  ip netns exec "pg$n" iptables -P INPUT DROP
+  ip netns exec "pg$n" iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
   ip netns exec "pg$n" iptables -P FORWARD DROP
   ip netns exec "pg$n" iptables -A FORWARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
   if [[ "$mode" == direct ]]; then

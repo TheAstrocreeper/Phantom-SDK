@@ -53,5 +53,7 @@ trap finish EXIT
 "${privilege[@]}" env PATH="$runtime/root/usr/bin:$PATH:/usr/sbin:/sbin" \
   LD_LIBRARY_PATH="$library_path${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
   PHANTOM_CHROMIUM_PATH="$browser" \
+  PHANTOM_NAT_PARENT_NET_NS="$(readlink /proc/self/ns/net)" \
+  PHANTOM_NAT_PARENT_MNT_NS="$(readlink /proc/self/ns/mnt)" \
   unshare --mount --net --pid --fork --kill-child=SIGKILL --mount-proc \
   bash tools/swarm/nat/isolated.sh "$report"
