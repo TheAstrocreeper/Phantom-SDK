@@ -64,7 +64,7 @@ for n in 1 2 3; do
   pids+=("$!")
 done
 # STUN and TURN live on the simulated WAN. Credentials are disposable test credentials.
-turnserver -n --listening-ip=198.18.0.1 --relay-ip=198.18.0.1 \
+turnserver -n --verbose --listening-ip=198.18.0.1 --relay-ip=198.18.0.1 \
   --listening-port=3478 --min-port=49160 --max-port=49260 \
   --realm=phantom-nat --lt-cred-mech --user=phantom:disposable-test-password \
   --fingerprint --no-cli --no-tls --no-dtls --no-multicast-peers \

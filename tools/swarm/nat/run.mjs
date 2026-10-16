@@ -48,7 +48,7 @@ try{
    globalThis.rawProbe={pc,candidates,received:[],channel:null};
    pc.onicecandidate=e=>{if(e.candidate)candidates.push(e.candidate.toJSON());};
    pc.ondatachannel=e=>{rawProbe.channel=e.channel;e.channel.onmessage=m=>rawProbe.received.push(m.data);};
-  },rtcConfiguration);
+  },mode.startsWith('turn-')?{iceTransportPolicy:'relay',iceServers:rtcConfiguration.iceServers.filter(s=>s.urls.startsWith('turn:'))}:rtcConfiguration);
   try{
    const offer=await a.page.evaluate(async()=>{rawProbe.channel=rawProbe.pc.createDataChannel('network-probe');rawProbe.channel.onmessage=e=>rawProbe.received.push(e.data);await rawProbe.pc.setLocalDescription(await rawProbe.pc.createOffer());return rawProbe.pc.localDescription.toJSON();});
    const answer=await b.page.evaluate(async offer=>{await rawProbe.pc.setRemoteDescription(offer);await rawProbe.pc.setLocalDescription(await rawProbe.pc.createAnswer());return rawProbe.pc.localDescription.toJSON();},offer);
@@ -57,13 +57,14 @@ try{
    while(Date.now()<deadline){
     for(const [from,to] of [[a,b],[b,a]]){
      const candidates=await from.page.evaluate(()=>rawProbe.candidates.splice(0));
+     for(const candidate of candidates)log(from.label,'nativeProbe.candidate',candidate);
      await to.page.evaluate(async candidates=>{for(const c of candidates)await rawProbe.pc.addIceCandidate(c);},candidates);
     }
     ready=(await Promise.all([a,b].map(c=>c.page.evaluate(()=>rawProbe.channel?.readyState==='open')))).every(Boolean);
     if(ready)break;await new Promise(r=>setTimeout(r,100));
    }
    const stats=await Promise.all([a,b].map(c=>c.page.evaluate(async()=>({state:rawProbe.pc.connectionState,stats:[...await rawProbe.pc.getStats()].map(([,v])=>v)}))));
-   summary.nativeNetworkProbe=stats;save();
+   summary.nativeProbePolicy=mode.startsWith('turn-')?'relay':'all';summary.nativeNetworkProbe=stats;save();
    assert.ok(ready,'Plain WebRTC failed: investigate topology/native ICE before the SDK');
    await a.page.evaluate(()=>rawProbe.channel.send('network-probe'));
    await until(()=>b.page.evaluate(()=>rawProbe.received.includes('network-probe')),'native probe payload');
