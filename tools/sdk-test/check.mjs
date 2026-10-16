@@ -17,7 +17,7 @@ const pages = [];
 try {
   browser = await chromium.launch({ headless: true, ...process.env.PHANTOM_CHROMIUM_PATH ? { executablePath: process.env.PHANTOM_CHROMIUM_PATH } : {}, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
   for (let i = 0; i < 3; i++) {
-    const context = await browser.newContext({ acceptDownloads: true });
+    const context = await browser.newContext({ acceptDownloads: true, ...(i===1?{viewport:{width:390,height:844},isMobile:true,hasTouch:true}: {}) });
     const p = await context.newPage();
     p.on("console",m=>{if(m.type()==="error")console.error("browser:",m.text());});
     p.on("pageerror", (e) => {
@@ -30,11 +30,15 @@ try {
     pages.push(p);
   }
   const [source, receiver, excluded] = pages;
+  // The fixture loopback HTTP origin cannot be scanned by a real phone; QR encoding is
+  // verified separately and the fragment join flow is exercised in the mobile viewport.
+
   await source.locator("#create").click();
   await source.waitForFunction(() => document.querySelector("#invite").value.length > 0);
   const invite = await source.locator("#invite").inputValue();
   for (const p of [receiver, excluded]) {
-    await p.locator("#invite").fill(invite);
+    if(p===receiver){const link=await source.locator("#joinLink").inputValue();await p.goto(link);}
+    else await p.locator("#invite").fill(invite);
     await p.locator("#join").click();
   }
   for (const p of pages) await p.waitForFunction(() => {
@@ -79,13 +83,47 @@ try {
   assert.deepEqual(reports[2].received, []);
   assert.equal(await excluded.locator("#files a").count(), 0);
   assert.equal(reports[2].distribution.assets.some((a) => a.holders.some((h) => h.peer === reports[2].state.peerId && h.indexes.length > 0)), false);
+  assert.equal(await source.locator("#publish").isEnabled(),true,"export must preserve creator publishing");
+  await source.locator("#run").click();
+  await source.waitForFunction(()=>document.querySelector("#results").textContent.includes("Baseline complete"),{}, {timeout:90000});
+  const combined=source.waitForEvent("download");
+  await source.locator("#combinedReport").click();
+  const combinedPath=join(output,"combined.json");await (await combined).saveAs(combinedPath);
+  const combinedReport=JSON.parse(readFileSync(combinedPath));
+  assert.equal(combinedReport.companions.length,1);
+  assert.equal(combinedReport.companions[0][0],receiverId);
+  assert.ok(combinedReport.results.includes("PASS · 256 KiB"));
+  assert.equal(await receiver.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,"mobile must fit viewport");
+  // No network fault was injected: the recovery check must not invent a success.
+  await source.locator("#armRecovery").click();
+  await source.locator("#verifyRecovery").waitFor({state:"visible"});
+  await source.waitForFunction(()=>!document.querySelector("#verifyRecovery").disabled);
+  await source.locator("#verifyRecovery").click();
+  await source.waitForFunction(()=>document.querySelector("#results").textContent.includes("INCONCLUSIVE"),{}, {timeout:60000});
+  // A reload keeps the failed/armed-session diagnostics, not private SDK state.
+  await receiver.reload();
+  await receiver.waitForFunction(()=>document.querySelector("#journalStatus").textContent.includes("restored"));
+  await receiver.locator("#join").click();
+  await receiver.waitForFunction(()=>{try{return JSON.parse(document.querySelector("#state").textContent).state.state==="admitted";}catch{return false;}},{},{timeout:60000});
+  await source.waitForFunction(()=>!document.querySelector("#collect").disabled);
+  await source.locator("#collect").click();
+  await source.waitForFunction(()=>document.querySelector("#collectionStatus").textContent.includes("collected"),{}, {timeout:60000});
+  await source.waitForFunction(()=>!document.querySelector("#collect").disabled);
+  const retainedDownload=source.waitForEvent("download");await source.locator("#combinedReport").click();
+  const retainedPath=join(output,"retained.json");await(await retainedDownload).saveAs(retainedPath);
+  const retainedReport=JSON.parse(readFileSync(retainedPath));
+  assert.ok(retainedReport.companions.some(([,r])=>r.retained?.events.some(e=>e.type==="test.recoveryArmed")),"rejoined companion report includes pre-reload evidence");
+  assert.equal(retainedReport.controller.events.some(e=>e.type==="test.recoveryResult"&&e.data.message.startsWith("PASS")),false);
+  await receiver.locator("#clearJournal").click();
+  assert.equal(await receiver.evaluate(()=>sessionStorage.getItem("phantom-test-diagnostics-v1")),null);
+
   for (const p of pages) await p.locator("#leave").click();
   const post = receiver.waitForEvent("download");
   await receiver.locator("#report").click();
   const postPath = join(output, "after-leave.json");
   await (await post).saveAs(postPath);
   assert.ok(JSON.parse(readFileSync(postPath)).events.some((e) => e.type === "before.close"));
-  console.log(JSON.stringify({ status: "passed", browser: browser.version(), bytes: bytes.length, sha256: expected, checks: ["three native peers", "message delivered", "selected receiver downloaded exact bytes", "excluded peer no download", "three JSON report downloads", "report after leave"], reports: output }));
+  console.log(JSON.stringify({ status: "passed", browser: browser.version(), bytes: bytes.length, sha256: expected, checks: ["three native peers", "message delivered", "selected receiver downloaded exact bytes", "excluded peer no download", "three JSON report downloads", "report after leave", "baseline acknowledgments and file hash", "report export preserves publish authority", "mobile fragment join and layout", "no-interruption recovery is inconclusive", "retained diagnostics collected after reload/rejoin"], reports: output }));
 } catch (error) {
   for (let i = 0; i < pages.length; i++) console.error("PAGE", i, await pages[i].locator("#state").textContent(), await pages[i].locator("#notice").textContent(), (await pages[i].locator("#log").textContent()).slice(-3500));
   throw error;

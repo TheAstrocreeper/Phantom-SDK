@@ -17,3 +17,6 @@ mkdirSync(out, { recursive: true });
 await build({ entryPoints: [new URL("./app.js", import.meta.url).pathname], bundle: true, format: "esm", target: "es2022", outfile: new URL("app.js", out).pathname, define: { __SDK_TEST_BUILD__: JSON.stringify(metadata) } });
 copyFileSync(new URL("./index.html", import.meta.url), new URL("index.html", out));
 writeFileSync(new URL("build.json", out), JSON.stringify(metadata, null, 2));
+
+copyFileSync(new URL("THIRD_PARTY_NOTICES.md",root),new URL("THIRD_PARTY_NOTICES.md",out));
+copyFileSync(new URL("LICENSE",root),new URL("LICENSE",out));
