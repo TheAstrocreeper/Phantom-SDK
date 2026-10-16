@@ -19,3 +19,12 @@ test('connection history, transitions and stats remain bounded',async()=>{
 test('getStats rejection is retained as evidence',async()=>{
  const d=createRtcDiagnostics();const pc=fixture(async()=>{throw Error('stats unavailable');});d.track(pc,{peer:'peer',pipe:'sys'});d.retire(pc,'close');await tick();assert.equal(d.snapshot().connections[0].statsError,'stats unavailable');
 });
+
+test('native SDP ICE usernames are parsed across real CRLF lines',()=>{
+ const pc=fixture(async()=>report());
+ pc.localDescription={type:'offer',sdp:'v=0\r\na=ice-ufrag:runLocal\r\na=ice-pwd:secret\r\na=ice-ufrag:runLocal\r\n'};
+ pc.remoteDescription={type:'answer',sdp:'v=0\r\na=ice-ufrag:remoteN\r\na=ice-pwd:other\r\n'};
+ const d=createRtcDiagnostics();d.track(pc,{peer:'peer',pipe:'sys'});
+ const state=d.snapshot().connections[0].state;
+ assert.deepEqual(state.localIceUfrags,['runLocal']);assert.deepEqual(state.remoteIceUfrags,['remoteN']);
+});
