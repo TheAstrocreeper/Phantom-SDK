@@ -6,7 +6,7 @@ import {COMPATIBILITY_WIRE} from '../../packages/phantom-core/src/compatibility.
 // Test-only durable storage; reloads use the browser's real IndexedDB backend.
 const db=await new Promise((resolve,reject)=>{const r=indexedDB.open('phantom-contracts',1);r.onupgradeneeded=()=>{r.result.createObjectStore('chunks');r.result.createObjectStore('records');};r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);});
 function stored(table,mode,action){return new Promise((resolve,reject)=>{const tx=db.transaction(table,mode),r=action(tx.objectStore(table));tx.oncomplete=()=>resolve(r.result);tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error??Error('Storage transaction aborted'));});}
-let network,lastState,lastSnapshot,interrupted=false,interrupt=false,turnOnly=false;
+let network,lastState,lastSnapshot,interrupted=false,interrupt=false,turnOnly=false,liveOutage=false;
 const trace=[],messages=[],connections=[],errors=[],native=new Set();
 const log=(type,data)=>{void globalThis.harnessLog({type,data});};
 class RTC extends RTCPeerConnection{
@@ -23,12 +23,12 @@ class RTC extends RTCPeerConnection{
  }
  createDataChannel(...args){const dc=super.createDataChannel(...args);this.observeChannel(dc);return dc;}
  async capturePair(){
-  if(!turnOnly||!this.kind)return;
+  if(!this.kind)return;
   try{
    const stats=await this.getStats();
    for(const transport of stats.values())if(transport.type==='transport'&&transport.selectedCandidatePairId){
     const pair=stats.get(transport.selectedCandidatePairId),local=stats.get(pair?.localCandidateId),remote=stats.get(pair?.remoteCandidateId);
-    if(pair&&local&&remote)log('rtc.selectedPair',{kind:this.kind,state:pair.state,localType:local.candidateType,remoteType:remote.candidateType,relayProtocol:local.relayProtocol,policy:this.getConfiguration().iceTransportPolicy});
+    if(pair&&local&&remote)log('rtc.selectedPair',{kind:this.kind,state:pair.state,localType:local.candidateType,remoteType:remote.candidateType,localAddress:local.address,remoteAddress:remote.address,localPort:local.port,remotePort:remote.port,protocol:local.protocol,relayProtocol:local.relayProtocol,policy:this.getConfiguration().iceTransportPolicy});
    }
   }catch(error){log('rtc.statsError',{kind:this.kind,error:error.message});}
  }
@@ -36,7 +36,7 @@ class RTC extends RTCPeerConnection{
 }
 const chunkStore={
  get:(id,index)=>stored('chunks','readonly',s=>s.get(`${id}:${index}`)),
- async put(id,index,bytes){await stored('chunks','readwrite',s=>s.put(bytes,`${id}:${index}`));if(interrupt){interrupt=false;interrupted=true;network.close();log('fault.closedAfterStoredChunk',{id,index});}},
+ async put(id,index,bytes){await stored('chunks','readwrite',s=>s.put(bytes,`${id}:${index}`));if(liveOutage){liveOutage=false;await globalThis.harnessOutage({id,index});}if(interrupt){interrupt=false;interrupted=true;network.close();log('fault.closedAfterStoredChunk',{id,index});}},
  load:async networkId=>(await stored('records','readonly',s=>s.getAll())).filter(r=>r.proof.networkId===networkId),
  save:(networkId,record)=>{if(record.proof.networkId!==networkId)throw Error('Wrong storage scope');return stored('records','readwrite',s=>s.put(record,record.manifest.id));},
 };
@@ -64,6 +64,7 @@ globalThis.contracts={
  send({to,text}){network.send(to,text);},
  breakMessaging(){let closed=0;for(const pc of native)if(pc.chat?.readyState==='open'){pc.chat.close();closed++;}if(!closed)throw Error('No native messaging channel found');return closed;},
  armPartial(){interrupt=true;},
+ armLiveOutage(){liveOutage=true;},
  async publish({recipients,size=262144}){const bytes=Uint8Array.from({length:size},(_,i)=>(i*31+(i>>>8)+17)%256),manifest=await network.distributeFile(new Blob([bytes]),{recipients,name:'contracts.bin'});return {...manifest,sha256:await sha(bytes)};},
  async localFile(id){try{const blob=await network.getDistributedFile(id);return {size:blob.size,sha256:await sha(await blob.arrayBuffer())};}catch(error){return {error:error.message};}},
  chunkKeys:()=>stored('chunks','readonly',s=>s.getAllKeys()),
