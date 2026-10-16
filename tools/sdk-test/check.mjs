@@ -114,6 +114,9 @@ try {
   await receiver.waitForFunction(()=>document.querySelector("#journalStatus").textContent.includes("restored"));
   await receiver.locator("#join").click();
   await receiver.waitForFunction(()=>{try{return JSON.parse(document.querySelector("#state").textContent).state.state==="admitted";}catch{return false;}},{},{timeout:60000});
+  const rejoinedId=(await state(receiver)).state.peerId;
+  assert.notEqual(rejoinedId,receiverId,"reload creates a fresh peer while retaining diagnostics");
+  await source.waitForFunction(id=>{try{return JSON.parse(document.querySelector("#state").textContent).connections.some(c=>c.peerId===id&&c.state==="ready");}catch{return false;}},rejoinedId,{timeout:60000});
   await source.waitForFunction(()=>!document.querySelector("#collect").disabled);
   await source.locator("#collect").click();
   await source.waitForFunction(()=>document.querySelector("#collectionStatus").textContent.includes("collected"),{}, {timeout:60000});
