@@ -98,35 +98,6 @@ try{
    await until(async()=>(await inspect(receiver)).messages.some(m=>m.text==='after-close'&&m.from===source.peerId),'recovered message');
    return {oldAttempt:prior,newAttempt:(await inspect(source)).connections.find(c=>c.peerId===receiver.peerId).attemptId};
   });
-  let fixture;
-  await step('receiver persists exactly one chunk before interruption',async()=>{
-   await receiver.page.evaluate(()=>contracts.armPartial());
-   fixture=await source.page.evaluate(recipients=>contracts.publish({recipients}),[receiver.peerId]);
-   await until(async()=>(await inspect(receiver)).interrupted,'durable first chunk');
-   const keys=await receiver.page.evaluate(()=>contracts.chunkKeys());assert.deepEqual(keys,[fixture.id+':0']);
-   return {id:fixture.id,keys};
-  });
-  await step('reload resumes missing chunks across NAT and verifies SHA-256',async()=>{
-   await source.page.evaluate(()=>contracts.close());
-   await Promise.all([reload(source,source.invite),reload(receiver,source.invite)]);
-   const restored=(await inspect(receiver)).distribution.restoreResults.find(r=>r.id===fixture.id);
-   assert.equal(restored?.received,1);assert.equal(restored.complete,false);
-   await ready();
-   const complete=await until(async()=>{const f=await receiver.page.evaluate(id=>contracts.localFile(id),fixture.id);return !f.error&&f;},'resumed file');
-   assert.equal(complete.size,fixture.size);assert.equal(complete.sha256,fixture.sha256);
-   assert.deepEqual(await source.page.evaluate(id=>contracts.localFile(id),fixture.id),complete);
-   const requests=(await inspect(receiver)).trace.filter(t=>t.kind==='PHANTOM_FILE_REQUEST'&&t.direction==='send');
-   assert.ok(requests.length);assert.ok(requests.every(t=>t.index!==0));
-   return {restored,complete,requestedIndexes:requests.map(t=>t.index)};
-  });
-  await step('excluded peer receives no file chunks or receiver jobs',async()=>{
-   await until(async()=>(await Promise.all(clients.map(inspect))).every(s=>s.distribution.jobs.length===0&&s.distribution.connections.length===0),'distribution idle');
-   assert.deepEqual(await excluded.page.evaluate(()=>contracts.chunkKeys()),[]);
-   assert.ok((await excluded.page.evaluate(id=>contracts.localFile(id),fixture.id)).error);
-   assert.equal(events.some(e=>e.type==='distributionJob'&&e.data.receiver===excluded.peerId),false);
-   assert.equal((await inspect(excluded)).trace.some(t=>t.kind==='binary'&&t.direction==='receive'),false);
-   return {chunks:0,receiverJobs:0};
-  });
   await step('live transfer survives twelve seconds of bidirectional packet loss without reload',async()=>{
    // Only mutate the disposable namespace created by the guarded outer runner.
    const namespace=readlinkSync('/proc/self/ns/net');
@@ -170,6 +141,35 @@ try{
     assert.deepEqual(await excluded.page.evaluate(()=>contracts.chunkKeys()),[]);
     return {fileId:file.id,outageMs:12000,storedDuringOutage:during,dropped,complete,sameDocument:true,samePeerId:true};
    }finally{release();if(installed)firewall('-D',...rule);}
+  });
+  let fixture;
+  await step('receiver persists exactly one chunk before interruption',async()=>{
+   await receiver.page.evaluate(()=>contracts.armPartial());
+   fixture=await source.page.evaluate(recipients=>contracts.publish({recipients}),[receiver.peerId]);
+   await until(async()=>(await inspect(receiver)).interrupted,'durable first chunk');
+   const keys=(await receiver.page.evaluate(()=>contracts.chunkKeys())).filter(k=>k.startsWith(fixture.id+':'));assert.deepEqual(keys,[fixture.id+':0']);
+   return {id:fixture.id,keys};
+  });
+  await step('reload resumes missing chunks across NAT and verifies SHA-256',async()=>{
+   await source.page.evaluate(()=>contracts.close());
+   await Promise.all([reload(source,source.invite),reload(receiver,source.invite)]);
+   const restored=(await inspect(receiver)).distribution.restoreResults.find(r=>r.id===fixture.id);
+   assert.equal(restored?.received,1);assert.equal(restored.complete,false);
+   await ready();
+   const complete=await until(async()=>{const f=await receiver.page.evaluate(id=>contracts.localFile(id),fixture.id);return !f.error&&f;},'resumed file');
+   assert.equal(complete.size,fixture.size);assert.equal(complete.sha256,fixture.sha256);
+   assert.deepEqual(await source.page.evaluate(id=>contracts.localFile(id),fixture.id),complete);
+   const requests=(await inspect(receiver)).trace.filter(t=>t.kind==='PHANTOM_FILE_REQUEST'&&t.direction==='send');
+   assert.ok(requests.length);assert.ok(requests.every(t=>t.index!==0));
+   return {restored,complete,requestedIndexes:requests.map(t=>t.index)};
+  });
+  await step('excluded peer receives no file chunks or receiver jobs',async()=>{
+   await until(async()=>(await Promise.all(clients.map(inspect))).every(s=>s.distribution.jobs.length===0&&s.distribution.connections.length===0),'distribution idle');
+   assert.deepEqual(await excluded.page.evaluate(()=>contracts.chunkKeys()),[]);
+   assert.ok((await excluded.page.evaluate(id=>contracts.localFile(id),fixture.id)).error);
+   assert.equal(events.some(e=>e.type==='distributionJob'&&e.data.receiver===excluded.peerId),false);
+   assert.equal((await inspect(excluded)).trace.some(t=>t.kind==='binary'&&t.direction==='receive'),false);
+   return {chunks:0,receiverJobs:0};
   });
   await step('native ICE evidence confirms the expected network path',async()=>{
    const pairs=events.filter(e=>e.type==='rtc.selectedPair').map(e=>({peer:e.peer,...e.data}));
