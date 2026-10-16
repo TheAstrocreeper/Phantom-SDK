@@ -26,6 +26,7 @@ try{
  await receiver.locator('#target').selectOption(sourceId);await receiver.locator('#text').fill('hello PC');await receiver.locator('#send').click();await source.waitForFunction(()=>document.querySelector('#messages').textContent.includes('hello PC'));
  const bytes=Buffer.from(Array.from({length:262144},(_,i)=>(i*31+(i>>>8)+17)%256)),expected=createHash('sha256').update(bytes).digest('hex');
  await source.locator('#file').setInputFiles({name:'fixture.bin',mimeType:'application/octet-stream',buffer:bytes});await source.locator('#publish').click();await receiver.locator('#files a').waitFor({timeout:60000});
+ await source.waitForFunction(()=>document.querySelector('#fileStatus').textContent.startsWith('Delivered'),{},{timeout:30000});
  const path=await download(receiver,'#files a','received.bin');assert.equal(createHash('sha256').update(readFileSync(path)).digest('hex'),expected);
  const report=JSON.parse(readFileSync(await download(source,'#report','controller.json')));assert.equal(report.companions.find(([id])=>id===receiverId)[1].received[0][1].sha256,expected);assert.deepEqual(report.companions.find(([id])=>id!==receiverId)[1].received,[]);assert.equal(await excluded.locator('#files a').count(),0);assert.equal(await source.locator('#publish').isEnabled(),true,'log export preserves file sending');
  assert.equal(await receiver.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,'mobile viewport fits');

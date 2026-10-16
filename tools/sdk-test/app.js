@@ -23,7 +23,7 @@ function render(){
  $('peerCount').textContent=`${ready} ready / ${rows.length} peers`;
  $('self').textContent=state?.peerId??'—';$('role').textContent=network?(creator?'Creator':'Joined peer'):'—';
  $('connectionDetail').textContent=network?({admitted:'Ready to send and receive.',recovering:'Connection interrupted. Waiting for recovery.',connecting:'Setting up the peer connection.',discovering:'Looking for a peer.'})[state?.state]??'Waiting for the connection.':'Create a session or join one.';
- if(network&&lastPublication){const asset=network.getDistributionState().assets?.find(a=>a.id===lastPublication.id),held=asset?.holders?.find(h=>h.peer===lastPublication.peer)?.indexes?.length??0;if(asset&&held===asset.total)$('fileStatus').textContent=`Delivered ${lastPublication.name} · peer reports all ${held} chunks received`;}
+ updateTransferStatus();
  $('state').textContent=JSON.stringify({state,connections:rows,distribution:network?.getDistributionState()},null,2);
  const old=$('target').value;$('target').replaceChildren(new Option(rows.length?'Choose a peer':'Waiting for a peer…',''));
  for(const p of rows){const member=network.getPeers().find(m=>m.hKey===p.peerId);const option=new Option(`${member?.handle??'Peer'} · ${p.state} · ${p.peerId.slice(0,6)}`,p.peerId);option.disabled=p.state!=='ready';$('target').append(option);}
@@ -32,6 +32,8 @@ function render(){
  $('publishHelp').textContent=network&&!creator?'Receive files here. Send files from the page that created this session.':'Files go to the selected peer. Received files appear below.';
  controls();
 }
+function updateTransferStatus(){if(!network||!lastPublication)return;const asset=network.getDistributionState().assets?.find(a=>a.id===lastPublication.id),held=asset?.holders?.find(h=>h.peer===lastPublication.peer)?.indexes?.length??0;if(asset&&held===asset.total)$('fileStatus').textContent=`Delivered ${lastPublication.name} · peer reports all ${held} chunks received`;}
+const refreshTimer=setInterval(updateTransferStatus,500);
 async function hash(blob){return [...new Uint8Array(await crypto.subtle.digest('SHA-256',await blob.arrayBuffer()))].map(b=>b.toString(16).padStart(2,'0')).join('');}
 function addMessage(from,text){messages.push({from,text});if(messages.length>100)messages.shift();$('messages').replaceChildren();for(const m of messages){const row=document.createElement('div');row.className='message';const label=document.createElement('strong');label.textContent=m.from;const body=document.createElement('span');body.textContent=m.text;row.append(label,body);$('messages').append(row);}}
 async function localFile(id){if(received.has(id))return;const blob=await network.getDistributedFile(id),sha256=await hash(blob),url=URL.createObjectURL(blob);urls.add(url);received.set(id,{bytes:blob.size,sha256});const a=document.createElement('a');a.href=url;a.download='received.bin';a.textContent=`Download received file · ${(blob.size/1024).toFixed(1)} KB`;$('files').append(a);$('fileStatus').textContent=`Received ${(blob.size/1024).toFixed(1)} KB · verified local bytes`;record('file.received',{id,bytes:blob.size,sha256});}
@@ -79,6 +81,6 @@ $('report').onclick=async()=>{if(exporting)return;exporting=true;controls();cons
 $('copyJoin').onclick=async()=>{try{await navigator.clipboard.writeText($('joinLink').value);$('notice').textContent='Join link copied.';}catch{$('joinLink').select();$('notice').textContent='Select and copy the link.';}};
 $('clearJournal').onclick=()=>{clearTimeout(saveTimer);journal?.clear();retained=null;$('notice').textContent='Previous retained logs cleared.';};
 window.addEventListener('error',e=>fail(e.error??e.message));window.addEventListener('unhandledrejection',e=>fail(e.reason));
-document.addEventListener('visibilitychange',save);window.addEventListener('pagehide',()=>{save();controller?.abort();network?.close();for(const url of urls)URL.revokeObjectURL(url);});
+document.addEventListener('visibilitychange',save);window.addEventListener('pagehide',()=>{clearInterval(refreshTimer);save();controller?.abort();network?.close();for(const url of urls)URL.revokeObjectURL(url);});
 try{const q=new URLSearchParams(location.hash.slice(1)).get('phantom');if(q){const data=JSON.parse(q);$('invite').value=data.invite;$('doorway').value=data.doorway??'';$('name').value='Phone';document.body.classList.add('companion');$('joinPrompt').hidden=false;}}catch(e){fail(e);}
 record('loaded',{build});render();
