@@ -13,7 +13,6 @@ class RTC extends RTCPeerConnection{
  constructor(config){
   super(config);native.add(this);log('rtc.created',{policy:this.getConfiguration().iceTransportPolicy});
   if(turnOnly&&this.getConfiguration().iceTransportPolicy!=='relay')throw Error('SDK connection did not retain relay-only policy');
-  this.addEventListener('signalingstatechange',()=>log('rtc.description',{local:this.localDescription?.toJSON(),remote:this.remoteDescription?.toJSON(),configuration:this.getConfiguration()}));
   this.addEventListener('connectionstatechange',()=>{if(this.connectionState==='connected')void this.capturePair();});
   this.addEventListener('datachannel',e=>this.observeChannel(e.channel));
  }

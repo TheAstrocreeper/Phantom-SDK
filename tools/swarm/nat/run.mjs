@@ -36,10 +36,11 @@ async function open(label,invite){const c=clients.find(c=>c.label===label)??awai
 async function ready(){return until(async()=>{const rows=await Promise.all(clients.map(inspect));return rows.every(r=>r.state.state==='admitted'&&r.connections.length===2&&r.connections.every(c=>c.state==='ready'))&&rows;},'three peers ready across NAT');}
 async function reload(c,invite){await c.page.reload();await c.page.waitForFunction(()=>!!globalThis.contracts);const result=await c.page.evaluate(args=>contracts.open(args),{label:c.label,invite,rtcConfiguration});assert.equal(result.peerId,c.peerId);}
 try{
- const files=['contracts-peer.js','server.mjs','nat/run.mjs','nat/topology.sh','nat/chromium.sh'];
+ const files=['contracts-peer.js','server.mjs','nat/run.mjs','nat/topology.sh','nat/chromium.sh','nat/isolated.sh','nat/suite.sh','run-nat-tests.sh','package-lock.json'];
  summary.sourceHashes=Object.fromEntries(files.map(file=>[file,createHash('sha256').update(readFileSync(join(root,'tools/swarm',file))).digest('hex')]));
  try{summary.revision=execFileSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8',stdio:['ignore','pipe','ignore']}).trim();}catch{summary.revision=process.env.PHANTOM_REVISION??'not supplied';}
  const bundle=await build({entryPoints:[join(root,'tools/swarm/contracts-peer.js')],bundle:true,write:false,format:'esm',target:'es2022'});
+ summary.browserBundleSha256=createHash('sha256').update(bundle.outputFiles[0].contents).digest('hex');
  server=await startServer(bundle.outputFiles[0].text,(type,data)=>log('signaling',type,data),{host:'198.18.0.1',port:8080});
  if(mode!=='blocked')await step('plain native WebRTC validates the network before SDK assertions',async()=>{
   const a=await pageFor('source'),b=await pageFor('selected');

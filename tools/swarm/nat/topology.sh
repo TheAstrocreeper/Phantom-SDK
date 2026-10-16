@@ -24,10 +24,10 @@ cleanup() {
     done
   done
   if [[ $rootSink == true ]]; then
-    iptables -D OUTPUT -d 10.0.0.0/8 -j DROP 2>/dev/null || true
     iptables -D FORWARD -d 10.0.0.0/8 -j DROP 2>/dev/null || true
-    ip route del 10.0.0.0/8 dev pwan 2>/dev/null || true
+    ip route del 10.0.0.0/8 via 198.18.0.254 dev pwan 2>/dev/null || true
   fi
+  ip netns del psink 2>/dev/null || true
   ip link del pwan 2>/dev/null || true
   exit "$status"
 }
@@ -39,12 +39,20 @@ sysctl -qw net.ipv4.ip_forward=1
 ip link add pwan type bridge
 ip address add 198.18.0.1/24 dev pwan
 ip link set pwan up
-# Route private candidate checks through a silent firewall sink. A blackhole
-# route returns EINVAL to local Coturn sends and can close its allocation.
-ip route add 10.0.0.0/8 dev pwan
+# Local OUTPUT drops/blackhole routes return socket errors to Coturn.
+# Send private checks to a separate namespace, where they disappear remotely.
+ip netns add psink
+ip link add psw type veth peer name eth0 netns psink
+ip link set psw master pwan
+ip link set psw up
+ip -n psink address add 198.18.0.254/24 dev eth0
+ip -n psink link set eth0 up
+ip -n psink link set lo up
+ip netns exec psink sysctl -qw net.ipv4.ip_forward=1
+ip -n psink route add blackhole 10.0.0.0/8
+ip route add 10.0.0.0/8 via 198.18.0.254 dev pwan
 rootSink=true
 iptables -A FORWARD -d 10.0.0.0/8 -j DROP
-iptables -A OUTPUT -d 10.0.0.0/8 -j DROP
 for n in 1 2 3; do
   ip netns add "pp$n"
   ip netns add "pg$n"

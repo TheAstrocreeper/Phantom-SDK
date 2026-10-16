@@ -21,8 +21,10 @@ Each browser process has its own private subnet and Linux MASQUERADE gateway. A 
 | turn-udp | Direct peer traffic blocked; TURN available over UDP | Connection contains a relay candidate, UDP allocation evidence |
 | turn-tcp | All forwarded UDP blocked; TCP service access allowed | Connection contains a relay candidate, TCP allocation evidence |
 
-A plain native WebRTC control first verifies each connected topology independently of the SDK (STUN/all for direct; relay-only for TURN). The SDK scenarios still use policy `all`. A control failure is reported separately and prevents misleading SDK assertions.
+A plain native WebRTC control first verifies each connected topology independently of the SDK, using the same ICE configuration and policy `all`, with immediate trickle delivery. Gateways drop unsolicited inbound packets, and private-address candidate checks are silently discarded on the simulated WAN. A control failure is reported separately and prevents misleading SDK assertions.
 
 Connected scenarios check three-peer messaging, recovery after an intentional native data channel close, selected-recipient file transfer, IndexedDB persistence after interruption, reload/resume without requesting the stored chunk, SHA-256 equality, and recipient exclusion. ICE policy remains `all` to exercise firewall-driven fallback rather than force relay policy.
 
 This models controlled NAT/firewall behavior. It does not certify actual mobile browsers, carrier NAT, every symmetric NAT implementation, TURN/TLS, or transparent recovery from a live network change. The interruption is a deliberate SDK close after a durable chunk, followed by a reload; it is reported as such.
+
+Direct execution of the internal topology scripts is refused unless the namespace isolation checks pass. The test removes its WAN drop rules and private route during cleanup, then discards the outer namespaces.
