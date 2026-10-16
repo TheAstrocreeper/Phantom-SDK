@@ -5,7 +5,7 @@ import {createAdminIdentity} from '../../packages/phantom-core/src/authorization
 import {createWebSocketDoorway,adaptWebSocketDoorway} from '../../packages/phantom-doorways/src/index.js';
 const $=id=>document.getElementById(id),build=__SDK_TEST_BUILD__;
 const events=[],messages=[],received=new Map(),remoteReports=new Map(),pending=new Map(),reportCache=new Map(),urls=new Set();
-let network,controller,state,snapshot,opening=false,creator=false,dropped=0,saveTimer,journal,retained=null,storageError='',exporting=false;
+let network,controller,state,snapshot,opening=false,creator=false,dropped=0,saveTimer,journal,retained=null,storageError='',exporting=false,lastPublication=null;
 try{journal=createJournal(sessionStorage,'phantom-test-diagnostics-v1');retained=journal.previous;}catch(e){storageError=e.message;}
 const prefix='PHANTOM_LOGS_V1:',partSize=6000;
 function record(type,data){events.push({at:new Date().toISOString(),type,data});if(events.length>1000){events.shift();dropped++;}scheduleSave();$('log').textContent=events.slice(-20).map(e=>JSON.stringify(e)).join('\n');}
@@ -22,7 +22,8 @@ function render(){
  $('statusDot').dataset.state=status;
  $('peerCount').textContent=`${ready} ready / ${rows.length} peers`;
  $('self').textContent=state?.peerId??'—';$('role').textContent=network?(creator?'Creator':'Joined peer'):'—';
- $('connectionDetail').textContent=network?(state?.reason??'').replaceAll('_',' '):'Create a session or join one.';
+ $('connectionDetail').textContent=network?({admitted:'Ready to send and receive.',recovering:'Connection interrupted. Waiting for recovery.',connecting:'Setting up the peer connection.',discovering:'Looking for a peer.'})[state?.state]??'Waiting for the connection.':'Create a session or join one.';
+ if(network&&lastPublication){const asset=network.getDistributionState().assets?.find(a=>a.id===lastPublication.id),held=asset?.holders?.find(h=>h.peer===lastPublication.peer)?.indexes?.length??0;if(asset&&held===asset.total)$('fileStatus').textContent=`Delivered ${lastPublication.name} · peer reports all ${held} chunks received`;}
  $('state').textContent=JSON.stringify({state,connections:rows,distribution:network?.getDistributionState()},null,2);
  const old=$('target').value;$('target').replaceChildren(new Option(rows.length?'Choose a peer':'Waiting for a peer…',''));
  for(const p of rows){const member=network.getPeers().find(m=>m.hKey===p.peerId);const option=new Option(`${member?.handle??'Peer'} · ${p.state} · ${p.peerId.slice(0,6)}`,p.peerId);option.disabled=p.state!=='ready';$('target').append(option);}
@@ -41,7 +42,7 @@ function showInvite(){
  QRCode.toCanvas($('qr'),u.href,{width:400,margin:4,errorCorrectionLevel:'L'}).catch(e=>{$('joinHelp').textContent='Could not draw QR. Use Copy link. '+e.message;});
 }
 async function start(join){
- if(opening||network)return;opening=true;creator=!join;controller=new AbortController();$('notice').textContent='';render();
+ if(opening||network)return;opening=true;creator=!join;document.body.classList.toggle('receiveOnly',join);controller=new AbortController();$('notice').textContent='';render();
  try{
  if(!isSecureContext||!crypto.subtle)throw Error('Open this page over HTTPS, or http://localhost:8000 on this PC.');
  const url=$('doorway').value.trim(),rtc=$('rtc').value.trim();if(url&&!['ws:','wss:'].includes(new URL(url).protocol))throw Error('Doorway must use ws or wss.');
@@ -71,7 +72,7 @@ $('create').onclick=()=>void start(false);$('join').onclick=()=>void start(true)
 $('leave').onclick=()=>{controller?.abort();save();if(network){record('before.close',{state});network.close();state=network.getState();snapshot=network.snapshot();network=null;}for(const p of [...pending.values()])p.reject(Error('Network closed'));record('closed',{state});$('setupSection').classList.remove('connected');$('sharing').hidden=true;render();};
 $('send').onclick=()=>{try{const text=$('text').value.trim();if(!text)throw Error('Enter a message.');network.send($('target').value,text);record('message.submitted',{to:$('target').value,text});addMessage('You',text);$('text').value='';$('notice').textContent='Message submitted. Delivery is visible on the receiving page.';}catch(e){fail(e);}};
 $('text').onkeydown=e=>{if(e.key==='Enter'&&!$('send').disabled)$('send').click();};
-$('publish').onclick=async()=>{try{const file=$('file').files[0],peer=$('target').value;if(!file||!peer||!creator)throw Error('Select a ready peer and a file on the creating page.');$('fileStatus').textContent='Sending…';const sha256=await hash(file),manifest=await network.distributeFile(file,{recipients:[peer],distributionId:crypto.randomUUID(),name:file.name,type:file.type});record('file.published',{manifest,sha256,recipients:[peer]});$('fileStatus').textContent=`Published ${file.name} · ${(file.size/1024).toFixed(1)} KB. Waiting for receiver.`;}catch(e){$('fileStatus').textContent='Could not send file';fail(e);}};
+$('publish').onclick=async()=>{try{const file=$('file').files[0],peer=$('target').value;if(!file||!peer||!creator)throw Error('Select a ready peer and a file on the creating page.');$('fileStatus').textContent='Sending…';const sha256=await hash(file),manifest=await network.distributeFile(file,{recipients:[peer],distributionId:crypto.randomUUID(),name:file.name,type:file.type});lastPublication={id:manifest.id,peer,name:file.name};record('file.published',{manifest,sha256,recipients:[peer]});$('fileStatus').textContent=`Published ${file.name} · ${(file.size/1024).toFixed(1)} KB. Waiting for receiver.`;}catch(e){$('fileStatus').textContent='Could not send file';fail(e);}};
 $('report').onclick=async()=>{if(exporting)return;exporting=true;controls();const missing=[];try{$('notice').textContent='Preparing logs…';if(network&&creator)for(const p of connections().filter(p=>p.state==='ready')){try{await collect(p.peerId);}catch(e){missing.push({peer:p.peerId,error:e.message});}}
  save();const data={...makeReport(),companions:[...remoteReports].map(([peer,v])=>[peer,v.report]),collection:[...remoteReports].map(([peer,v])=>({peer,collectedAt:v.collectedAt})),unavailable:missing};const url=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));urls.add(url);const a=$('reportLink');a.href=url;a.download='phantom-logs.json';a.hidden=false;a.click();$('notice').textContent=missing.length?'Logs downloaded. A companion report was unavailable; details are included.':'Logs downloaded. Use the link below if the browser blocked the download.';
  }catch(e){fail(e);}finally{exporting=false;controls();}};
