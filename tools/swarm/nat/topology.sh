@@ -42,8 +42,8 @@ for n in 1 2 3; do
   ip -n "pg$n" address add "198.18.0.$((10+n))/24" dev wan
   ip -n "pg$n" address add "10.201.$n.1/24" dev lan
   ip -n "pp$n" address add "10.201.$n.2/24" dev eth0
-  ip -n "pp$n" route add default via "10.201.$n.1"
   for dev in lo eth0; do ip -n "pp$n" link set "$dev" up; done
+  ip -n "pp$n" route add default via "10.201.$n.1"
   for dev in lo wan lan; do ip -n "pg$n" link set "$dev" up; done
   ip netns exec "pg$n" sysctl -qw net.ipv4.ip_forward=1
   ip netns exec "pg$n" sysctl -qw net.ipv6.conf.all.disable_ipv6=1
