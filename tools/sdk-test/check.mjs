@@ -23,6 +23,10 @@ try {
     p.on("pageerror", (e) => {
       throw e;
     });
+    await p.addInitScript(()=>{
+      window.__testChannels=[];const Native=window.RTCPeerConnection;
+      window.RTCPeerConnection=new Proxy(Native,{construct(Target,args){const pc=new Target(...args),create=pc.createDataChannel.bind(pc);pc.createDataChannel=(...args)=>{const dc=create(...args);window.__testChannels.push(dc);return dc;};pc.addEventListener("datachannel",e=>window.__testChannels.push(e.channel));return pc;}});
+    });
     await p.goto(appUrl);
     await p.locator("#doorway").fill(server.url.replace("http:", "ws:"));
     await p.locator("#rtc").fill('{"iceServers":[]}');
@@ -100,6 +104,11 @@ try {
   await source.waitForFunction(()=>!document.querySelector("#verifyRecovery").disabled);
   await source.locator("#verifyRecovery").click();
   await source.waitForFunction(()=>document.querySelector("#results").textContent.includes("INCONCLUSIVE"),{}, {timeout:60000});
+  await source.locator("#armRecovery").click();
+  await source.waitForFunction(()=>!document.querySelector("#verifyRecovery").disabled);
+  await receiver.evaluate(()=>{const dc=window.__testChannels.find(c=>c.label==="six7"&&c.readyState==="open");if(!dc)throw Error("Native messaging channel not found");dc.close();});
+  await source.locator("#verifyRecovery").click();
+  await source.waitForFunction(()=>document.querySelector("#results").textContent.includes("PASS · Messaging responded after an observed interruption"),{}, {timeout:120000});
   // A reload keeps the failed/armed-session diagnostics, not private SDK state.
   await receiver.reload();
   await receiver.waitForFunction(()=>document.querySelector("#journalStatus").textContent.includes("restored"));
@@ -113,7 +122,7 @@ try {
   const retainedPath=join(output,"retained.json");await(await retainedDownload).saveAs(retainedPath);
   const retainedReport=JSON.parse(readFileSync(retainedPath));
   assert.ok(retainedReport.companions.some(([,r])=>r.retained?.events.some(e=>e.type==="test.recoveryArmed")),"rejoined companion report includes pre-reload evidence");
-  assert.equal(retainedReport.controller.events.some(e=>e.type==="test.recoveryResult"&&e.data.message.startsWith("PASS")),false);
+  assert.ok(retainedReport.controller.events.some(e=>e.type==="test.recoveryResult"&&e.data.message.startsWith("PASS")));
   await receiver.locator("#clearJournal").click();
   assert.equal(await receiver.evaluate(()=>sessionStorage.getItem("phantom-test-diagnostics-v1")),null);
 
@@ -123,7 +132,7 @@ try {
   const postPath = join(output, "after-leave.json");
   await (await post).saveAs(postPath);
   assert.ok(JSON.parse(readFileSync(postPath)).events.some((e) => e.type === "before.close"));
-  console.log(JSON.stringify({ status: "passed", browser: browser.version(), bytes: bytes.length, sha256: expected, checks: ["three native peers", "message delivered", "selected receiver downloaded exact bytes", "excluded peer no download", "three JSON report downloads", "report after leave", "baseline acknowledgments and file hash", "report export preserves publish authority", "mobile fragment join and layout", "no-interruption recovery is inconclusive", "retained diagnostics collected after reload/rejoin"], reports: output }));
+  console.log(JSON.stringify({ status: "passed", browser: browser.version(), bytes: bytes.length, sha256: expected, checks: ["three native peers", "message delivered", "selected receiver downloaded exact bytes", "excluded peer no download", "three JSON report downloads", "report after leave", "baseline acknowledgments and file hash", "report export preserves publish authority", "mobile fragment join and layout", "no-interruption recovery is inconclusive", "native channel-close recovery observed and acknowledged", "retained diagnostics collected after reload/rejoin"], reports: output }));
 } catch (error) {
   for (let i = 0; i < pages.length; i++) console.error("PAGE", i, await pages[i].locator("#state").textContent(), await pages[i].locator("#notice").textContent(), (await pages[i].locator("#log").textContent()).slice(-3500));
   throw error;
