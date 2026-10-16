@@ -23,12 +23,12 @@ class RTC extends RTCPeerConnection{
  }
  createDataChannel(...args){const dc=super.createDataChannel(...args);this.observeChannel(dc);return dc;}
  async capturePair(){
-  if(!turnOnly||!this.kind)return;
+  if(!this.kind)return;
   try{
    const stats=await this.getStats();
    for(const transport of stats.values())if(transport.type==='transport'&&transport.selectedCandidatePairId){
     const pair=stats.get(transport.selectedCandidatePairId),local=stats.get(pair?.localCandidateId),remote=stats.get(pair?.remoteCandidateId);
-    if(pair&&local&&remote)log('rtc.selectedPair',{kind:this.kind,state:pair.state,localType:local.candidateType,remoteType:remote.candidateType,relayProtocol:local.relayProtocol,policy:this.getConfiguration().iceTransportPolicy});
+    if(pair&&local&&remote)log('rtc.selectedPair',{kind:this.kind,state:pair.state,localType:local.candidateType,remoteType:remote.candidateType,localAddress:local.address,remoteAddress:remote.address,localPort:local.port,remotePort:remote.port,protocol:local.protocol,relayProtocol:local.relayProtocol,policy:this.getConfiguration().iceTransportPolicy});
    }
   }catch(error){log('rtc.statsError',{kind:this.kind,error:error.message});}
  }

@@ -1,0 +1,24 @@
+name: Headless NAT tests
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'packages/**'
+      - 'tools/swarm/**'
+      - '.github/workflows/nat.yml'
+permissions:
+  contents: read
+jobs:
+  nat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run isolated NAT and firewall scenarios
+        run: bash tools/swarm/run-nat-tests.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: headless-nat-results
+          path: tools/swarm/reports/
+          if-no-files-found: error

@@ -1,7 +1,7 @@
 import http from 'node:http';
 import {WebSocketServer} from 'ws';
 /** Loopback-only test discovery/signaling. No file payloads pass through this server. */
-export async function startServer(bundle,log){
+export async function startServer(bundle,log,{host='127.0.0.1',port=0}={}){
  const server=http.createServer((req,res)=>{res.setHeader('Cache-Control','no-store');if(req.url==='/peer.js'){res.setHeader('Content-Type','text/javascript');res.end(bundle);}else if(req.url==='/'){res.setHeader('Content-Type','text/html');res.end('<!doctype html><title>Phantom swarm peer</title><script type="module" src="/peer.js"></script>');}else{res.writeHead(404);res.end();}});
  const ws=new WebSocketServer({server,maxPayload:1024*1024}),rooms=new Map();let paused=false;const broadcasts=new Set();
  const send=(socket,packet)=>{if(!paused&&socket.readyState===1)socket.send(JSON.stringify(packet));};
@@ -22,6 +22,6 @@ export async function startServer(bundle,log){
   socket.on('close',()=>{broadcasts.delete(broadcast);if(room.members.get(id)?.socket===socket){room.members.delete(id);broadcast('concierge_update');log('relay.leave',{peerId:id,members:room.members.size});}});
   socket.on('error',e=>log('relay.error',{error:e.message}));
  });
- await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+ await new Promise(resolve=>server.listen(port,host,resolve));
  return {setSignalingPaused(value){paused=!!value;log('fault.signaling',{paused});if(!paused)for(const broadcast of broadcasts)broadcast('concierge_update');},url:`http://127.0.0.1:${server.address().port}`,async close(){for(const s of ws.clients)s.terminate();await new Promise(resolve=>ws.close(resolve));await new Promise(resolve=>server.close(resolve));}};
 }
