@@ -43,28 +43,32 @@ try{
  server=await startServer(bundle.outputFiles[0].text,(type,data)=>log('signaling',type,data),{host:'198.18.0.1',port:8080});
  if(mode!=='blocked')await step('plain native WebRTC validates the network before SDK assertions',async()=>{
   const a=await pageFor('source'),b=await pageFor('selected');
+  let probeReady=false;const pendingCandidates=[],probeErrors=[];
+  async function deliverCandidate(to,candidate){try{await to.page.evaluate(c=>rawProbe.pc.addIceCandidate(c),candidate);}catch(e){probeErrors.push(e.message);}}
+  for(const [from,to] of [[a,b],[b,a]])await from.page.exposeBinding('rawProbeIce',async(_,candidate)=>{
+   log(from.label,'nativeProbe.candidate',candidate);
+   if(probeReady)await deliverCandidate(to,candidate);else pendingCandidates.push({to,candidate});
+  });
   for(const c of [a,b])await c.page.evaluate(config=>{
    const pc=new RTCPeerConnection(config),candidates=[];
    globalThis.rawProbe={pc,candidates,received:[],channel:null};
-   pc.onicecandidate=e=>{if(e.candidate)candidates.push(e.candidate.toJSON());};
+   pc.onicecandidate=e=>{if(e.candidate)void rawProbeIce(e.candidate.toJSON());};
    pc.ondatachannel=e=>{rawProbe.channel=e.channel;e.channel.onmessage=m=>rawProbe.received.push(m.data);};
-  },mode.startsWith('turn-')?{iceTransportPolicy:'relay',iceServers:rtcConfiguration.iceServers.filter(s=>s.urls.startsWith('turn:'))}:rtcConfiguration);
+  },rtcConfiguration);
   try{
    const offer=await a.page.evaluate(async()=>{rawProbe.channel=rawProbe.pc.createDataChannel('network-probe');rawProbe.channel.onmessage=e=>rawProbe.received.push(e.data);await rawProbe.pc.setLocalDescription(await rawProbe.pc.createOffer());return rawProbe.pc.localDescription.toJSON();});
    const answer=await b.page.evaluate(async offer=>{await rawProbe.pc.setRemoteDescription(offer);await rawProbe.pc.setLocalDescription(await rawProbe.pc.createAnswer());return rawProbe.pc.localDescription.toJSON();},offer);
    await a.page.evaluate(answer=>rawProbe.pc.setRemoteDescription(answer),answer);
+   probeReady=true;
+   for(const {to,candidate} of pendingCandidates.splice(0))await deliverCandidate(to,candidate);
    const deadline=Date.now()+35000;let ready=false;
    while(Date.now()<deadline){
-    for(const [from,to] of [[a,b],[b,a]]){
-     const candidates=await from.page.evaluate(()=>rawProbe.candidates.splice(0));
-     for(const candidate of candidates)log(from.label,'nativeProbe.candidate',candidate);
-     await to.page.evaluate(async candidates=>{for(const c of candidates)await rawProbe.pc.addIceCandidate(c);},candidates);
-    }
     ready=(await Promise.all([a,b].map(c=>c.page.evaluate(()=>rawProbe.channel?.readyState==='open')))).every(Boolean);
     if(ready)break;await new Promise(r=>setTimeout(r,100));
    }
    const stats=await Promise.all([a,b].map(c=>c.page.evaluate(async()=>({state:rawProbe.pc.connectionState,stats:[...await rawProbe.pc.getStats()].map(([,v])=>v)}))));
-   summary.nativeProbePolicy=mode.startsWith('turn-')?'relay':'all';summary.nativeNetworkProbe=stats;save();
+   summary.nativeProbePolicy='all';summary.nativeProbeErrors=probeErrors;summary.nativeNetworkProbe=stats;save();
+   assert.deepEqual(probeErrors,[],'native control candidate application');
    assert.ok(ready,'Plain WebRTC failed: investigate topology/native ICE before the SDK');
    await a.page.evaluate(()=>rawProbe.channel.send('network-probe'));
    await until(()=>b.page.evaluate(()=>rawProbe.received.includes('network-probe')),'native probe payload');

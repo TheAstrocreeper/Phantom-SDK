@@ -32,6 +32,9 @@ sysctl -qw net.ipv4.ip_forward=1
 ip link add pwan type bridge
 ip address add 198.18.0.1/24 dev pwan
 ip link set pwan up
+# Unroutable private candidates are silently discarded on the simulated WAN.
+# Do not send premature ICMP network-unreachable errors back to ICE sockets.
+ip route add blackhole 10.0.0.0/8
 for n in 1 2 3; do
   ip netns add "pp$n"
   ip netns add "pg$n"
@@ -45,6 +48,7 @@ for n in 1 2 3; do
   for dev in lo eth0; do ip -n "pp$n" link set "$dev" up; done
   ip -n "pp$n" route add default via "10.201.$n.1"
   for dev in lo wan lan; do ip -n "pg$n" link set "$dev" up; done
+  ip -n "pg$n" route add default via 198.18.0.1
   ip netns exec "pg$n" sysctl -qw net.ipv4.ip_forward=1
   ip netns exec "pg$n" sysctl -qw net.ipv6.conf.all.disable_ipv6=1
   ip netns exec "pp$n" sysctl -qw net.ipv6.conf.all.disable_ipv6=1
