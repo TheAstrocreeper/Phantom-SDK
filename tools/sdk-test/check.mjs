@@ -28,6 +28,7 @@ try {
       window.RTCPeerConnection=new Proxy(Native,{construct(Target,args){const pc=new Target(...args),create=pc.createDataChannel.bind(pc);pc.createDataChannel=(...args)=>{const dc=create(...args);window.__testChannels.push(dc);return dc;};pc.addEventListener("datachannel",e=>window.__testChannels.push(e.channel));return pc;}});
     });
     await p.goto(appUrl);
+    await p.locator("#advanced").evaluate(e=>e.open=true);
     await p.locator("#doorway").fill(server.url.replace("http:", "ws:"));
     await p.locator("#rtc").fill('{"iceServers":[]}');
     await p.locator("#name").fill("peer-" + i);
@@ -41,7 +42,7 @@ try {
   await source.waitForFunction(() => document.querySelector("#invite").value.length > 0);
   const invite = await source.locator("#invite").inputValue();
   for (const p of [receiver, excluded]) {
-    if(p===receiver){const link=await source.locator("#joinLink").inputValue();await p.goto(link);}
+    if(p===receiver){const link=await source.locator("#joinLink").inputValue();await p.goto("about:blank");await p.goto(link);await p.locator("#advanced").evaluate(e=>e.open=true);await p.locator("#rtc").fill('{"iceServers":[]}');await p.locator("#advanced").evaluate(e=>e.open=false);}
     else await p.locator("#invite").fill(invite);
     await p.locator("#join").click();
   }
