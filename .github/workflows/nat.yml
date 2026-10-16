@@ -17,6 +17,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+      - name: Install packet capture for handshake diagnostics
+        run: sudo apt-get update && sudo apt-get install -y tcpdump
       - name: Run isolated NAT and firewall scenarios
         run: bash tools/swarm/run-nat-tests.sh
       - uses: actions/upload-artifact@v4

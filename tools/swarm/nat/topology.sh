@@ -34,7 +34,7 @@ ip address add 198.18.0.1/24 dev pwan
 ip link set pwan up
 # Unroutable private candidates are silently discarded on the simulated WAN.
 # Do not send premature ICMP network-unreachable errors back to ICE sockets.
-ip route add blackhole 10.0.0.0/8
+ip route replace blackhole 10.0.0.0/8
 for n in 1 2 3; do
   ip netns add "pp$n"
   ip netns add "pg$n"
@@ -67,6 +67,15 @@ for n in 1 2 3; do
   ip netns exec "pp$n" socat TCP-LISTEN:8080,bind=127.0.0.1,reuseaddr,fork TCP:198.18.0.1:8080 > "$report/proxy-$n.log" 2>&1 &
   pids+=("$!")
 done
+# Optional packet evidence in CI while investigating native handshake divergence.
+if command -v tcpdump >/dev/null; then
+  tcpdump -i pwan -nn -s0 -U -w "$report/wan.pcap" 'udp or icmp' > "$report/capture.log" 2>&1 &
+  pids+=("$!")
+  for n in 1 2; do
+    ip netns exec "pp$n" tcpdump -i eth0 -nn -s0 -U -w "$report/peer-$n.pcap" 'udp or icmp' > "$report/capture-$n.log" 2>&1 &
+    pids+=("$!")
+  done
+fi
 # STUN and TURN live on the simulated WAN. Credentials are disposable test credentials.
 turnserver -n --verbose --listening-ip=198.18.0.1 --relay-ip=198.18.0.1 \
   --listening-port=3478 --min-port=49160 --max-port=49260 \
