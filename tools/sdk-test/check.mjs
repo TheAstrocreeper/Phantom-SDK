@@ -68,9 +68,8 @@ try {
   await source.locator("#file").setInputFiles({ name: "fixture.bin", mimeType: "application/octet-stream", buffer: bytes });
   await source.locator("#publish").click();
   await receiver.locator("#files a").waitFor({ timeout: 6e4 });
-  const fileDownload = receiver.waitForEvent("download");
-  await receiver.locator("#files a").click();
-  const file = await fileDownload, path = join(output, "received.bin");
+  const [file] = await Promise.all([receiver.waitForEvent("download"),receiver.locator("#files a").click()]);
+  const path = join(output, "received.bin");
   await file.saveAs(path);
   assert.equal(createHash("sha256").update(readFileSync(path)).digest("hex"), expected);
   const reports = [];
