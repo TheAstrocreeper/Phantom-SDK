@@ -127,6 +127,8 @@ test('32-piece scheduling batches retain verified completion and one reused conn
   await until(()=>f.events.some(e=>e.peer===ids[1]&&e.type==='distributionComplete'));
   const completed=f.events.filter(e=>e.peer===ids[1]&&e.type==='distributionBatchComplete');
   assert.deepEqual(completed.map(e=>e.data.total),[32,32,1]);
+  const progress=f.events.filter(e=>e.peer===ids[1]&&e.type==='distributionProgress').map(e=>e.data.received);
+  assert.equal(progress.at(-1),65);assert.ok(progress.every((n,i)=>!i||n>=progress[i-1]));
   assert.deepEqual(completed.map(e=>e.data.batch),[0,1,2]);
   assert.ok(completed.every(e=>Number.isFinite(e.data.elapsedMs)&&e.data.elapsedMs>=0));
   assert.equal(f.events.filter(e=>e.peer===ids[1]&&e.type==='distributionConnectionOpened').length,1);

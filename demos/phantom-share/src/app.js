@@ -444,6 +444,7 @@ async function connect(code = "") {
       "distributionProgress",
       "distributionFileEvent",
       "distributionConnectionReused",
+      "distributionTransferTiming",
       "distributionBatchStarted",
       "distributionBatchComplete",
       "distributionJob",

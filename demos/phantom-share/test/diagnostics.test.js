@@ -15,3 +15,9 @@ test('progress sampling preserves phase changes and failures',()=>{
  d.record('transfer-state',{id:'a',status:'sharing'});d.record('membershipLost',{reason:'stale'});at+=1000;d.record('transfer-state',{id:'a',status:'sharing'});
  assert.equal(d.report().rows.length,5);
 });
+
+test('stage timing percentiles survive diagnostic sanitization and reload',()=>{
+ let saved;const storage={getItem:()=>saved,setItem:(k,v)=>saved=v};const d=createDiagnostics({storage});
+ d.record('distributionTransferTiming',{id:'asset:test',phase:'receive',metrics:{hashMs:{count:32,p50:1,p95:3,max:4,sum:40,sampleCount:32},writeMs:{count:32,p50:2,p95:5,max:6,sum:70,sampleCount:32}},payload:'secret'});d.flush();
+ const restored=createDiagnostics({storage});const row=restored.report().rows.find(r=>r.type==='distributionTransferTiming');assert.equal(row.data.metrics.hashMs.p95,3);assert.equal(row.data.metrics.writeMs.sum,70);assert.equal(JSON.stringify(row).includes('secret'),false);
+});
