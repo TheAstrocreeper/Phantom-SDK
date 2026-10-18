@@ -279,7 +279,7 @@ try {
   await mobile.page.locator('#download-logs').click();
   const download = await logDownload;
   const report = JSON.parse(await readFile(await download.path(), 'utf8'));
-  assert.equal(report.build, 'share-pipeline-v6');
+  assert.equal(report.build, 'share-preparation-v7');
   assert.ok(report.rows.some(row=>row.type==='export'));
   assert.ok(report.rows.some(row=>row.type==='page-start'));
   console.log('disconnected mobile page exports diagnostic JSON');

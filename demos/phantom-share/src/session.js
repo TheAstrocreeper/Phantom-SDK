@@ -22,6 +22,7 @@ function YT({
     w = new Map(),
     H = !1,
     N = null,
+    preparing = null,
     Z = () => e.getState().peerId,
     B = () =>
       e
@@ -82,6 +83,12 @@ function YT({
   ),
     C.push(
       e.on("distributionFileEvent", (P) => {
+        if (P.fileEvent === "filePreparationProgress" && preparing) {
+          preparing.received = P.processed;
+          preparing.total = P.total;
+          U();
+          return;
+        }
         if (P.fileEvent !== "fileOffer") return;
         let tt = P.manifest,
           et = h.get(tt.id);
@@ -298,34 +305,56 @@ function YT({
       throw Error(
         "This session has reached its 32-file limit. Start a new session.",
       );
-    let et = { distributionId: crypto.randomUUID(), chunkSize: 65536 },
-      prepared = await e.prepareDistributionFile(P, et),
-      T = {
-        ...prepared,
-        recipients: tt,
-        received: 0,
-        outgoing: !0,
-        delivered: new Set(),
-        status: "authorizing",
-        blob: P,
-      };
-    (h.set(T.id, T), U());
+    if (preparing)
+      throw Error("Wait for the current file preparation to finish.");
+    const temporaryId = "preparing:" + crypto.randomUUID();
+    const T = {
+      id: temporaryId,
+      name: P.name || "File",
+      type: P.type,
+      size: P.size,
+      total: Math.ceil(P.size / 65536),
+      recipients: tt,
+      received: 0,
+      outgoing: true,
+      delivered: new Set(),
+      status: "preparing",
+      blob: P,
+    };
+    preparing = T;
+    h.set(temporaryId, T);
+    U();
     try {
-      let At = await Y(T.id, tt);
-      ((T.proof = At),
-        (T.status = "sharing"),
-        await e.distributeFile(P, {
-          prepared,
-          recipients: tt,
-          authorization: At,
-        }));
-      for (let st of tt) V(st, { type: "asset", asset: j(T) });
-      return (U(), T);
-    } catch (At) {
-      throw ((T.status = "failed"), (T.error = At.message), U(), At);
+      const prepared = await e.prepareDistributionFile(P, {
+        distributionId: crypto.randomUUID(),
+        chunkSize: 65536,
+      });
+      if (H) throw Error("Network closed during file preparation.");
+      h.delete(temporaryId);
+      Object.assign(T, prepared, { status: "authorizing", received: 0 });
+      h.set(T.id, T);
+      preparing = null;
+      U();
+      const authorization = await Y(T.id, tt);
+      if (H) throw Error("Network closed during file authorization.");
+      T.proof = authorization;
+      T.status = "sharing";
+      U();
+      await e.distributeFile(P, { prepared, recipients: tt, authorization });
+      if (H) throw Error("Network closed during file publication.");
+      for (const peer of tt) V(peer, { type: "asset", asset: j(T) });
+      U();
+      return T;
+    } catch (error) {
+      T.status = "failed";
+      T.error = error.message;
+      U();
+      throw error;
+    } finally {
+      if (preparing === T) preparing = null;
     }
   }
-  for (let P of B()) (V(P, { type: "hello" }), I(P).catch(p));
+
   return {
     assets: h,
     publish: W,

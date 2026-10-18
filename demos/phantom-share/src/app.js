@@ -113,8 +113,24 @@ function peers() {
 function readyPeers() {
   return peers().filter((e) => e.connection === "ready");
 }
+function preparationActivity() {
+  return [...(sharing?.assets.values() || [])].find(
+    (a) => a.outgoing && ["preparing", "authorizing"].includes(a.status),
+  );
+}
+function updateConnectionStatus(state) {
+  const asset = preparationActivity();
+  setStatus(
+    asset
+      ? asset.status === "preparing"
+        ? `Preparing ${asset.name} · ${asset.total ? Math.round((asset.received / asset.total) * 100) : 0}%`
+        : `Authorizing ${asset.name}…`
+      : connectionText(state),
+  );
+}
 function canShare() {
-  if (!sharing || !network || leaving || rampBusy) return false;
+  if (!sharing || !network || leaving || rampBusy || preparationActivity())
+    return false;
   const selected = selectRecipients(peers(), recipientModes),
     ready = new Set(readyPeers().map((p) => p.id));
   return selected.length > 0 && selected.every((id) => ready.has(id));
@@ -196,9 +212,14 @@ function renderTransfers() {
           let l = 0,
             p = o.status;
           if (o.outgoing)
-            ((l = o.recipients.length
-              ? Math.round((o.delivered.size / o.recipients.length) * 100)
-              : 0),
+            ((l =
+              o.status === "preparing"
+                ? o.total
+                  ? Math.round((o.received / o.total) * 100)
+                  : 0
+                : o.recipients.length
+                  ? Math.round((o.delivered.size / o.recipients.length) * 100)
+                  : 0),
               (p =
                 o.status === "sharing"
                   ? `${o.delivered.size}/${o.recipients.length} recipients received`
@@ -212,10 +233,14 @@ function renderTransfers() {
               o.status === "received"
                 ? 100
                 : o.total
-                  ? Math.round(((h?.indexes.length || 0) / o.total) * 100)
+                  ? Math.round(
+                      (Math.max(o.received || 0, h?.indexes.length || 0) /
+                        o.total) *
+                        100,
+                    )
                   : 0;
           }
-          return `<div class="glass-card rounded-2xl p-4 border border-white/10 flex flex-col gap-2"><div class="flex items-center justify-between gap-3"><div class="min-w-0"><h4 class="text-xs font-bold text-white truncate">${escapeHtml(o.name)}</h4><span class="text-[10px] font-mono text-phantom-mutedIvory">${$T(o.size)} \xB7 ${escapeHtml(o.error || p)}</span></div>${o.blob && !o.outgoing ? `<button data-download="${o.id}" class="px-3 py-1 rounded-lg bg-phantom-spectral/40 border border-phantom-spectral text-phantom-neonBlue text-xs">Save</button>` : ""}</div><progress class="w-full h-1 accent-lime-300" max="100" value="${l}" aria-label="${o.outgoing ? "Recipients completed" : "File received"}"></progress></div>`;
+          return `<div class="glass-card rounded-2xl p-4 border border-white/10 flex flex-col gap-2"><div class="flex items-center justify-between gap-3"><div class="min-w-0"><h4 class="text-xs font-bold text-white truncate">${escapeHtml(o.name)}</h4><span class="text-[10px] font-mono text-phantom-mutedIvory">${$T(o.size)} \xB7 ${escapeHtml(o.error || p)}</span></div>${o.blob && !o.outgoing ? `<button data-download="${o.id}" class="px-3 py-1 rounded-lg bg-phantom-spectral/40 border border-phantom-spectral text-phantom-neonBlue text-xs">Save</button>` : ""}</div><progress class="w-full h-1 accent-lime-300" max="100" value="${l}" aria-label="${o.status === "preparing" ? "File preparation" : o.outgoing ? "Recipients completed" : "File received"}"></progress></div>`;
         })
         .join("") ||
       '<div class="text-center py-3 font-mono text-xs text-phantom-mutedIvory/60">No transfers yet.</div>'),
@@ -362,8 +387,7 @@ async function connect(code = "") {
       },
       onState: (state) => {
         diagnostics.record("network-state", state);
-        if (generation === connectionGeneration)
-          setStatus(connectionText(state));
+        if (generation === connectionGeneration) updateConnectionStatus(state);
       },
       onError: showError,
       onClaim: ({ code: claimed }) => {
@@ -413,6 +437,7 @@ async function connect(code = "") {
           });
         renderPeers();
         renderTransfers();
+        if (preparationActivity()) updateConnectionStatus(network.getState());
       },
       onError: showError,
     });
@@ -428,11 +453,11 @@ async function connect(code = "") {
         return;
       }
       renderPeers();
-      setStatus(connectionText(state));
+      updateConnectionStatus(state);
     });
     network.on("peerConnection", () => {
       renderPeers();
-      if (network) setStatus(connectionText(network.getState()));
+      if (network) updateConnectionStatus(network.getState());
     });
     for (const type of [
       "filePreparationProgress",
@@ -491,7 +516,7 @@ async function connect(code = "") {
     byId("connect-action").querySelector("span").textContent = "Invite";
     renderPeers();
     renderTransfers();
-    setStatus(connectionText(network.getState()));
+    updateConnectionStatus(network.getState());
   } catch (error) {
     if (generation === connectionGeneration) {
       shareConnection?.close();
@@ -653,14 +678,18 @@ async function sendFiles(e) {
     setStatus("Selected recipients must be ready before sending.");
     return;
   }
+  const sendingSession = sharing,
+    generation = connectionGeneration;
   for (let l of e)
     try {
+      if (generation !== connectionGeneration || sendingSession !== sharing)
+        return;
       (diagnostics.record("file-selected", { size: l.size, type: l.type }),
         setStatus("Preparing " + l.name + "\u2026"),
-        await sharing.publish(l, a),
-        setStatus("Sharing " + l.name));
+        await sendingSession.publish(l, a),
+        generation === connectionGeneration && setStatus("Sharing " + l.name));
     } catch (p) {
-      showError(p);
+      if (generation === connectionGeneration) showError(p);
     }
 }
 function triggerFileInput() {
