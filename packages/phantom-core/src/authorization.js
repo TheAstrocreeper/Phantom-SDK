@@ -31,6 +31,11 @@ function adminSigner(privateKey, publicKey, crypto) {
       const signature = hex(new Uint8Array(await crypto.subtle.sign('Ed25519',privateKey,admissionStatement(credential))));
       return Object.freeze({...credential,signature});
     },
+    async signMembership({networkId,peerPublicKey,membershipId,expiresAt}) {
+      const credential = {version:2,networkId,peerPublicKey,membershipId,expiresAt};
+      const signature = hex(new Uint8Array(await crypto.subtle.sign('Ed25519',privateKey,admissionStatement(credential))));
+      return Object.freeze({...credential,signature});
+    },
     async exportSeed() { return {version:1, publicKey, privateKey:hex(new Uint8Array(await crypto.subtle.exportKey('pkcs8',privateKey)))}; },
     async sign({networkId, action, target, operationId, recipients}) {
     if(recipients!==undefined){

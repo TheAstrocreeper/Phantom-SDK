@@ -219,3 +219,5 @@ export {createMemoryChunkStore} from './files.js';
 
 export {createAdminController} from './admin-controller.js';
 export {createAdmissionCheckpoint, createAdmissionVerifier, AdmissionError} from './admission.js';
+
+export {createMembershipAuthority, createMemoryMembershipStore} from './membership.js';

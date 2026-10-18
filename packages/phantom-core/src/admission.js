@@ -10,8 +10,12 @@ function bytes(value, length) {
   return Uint8Array.from(value.match(/../g), pair => parseInt(pair,16));
 }
 export function admissionStatement(credential) {
-  if (credential?.version !== 1 || !/^[0-9a-f]{64}$/.test(credential.networkId) ||
+  if (![1,2].includes(credential?.version) || !/^[0-9a-f]{64}$/.test(credential.networkId) ||
       !/^[0-9a-f]{64}$/.test(credential.peerPublicKey) || !Number.isSafeInteger(credential.expiresAt)) throw new AdmissionError('Invalid admission credential');
+  if (credential.version === 2) {
+    if (typeof credential.membershipId !== 'string' || !/^[0-9a-f-]{36}$/.test(credential.membershipId)) throw new AdmissionError('Invalid membership ID');
+    return new TextEncoder().encode(JSON.stringify(['phantom-membership-v1',credential.networkId,credential.peerPublicKey,credential.membershipId,credential.expiresAt]));
+  }
   return new TextEncoder().encode(JSON.stringify(['phantom-admission-v1',credential.networkId,credential.peerPublicKey,credential.expiresAt]));
 }
 /** Optional offline verification helper. The trust key comes from the app, not the joiner. */
