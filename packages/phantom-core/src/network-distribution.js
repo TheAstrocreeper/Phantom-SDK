@@ -60,11 +60,12 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
     link.dc.send(JSON.stringify({kind:'binary',file:payload.file}));link.dc.send(payload.bytes);ok=true;
   }catch(e){reason=e.message;}fire('FILE_BIN_CHUNK_SENT',{...payload,ok,error:ok?undefined:reason});}
   function closeLink(id){pendingSignals.delete(id);closedJobs.set(id,Date.now());const link=links.get(id);if(!link)return;links.delete(id);if(link.readyTimer)clearTimeout(link.readyTimer);link.readyTimer=null;link.pc.onicecandidate=null;link.pc.onconnectionstatechange=null;link.pc.ondatachannel=null;if(link.dc){link.dc.onopen=null;link.dc.onmessage=null;link.dc.onclose=null;try{link.dc.close();}catch{}}try{link.pc.close();}catch{}link.pendingIce.length=0;link.binary=null;emit('distributionConnectionClosed',{jobId:id,peer:link.peer});}
-  async function receive(link){const job=link.job;let succeeded=false;try{
+  async function receive(link){const job=link.job,startedAt=performance.now();let succeeded=false;
+    emit('distributionBatchStarted',{jobId:job.id,batch:job.batch??0,total:job.indexes.length,peer:link.peer});try{
     await files.request(job.asset,{peers:[link.peer],indexes:job.indexes});
     const asset=assets.get(job.asset);if(!asset)throw Error('Unknown distribution');
     const have=asset.holders.get(self())??new Set();for(const i of job.indexes)have.add(i);asset.holders.set(self(),have);dirty=true;
-    link.completed=true;succeeded=true;frame(leader(),{type:'done',jobId:job.id,batch:job.batch??0,reuse:link.reuse===true});report();
+    link.completed=true;succeeded=true;emit('distributionBatchComplete',{jobId:job.id,batch:job.batch??0,total:job.indexes.length,peer:link.peer,elapsedMs:performance.now()-startedAt});frame(leader(),{type:'done',jobId:job.id,batch:job.batch??0,reuse:link.reuse===true});report();
     if(have.size===asset.total&&!finished.has(asset.id)){
       const blob=await files.request(asset.id,{peers:[link.peer]});finished.add(asset.id);emit('distributionComplete',{id:asset.id,blob});
     }

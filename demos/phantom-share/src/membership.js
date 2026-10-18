@@ -58,7 +58,8 @@ export async function connectShare({
         identity: seed,
         admission: control.admission,
         messaging: "automatic",
-        distribution: {},
+        // Assign 2 MiB per scheduling turn; only eight 64 KiB requests remain in flight.
+        distribution: { batchSize: 32, requestWindow: 8 },
       });
       network = await sdk.join(control.invite, {
         name,
@@ -98,7 +99,8 @@ export async function connectShare({
         admission,
         relays,
         messaging: "automatic",
-        distribution: {},
+        // Assign 2 MiB per scheduling turn; only eight 64 KiB requests remain in flight.
+        distribution: { batchSize: 32, requestWindow: 8 },
       });
       network = await sdk.create({ name, signal, onState, onEvent });
       control = createMembershipPairingHost({
