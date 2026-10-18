@@ -298,9 +298,10 @@ function YT({
       throw Error(
         "This session has reached its 32-file limit. Start a new session.",
       );
-    let et = { distributionId: crypto.randomUUID() },
+    let et = { distributionId: crypto.randomUUID(), chunkSize: 65536 },
+      prepared = await e.prepareDistributionFile(P, et),
       T = {
-        ...(await e.publishFile(P, et)),
+        ...prepared,
         recipients: tt,
         received: 0,
         outgoing: !0,
@@ -314,7 +315,7 @@ function YT({
       ((T.proof = At),
         (T.status = "sharing"),
         await e.distributeFile(P, {
-          ...et,
+          prepared,
           recipients: tt,
           authorization: At,
         }));

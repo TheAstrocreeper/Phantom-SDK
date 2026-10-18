@@ -1,3 +1,4 @@
+import { openMembershipPeerChannel } from "./membership-peer-channel.js";
 import {
   createPairingCode,
   parsePairingCode,
@@ -70,11 +71,13 @@ export function createMembershipPairingHost({
     );
   const channels = new Set(),
     credentials = new Map();
+  let peerChannel;
   let closed = false,
     reservations = 0;
   const off = authority.onRevocation((record) => {
     for (const entry of channels)
       if (entry.claimedKey) {
+        try { peerChannel?.notify(entry.claimedKey,{type:'revocation',record}); } catch {}
         void entry.channel
           .notify(entry.claimedKey, { type: "revocation", record })
           .catch(onError);
@@ -127,7 +130,7 @@ export function createMembershipPairingHost({
         role: "host",
         doorway: doorwayFactory(),
         onError,
-        async onRequest({ action, data, peerPublicKey }) {
+        onRequest: entry.handleRequest = async ({ action, data, peerPublicKey }) => {
           if (closed) throw new Error("Inviter closed");
           if (entry.claimedKey && entry.claimedKey !== peerPublicKey)
             throw new Error("Invitation already used");
@@ -160,6 +163,7 @@ export function createMembershipPairingHost({
             return {
               invite,
               authorityPublicKey: authority.authorityPublicKey,
+              hostPeerPublicKey: identity.publicKey,
               token: invitation.token,
               expiresAt: invitation.expiresAt,
             };
@@ -255,6 +259,15 @@ export function createMembershipPairingHost({
     }
   }
   return {
+    bindNetwork(network) {
+      if(closed||network.networkId!==context.networkId||network.getState().peerId!==identity.publicKey.slice(0,16))throw Error('Wrong membership network');
+      peerChannel?.close();
+      peerChannel=openMembershipPeerChannel({network,onRequest:input=>{
+        const entry=[...channels].find(entry=>entry.claimedKey===input.peerPublicKey&&entry.membershipId===credentials.get(input.peerPublicKey)?.membershipId);
+        if(!entry)throw Error('No enrolled membership');
+        return entry.handleRequest(input);
+      }});
+    },
     newInvite,
     async removePeer(peerId) {
       const credential = [...credentials.values()].find(
@@ -271,6 +284,7 @@ export function createMembershipPairingHost({
       if (closed) return;
       closed = true;
       off();
+      peerChannel?.close();
       for (const entry of channels) {
         clearTimeout(entry.timer);
         entry.channel.close();
@@ -285,9 +299,10 @@ export async function connectMembershipPairing({
   doorwayFactory,
   signal,
   onError = () => {},
+  onControlPath = () => {},
 } = {}) {
   code = (await parsePairingCode(code)).code;
-  let policy, credential, context;
+  let policy, credential, context, peerChannel;
   const early = [],
     listeners = new Set();
   const channel = await openPairingChannel({
@@ -304,6 +319,12 @@ export async function connectMembershipPairing({
       for (const fn of listeners) fn(event.record);
     },
   });
+  const request = async (action,data,options) => {
+    if(peerChannel?.ready()){
+      try{onControlPath({path:'peer',action});return await peerChannel.request(action,data,options);}catch(error){if(options?.signal?.aborted)throw error;}
+    }
+    onControlPath({path:'pairing',action});return channel.request(action,data,options);
+  };
   try {
     const firstRequest = {
       request: signed(
@@ -336,7 +357,7 @@ export async function connectMembershipPairing({
       authorityPublicKey: context.authorityPublicKey,
       authorize,
       readRevocations: ({ networkId, signal }) =>
-        channel.request(
+        request(
           "revocations",
           {
             request: signed(identity, networkId, "membership.status", {
@@ -350,19 +371,25 @@ export async function connectMembershipPairing({
         for (const record of early.splice(0)) onRevocation(record);
         return () => listeners.delete(onRevocation);
       },
-      leave: ({ request }) => channel.request("leave", { request }),
+      leave: ({ request: proof }) => request("leave", { request: proof }),
     });
     return {
       invite: context.invite,
+      bindNetwork(network) {
+        if(network.networkId!==parsed.networkId||network.getState().peerId!==identity.publicKey.slice(0,16)||!/^[0-9a-f]{64}$/.test(context.hostPeerPublicKey))throw Error('Invalid membership host');
+        peerChannel?.close();peerChannel=openMembershipPeerChannel({network,remotePublicKey:context.hostPeerPublicKey,onEvent:event=>{
+          if(event?.type==='revocation')for(const fn of listeners)fn(event.record);
+        }});
+      },
       admission: policy,
       newInvite: () =>
-        channel.request("invite", {
+        request("invite", {
           credential,
           request: signed(identity, parsed.networkId, "membership.invite", {
             membershipId: credential?.membershipId,
           }),
         }),
-      close: () => channel.close(),
+      close: () => {peerChannel?.close();channel.close();},
     };
   } catch (error) {
     channel.close();

@@ -1,3 +1,4 @@
+import { createDiagnostics } from "./diagnostics.js";
 import { createBrowserIdentity as createBrowserIdentity } from "../../../packages/phantom-doorways/src/browser-entry.js";
 import { parseInvite as parseInvite } from "../../../packages/phantom-core/src/invite.js";
 import { createIcons as createIcons, icons as icons } from "lucide";
@@ -7,6 +8,15 @@ import {
   createShareSession as createShareSession,
 } from "./session.js";
 import { connectShare, codeFromInput } from "./membership.js";
+let diagnosticStorage;
+try { diagnosticStorage = sessionStorage; } catch {}
+const diagnostics = createDiagnostics({storage:diagnosticStorage});
+const recordEnvironment = type => { diagnostics.record(type,{visibility:document.visibilityState,online:navigator.onLine}); diagnostics.flush(); };
+for(const type of ['pageshow','online','offline']) window.addEventListener(type,()=>recordEnvironment(type));
+for(const type of ['visibilitychange','freeze','resume']) document.addEventListener(type,()=>recordEnvironment(type));
+window.addEventListener('error',e=>diagnostics.record('javascript-error',{message:e.message}));
+window.addEventListener('unhandledrejection',e=>diagnostics.record('unhandled-rejection',{message:e.reason?.message||String(e.reason)}));
+setInterval(()=>diagnostics.flush(),1000);
 const JT = { default: QRCode };
 var byId = (e) => document.getElementById(e),
   recipientModes = new Map(),
@@ -39,7 +49,7 @@ var byId = (e) => document.getElementById(e),
   setStatus = (e) => {
     byId("connection-status").textContent = e;
   },
-  showError = (e) => setStatus(e?.message || String(e)),
+  showError = (e) => { diagnostics.record("app-error",{message:e?.message||String(e)}); setStatus(e?.message || String(e)); },
   $T = (e) =>
     e >= 1048576
       ? (e / 1048576).toFixed(1) + " MB"
@@ -259,6 +269,7 @@ async function ensureInvitation() {
 async function connect(code = "") {
   if (connecting || network) return;
   const generation = ++connectionGeneration;
+  diagnostics.record("connect-start",{generation,role:code?"guest":"owner"});
   connecting = true;
   joinController = new AbortController();
   byId("connect-action").disabled = true;
@@ -273,7 +284,9 @@ async function connect(code = "") {
       code,
       name: displayName(),
       signal: joinController.signal,
+      onEvent: event => { if(/MEMBERSHIP|PRESENCE|CONNECTION|ADMISSION|RTC|SIGNAL|RECOVER|CLOSED|ERROR/.test(event.type)) diagnostics.record(event.type,event.payload); },
       onState: (state) => {
+        diagnostics.record("network-state",state);
         if (generation === connectionGeneration)
           setStatus(connectionText(state));
       },
@@ -302,17 +315,20 @@ async function connect(code = "") {
       admin: admin,
       adminPublicKey: context.adminPublicKey,
       onChange: () => {
+        for(const asset of sharing?.assets.values()||[]) diagnostics.record('transfer-state',{id:asset.id,size:asset.size,status:asset.status,received:asset.received,total:asset.total,outgoing:asset.outgoing});
         renderPeers();
         renderTransfers();
       },
       onError: showError,
     });
-    network.on("state", (state) => setStatus(connectionText(state)));
-    network.on("membershipChanged", () => renderPeers());
+    network.on("state", state => { diagnostics.record("network-state",state); setStatus(connectionText(state)); });
+    for(const type of ['filePreparationProgress','filePublished','fileProgress','fileRetry','fileError','fileComplete','distributionProgress','distributionFileEvent','distributionConnectionReused','distributionJob','distributionJobFailed','distributionError','distributionComplete','distributionConnectionOpened','distributionConnectionClosed','distributionConnectionFailed','controlError']) network.on(type,data=>diagnostics.record(type,data));
+    network.on("membershipChanged", event => { diagnostics.record("membershipChanged",event); renderPeers(); });
     network.on("event", (event) => {
-      if (event.type === "PRESENCE_ROSTER") renderPeers();
+      if (event.type === "PRESENCE_ROSTER") { diagnostics.record("peer-summary",{connected:peers().length,ready:readyPeers().length}); renderPeers(); }
     });
     network.on("membershipLost", (event) => {
+      diagnostics.record("membershipLost",event); diagnostics.flush();
       if (!leaving && generation === connectionGeneration) {
         const reason =
           event.reason === "revoked"
@@ -470,7 +486,7 @@ async function sendFiles(e) {
   }
   for (let l of e)
     try {
-      (setStatus("Preparing " + l.name + "\u2026"),
+      (diagnostics.record("file-selected",{size:l.size,type:l.type}), setStatus("Preparing " + l.name + "\u2026"),
         await sharing.publish(l, a),
         setStatus("Sharing " + l.name));
     } catch (p) {
@@ -574,7 +590,14 @@ byId("name-form").onsubmit = async (e) => {
 byId("name-dialog").addEventListener("cancel", (e) => {
   displayName() || e.preventDefault();
 });
+byId('download-logs').onclick = () => {
+  recordEnvironment('export');
+  diagnostics.record('connection-summary',{state:network?.getState()?.state,connected:peers().length,ready:readyPeers().length});
+  const url=URL.createObjectURL(new Blob([JSON.stringify(diagnostics.report(),null,2)],{type:'application/json'}));
+  const link=document.createElement('a');link.href=url;link.download='phantom-share-'+new Date().toISOString().replace(/[:.]/g,'-')+'.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),60000);
+};
 window.addEventListener("pagehide", () => {
+  recordEnvironment('pagehide');
   (shareConnection?.close(),
     sharing?.close(),
     network?.close(),

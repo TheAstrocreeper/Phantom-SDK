@@ -265,6 +265,14 @@ try {
   }
   const mobile = await page("Mobile", { width: 390, height: 844 });
   await mobile.page.goto(url);
+  const logDownload = mobile.page.waitForEvent('download');
+  await mobile.page.locator('#download-logs').click();
+  const download = await logDownload;
+  const report = JSON.parse(await readFile(await download.path(), 'utf8'));
+  assert.equal(report.build, 'share-peer-membership-reuse-v2');
+  assert.ok(report.rows.some(row=>row.type==='export'));
+  assert.ok(report.rows.some(row=>row.type==='page-start'));
+  console.log('disconnected mobile page exports diagnostic JSON');
   await mobile.page.locator("#connect-action").click();
   await mobile.page.screenshot({ path: out + "/pairing-mobile.png" });
   assert.deepEqual(errors, []);

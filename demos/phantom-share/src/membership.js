@@ -36,6 +36,7 @@ export async function connectShare({
   name,
   signal,
   onState,
+  onEvent,
   onClaim,
   onError,
 } = {}) {
@@ -46,6 +47,7 @@ export async function connectShare({
   try {
     if (code) {
       control = await connectMembershipPairing({
+        onControlPath: ({path,action}) => onEvent?.({type:"MEMBERSHIP_CONTROL_PATH",payload:{type:path,reason:action}}),
         code,
         identity,
         doorwayFactory,
@@ -63,6 +65,7 @@ export async function connectShare({
         signal,
         timeoutMs: 60000,
         onState,
+        onEvent,
       });
     } else {
       admin = await createAdminIdentity();
@@ -97,7 +100,7 @@ export async function connectShare({
         messaging: "automatic",
         distribution: {},
       });
-      network = await sdk.create({ name, signal, onState });
+      network = await sdk.create({ name, signal, onState, onEvent });
       control = createMembershipPairingHost({
         identity,
         authority,
@@ -108,6 +111,7 @@ export async function connectShare({
         onError,
       });
     }
+    control.bindNetwork(network);
     return {
       network,
       admin,

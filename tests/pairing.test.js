@@ -249,7 +249,7 @@ test("code enrollment uses the authority; another identity cannot reuse it; leav
 
 test(
   "pairing feeds the real SDK admission, owner-authorized member publication, and verified distribution",
-  { timeout: 20000 },
+  { timeout: 30000 },
   async () => {
     const { createBrowserPhantom, createBrowserIdentity } = await import(
       "../packages/phantom-doorways/src/browser-entry.js"
@@ -271,7 +271,11 @@ test(
       store = createMemoryMembershipStore();
     const networks = [],
       sessions = [];
-    let authority, host, client;
+    let authority, host, client, pairingOffline=false;
+    const pairingFactory=identity=>()=>{
+      const adapter=factory(wire,identity)();
+      return {...adapter,open(context){const session=adapter.open(context);return {...session,sendSignal(packet){if(pairingOffline)throw Error('Fixture pairing relays offline');return session.sendSignal(packet);}};}};
+    };
     const sign = (identity, networkId, action, fields) => ({
       peerPublicKey: identity.publicKey,
       proof: identity.signPeerProof({
@@ -322,7 +326,7 @@ test(
         messaging: "automatic",
         distribution: { intervalMs: 10 },
         doorways: [{ type: "memory" }],
-        adapters: { memory: ({ identity }) => factory(wire, identity)() },
+        adapters: { memory: ({ identity }) => pairingFactory(identity)() },
         runtime: {
           crypto,
           RTCPeerConnection: RTC,
@@ -354,19 +358,21 @@ test(
         identity: ownerIdentity,
         authority,
         invite: owner.invite,
-        doorwayFactory: factory(wire, ownerIdentity),
+        doorwayFactory: pairingFactory(ownerIdentity),
       });
+      host.bindNetwork(owner);
       const invite = await host.newInvite();
       client = await connectMembershipPairing({
         code: invite.code,
         identity: guestIdentity,
-        doorwayFactory: factory(wire, guestIdentity),
+        doorwayFactory: pairingFactory(guestIdentity),
       });
       const guest = await sdk(guestSeed, client.admission).join(client.invite, {
         name: "Guest",
         timeoutMs: 10000,
       });
       networks.push(guest);
+      client.bindNetwork(guest);
       await wait(
         () =>
           [owner, guest].every((n) =>
@@ -374,6 +380,11 @@ test(
           ),
         "ready peers",
       );
+      pairingOffline=true;
+      // Remain admitted beyond the original 15-second lease with bootstrap signaling unavailable.
+      await new Promise(r=>setTimeout(r,16000));
+      assert.equal(guest.getState().state,'admitted');
+      await guest.refreshMembership();
       const errors = [],
         ownerSession = createShareSession({
           network: owner,

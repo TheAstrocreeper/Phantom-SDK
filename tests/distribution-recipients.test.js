@@ -7,7 +7,7 @@ import {createMemoryChunkStore} from '../packages/phantom-core/src/files.js';
 import {memoryRTC} from './fixtures/memory-rtc.js';
 const ids=['1111111111111111','2222222222222222','3333333333333333','4444444444444444'];
 async function until(check){const end=Date.now()+4000;while(Date.now()<end){if(check())return;await new Promise(r=>setTimeout(r,5));}assert.fail('distribution did not settle');}
-async function fixture({holdLateReceiver=false}={}){
+async function fixture({holdLateReceiver=false,legacyPeer=false}={}){
  const admin=await createAdminIdentity(),callbacks=new Map(),events=[],frames=[],writes=new Map(ids.map(id=>[id,0]));
  const Base=memoryRTC({onSend(data,ch){let m;try{m=JSON.parse(data);}catch{return true;}return !(holdLateReceiver&&ch.owner===ids[2]&&m.sys==='PHANTOM_FILE_REQUEST'&&m.file.index>0);}});
  const states=ids.map((peerId,i)=>({peerId,leader:ids[0],mirror:ids[1],role:i===0?'syscon1':i===1?'syscon2':'peer',state:'admitted',admitted:true}));
@@ -18,7 +18,7 @@ async function fixture({holdLateReceiver=false}={}){
   const store=createMemoryChunkStore();
   ds.push(createNetworkDistribution({networkId:'room',adminPublicKey:admin.publicKey,lifecycle,runtime:{crypto,RTCPeerConnection:RTC},
    core:{getState:()=>states[i],onEvent(fn){callbacks.set(id,fn);return()=>callbacks.delete(id);},command(type,{to,frame}){if(type!=='PHANTOM_DIST_SEND')return;frames.push(structuredClone(frame));queueMicrotask(()=>callbacks.get(to)?.({type:'PHANTOM_DIST',payload:{from:id,frame}}));}},
-   options:{intervalMs:10,batchSize:1,jobTimeoutMs:1000,chunkStore:{get:store.get,async put(asset,index,bytes){writes.set(id,writes.get(id)+1);await store.put(asset,index,bytes);}}},emit:(type,data)=>events.push({peer:id,type,data})}));
+   options:{reuseConnections:legacyPeer&&i===1?false:undefined,intervalMs:10,batchSize:1,jobTimeoutMs:1000,chunkStore:{get:store.get,async put(asset,index,bytes){writes.set(id,writes.get(id)+1);await store.put(asset,index,bytes);}}},emit:(type,data)=>events.push({peer:id,type,data})}));
  }
  function roster(live=ids){for(const id of live)callbacks.get(id)?.({type:'PRESENCE_ROSTER',payload:{list:live.map(hKey=>({hKey}))}});}
  roster();
@@ -79,5 +79,42 @@ test('invalid recipient options and conflicting republishes cannot change existi
   const authorization=await f.admin.sign({networkId:'room',action:'content.publish',target:manifest.id,operationId:'external',recipients:[]});
   await assert.rejects(f.ds[0].publish(file(),{authorization,recipients:[ids[3]]}),/do not match/);
   assert.deepEqual(f.ds[0].snapshot().assets[0].proof.recipients,[]);
+ }finally{f.close();}
+});
+
+test('prepared distribution reuses hashes and binds preparation to its session and source',async()=>{
+ const f=await fixture();try{
+  const source=file();let reads=0;
+  const slice=source.slice.bind(source);source.slice=(...args)=>{reads++;return slice(...args);};
+  const prepared=await f.ds[0].prepare(source,{distributionId:'prepared-once'});
+  assert.equal(reads,1);
+  const originalId=prepared.id;prepared.id='sha256:'+'0'.repeat(64);
+  const published=await f.ds[0].publish(source,{prepared,recipients:[]});
+  assert.equal(published.id,originalId);assert.equal(reads,1);
+  await assert.rejects(f.ds[0].publish(file(),{prepared,recipients:[]}),/preparation/);
+  await assert.rejects(f.ds[1].publish(source,{prepared,recipients:[]}),/preparation/);
+  await assert.rejects(f.ds[0].publish(source,{prepared,chunkSize:32768,recipients:[]}),/preparation/);
+ }finally{f.close();}
+});
+
+
+test('successive verified batches reuse one RTC connection',async()=>{
+ const f=await fixture();try{
+  const manifest=await f.ds[0].publish(file(),{chunkSize:1024,recipients:[ids[1]]});
+  await until(()=>f.events.some(e=>e.peer===ids[1]&&e.type==='distributionComplete'));
+  assert.equal(f.events.filter(e=>e.peer===ids[1]&&e.type==='distributionConnectionOpened').length,1);
+  assert.ok(f.events.some(e=>e.type==='distributionConnectionReused'));
+  const complete=f.events.find(e=>e.peer===ids[1]&&e.type==='distributionComplete');
+  assert.deepEqual(new Uint8Array(await complete.data.blob.arrayBuffer()),new Uint8Array(await file().arrayBuffer()));
+  assert.equal(f.ds[1].snapshot().assets.find(a=>a.id===manifest.id).holders.find(h=>h.peer===ids[1]).indexes.length,manifest.total);
+ }finally{f.close();}
+});
+
+test('a peer without connection reuse negotiates the original per-batch teardown',async()=>{
+ const f=await fixture({legacyPeer:true});try{
+  await f.ds[0].publish(file(),{recipients:[ids[1]]});
+  await until(()=>f.events.some(e=>e.peer===ids[1]&&e.type==='distributionComplete'));
+  assert.equal(f.events.filter(e=>e.peer===ids[1]&&e.type==='distributionConnectionOpened').length,4);
+  assert.equal(f.events.some(e=>e.type==='distributionConnectionReused'),false);
  }finally{f.close();}
 });

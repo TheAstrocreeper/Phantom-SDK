@@ -3,9 +3,10 @@ const digest=async(b,crypto)=>hex(await crypto.subtle.digest('SHA-256',b));
 const descriptor=m=>[m.name,m.type,m.size,m.chunkSize,m.total,m.hashRoot,m.distributionId];
 export function createMemoryChunkStore(){const data=new Map();return {async get(id,index){return data.get(id+':'+index);},async put(id,index,bytes){data.set(id+':'+index,bytes.slice(0));}};}
 /** Chunked file exchange over the peer data channel with backpressure. */
-export function createFileDistribution({core,crypto=globalThis.crypto,emit=()=>{},allowed=()=>true,canUsePeer=()=>true,chunkStore=createMemoryChunkStore(),requestTimeoutMs=10000,maxFileBytes=1024*1024*1024}) {
+export function createFileDistribution({core,crypto=globalThis.crypto,emit=()=>{},allowed=()=>true,canUsePeer=()=>true,chunkStore=createMemoryChunkStore(),requestTimeoutMs=10000,requestWindow=8,maxAttemptsPerPeer=2,maxFileBytes=1024*1024*1024}) {
  const manifests=new Map(),sources=new Map(),offers=new Map(),downloads=new Map(),sendQueues=new Map(),queueCounts=new Map(),activeSends=new Set(),peerGenerations=new Map();let closed=false;
  if(!Number.isFinite(requestTimeoutMs)||requestTimeoutMs<=0||!Number.isSafeInteger(maxFileBytes)||maxFileBytes<0)throw new TypeError('Invalid file service limits');
+ if(!Number.isInteger(requestWindow)||requestWindow<1||requestWindow>8||!Number.isInteger(maxAttemptsPerPeer)||maxAttemptsPerPeer<1||maxAttemptsPerPeer>3)throw new TypeError('Invalid file request window or retry limit');
  const check=id=>{if(closed)throw new Error('File service closed');const m=manifests.get(id);if(!m)throw new Error('Unknown file');if(!allowed(id,m.distributionId))throw new Error('Distribution revoked');return m;};
  const peerAllowed=peer=>{if(!canUsePeer(peer))throw new Error('Peer membership inactive');};
  const packet=(to,sys,file)=>{peerAllowed(to);core.command('SEND_DM',{to,sys,file});};
@@ -27,7 +28,22 @@ export function createFileDistribution({core,crypto=globalThis.crypto,emit=()=>{
   if(!Number.isInteger(chunkSize)||chunkSize<1024||chunkSize>65536)throw new TypeError('Chunk size must be 1024–65536 bytes');
   if(typeof name!=='string'||name.length>256||typeof type!=='string'||type.length>128||typeof distributionId!=='string'||distributionId.length>256)throw new TypeError('Invalid file metadata');
   if(Math.ceil(file.size/chunkSize)>65536)throw new TypeError('At most 65536 chunks per file');
-  const hashes=[];for(let i=0;i<Math.ceil(file.size/chunkSize);i++){if(closed||!allowed('',distributionId))throw new Error('Distribution unavailable');const bytes=await file.slice(i*chunkSize,(i+1)*chunkSize).arrayBuffer();hashes.push(await digest(bytes,crypto));}
+  const total=Math.ceil(file.size/chunkSize),hashes=new Array(total),startedAt=performance.now();let readMs=0,hashMs=0;
+  // Bound temporary file data to 4 MiB and outstanding WebCrypto jobs to eight.
+  const batchChunks=Math.max(1,Math.floor(4*1024*1024/chunkSize));
+  for(let base=0;base<total;base+=batchChunks){
+   if(closed||!allowed('',distributionId))throw new Error('Distribution unavailable');
+   const end=Math.min(total,base+batchChunks),readAt=performance.now();
+   const bytes=await file.slice(base*chunkSize,Math.min(file.size,end*chunkSize)).arrayBuffer();readMs+=performance.now()-readAt;
+   const hashAt=performance.now();
+   for(let offset=base;offset<end;offset+=8){
+    if(closed||!allowed('',distributionId))throw new Error('Distribution unavailable');
+    await Promise.all(Array.from({length:Math.min(8,end-offset)},async(_,j)=>{const index=offset+j,start=(index-base)*chunkSize;hashes[index]=await digest(new Uint8Array(bytes,start,Math.min(chunkSize,bytes.byteLength-start)),crypto);}));
+   }
+   hashMs+=performance.now()-hashAt;
+   if(closed||!allowed('',distributionId))throw new Error('Distribution unavailable');
+   emit('filePreparationProgress',{name,processed:end,total,readMs,hashMs,elapsedMs:performance.now()-startedAt});
+  }
   const m={version:1,name,type,size:file.size,chunkSize,total:hashes.length,hashRoot:await digest(new TextEncoder().encode(hashes.join('')),crypto),distributionId};
   m.id='sha256:'+await digest(new TextEncoder().encode(JSON.stringify(descriptor(m))),crypto);m.hashes=hashes;checkAllowed(m);if(typeof chunkStore.save==='function')for(let i=0;i<m.total;i++){checkAllowed(m);if(closed)throw new Error('File service closed');await chunkStore.put(m.id,i,await file.slice(i*m.chunkSize,(i+1)*m.chunkSize).arrayBuffer());}checkAllowed(m);if(closed)throw new Error('File service closed');manifests.set(m.id,m);sources.set(m.id,file);emit('filePublished',publicManifest(m));return publicManifest(m);
  }
@@ -52,9 +68,12 @@ export function createFileDistribution({core,crypto=globalThis.crypto,emit=()=>{
  function fail(id,error){const d=downloads.get(id);if(!d)return;downloads.delete(id);for(const p of d.pending.values())clearTimeout(p.timer);d.signal?.removeEventListener('abort',d.abort);d.reject(error);}
  async function complete(id){const d=downloads.get(id);if(!d)return;try{check(id);const parts=[];for(const i of [...d.wanted].sort((a,b)=>a-b)){const bytes=await readChunk(d.m,i);if(!bytes)throw new Error('Stored file chunk failed verification');parts.push(bytes);}check(id);if(downloads.get(id)!==d)return;downloads.delete(id);d.signal?.removeEventListener('abort',d.abort);if(d.partial){const indexes=[...d.wanted].sort((a,b)=>a-b);emit('fileChunksComplete',{id,indexes});d.resolve({id,indexes});return;}const blob=new Blob(parts,{type:d.m.type});emit('fileComplete',{id,size:blob.size});d.resolve(blob);}catch(error){fail(id,error);}}
  function pump(id){const d=downloads.get(id);if(!d)return;try{check(id);}catch(e){fail(id,e);return;}if(d.have.size===d.wanted.size){if(!d.completing){d.completing=true;void complete(id);}return;}
-  for(const peer of d.peers){if([...d.pending.values()].some(p=>p.peer===peer))continue;let index=-1;for(let i=0;i<d.m.total;i++)if(d.wanted.has(i)&&!d.have.has(i)&&!d.pending.has(i)&&!d.attempts.get(i)?.has(peer)){index=i;break;}if(index<0)continue;
-   if(!d.attempts.has(index))d.attempts.set(index,new Set());d.attempts.get(index).add(peer);
-   const timer=setTimeout(()=>{if(downloads.get(id)!==d)return;d.pending.delete(index);pump(id);},requestTimeoutMs);d.pending.set(index,{peer,timer});packet(peer,'PHANTOM_FILE_REQUEST',{id,index});
+  for(const peer of d.peers){let outstanding=[...d.pending.values()].filter(p=>p.peer===peer).length;
+   while(outstanding<requestWindow){let index=-1;for(let i=0;i<d.m.total;i++)if(d.wanted.has(i)&&!d.have.has(i)&&!d.pending.has(i)&&(d.attempts.get(i)?.get(peer)||0)<maxAttemptsPerPeer){index=i;break;}if(index<0)break;
+    if(!d.attempts.has(index))d.attempts.set(index,new Map());const attempts=d.attempts.get(index);attempts.set(peer,(attempts.get(peer)||0)+1);
+    const pending={peer,processing:false};pending.timer=setTimeout(()=>{if(downloads.get(id)!==d||d.pending.get(index)!==pending)return;d.pending.delete(index);emit('fileRetry',{id,index,from:peer,attempt:attempts.get(peer)});pump(id);},requestTimeoutMs);
+    d.pending.set(index,pending);outstanding++;packet(peer,'PHANTOM_FILE_REQUEST',{id,index});
+   }
   }
   if(!d.pending.size&&d.have.size<d.wanted.size)fail(id,new Error('No source supplied the remaining chunks; retry to resume'));
  }
@@ -65,10 +84,10 @@ export function createFileDistribution({core,crypto=globalThis.crypto,emit=()=>{
   }
   if(event.type==='INCOMING_MSG'&&p.sys==='PHANTOM_FILE_MANIFEST'){const row=offers.get(from+':'+f?.id);if(!row||!Array.isArray(f.hashes)||f.hashes.length>64||!Number.isInteger(f.offset)||f.offset<0||f.offset+f.hashes.length>row.m.total||f.hashes.some(h=>! /^[0-9a-f]{64}$/.test(h)))return;for(let i=0;i<f.hashes.length;i++)row.hashes.set(f.offset+i,f.hashes[i]);await finishManifest(from,row);return;}
   if(event.type==='INCOMING_MSG'&&p.sys==='PHANTOM_FILE_REQUEST'){if(manifests.has(f?.id)&&allowed(f.id,manifests.get(f.id).distributionId))queueChunk(from,f.id,f.index);return;}
-  if(event.type==='INCOMING_MSG'&&p.sys==='PHANTOM_FILE_MISSING'){const d=downloads.get(f?.id),pending=d?.pending.get(f.index);if(pending?.peer===from){clearTimeout(pending.timer);d.pending.delete(f.index);pump(f.id);}return;}
-  if(event.type==='FILE_BIN_CHUNK'){const d=downloads.get(f?.id),pending=d?.pending.get(f.index);if(!d||pending?.peer!==from)return;check(f.id);
-   if(!(p.bytes instanceof ArrayBuffer)||p.bytes.byteLength!==Math.min(d.m.chunkSize,d.m.size-f.index*d.m.chunkSize)||await digest(p.bytes,crypto)!==d.m.hashes[f.index]){clearTimeout(pending.timer);d.pending.delete(f.index);emit('fileError',{id:f.id,from,error:'Chunk failed verification'});pump(f.id);return;}
-   check(f.id);if(!canUsePeer(from)||downloads.get(f.id)!==d||d.pending.get(f.index)!==pending)return;await chunkStore.put(f.id,f.index,p.bytes);check(f.id);if(!canUsePeer(from)||downloads.get(f.id)!==d||d.pending.get(f.index)!==pending)return;clearTimeout(pending.timer);d.pending.delete(f.index);d.have.add(f.index);emit('fileProgress',{id:f.id,received:d.have.size,total:d.m.total,from});pump(f.id);
+  if(event.type==='INCOMING_MSG'&&p.sys==='PHANTOM_FILE_MISSING'){const d=downloads.get(f?.id),pending=d?.pending.get(f.index);if(pending?.peer===from){d.attempts.get(f.index)?.set(from,maxAttemptsPerPeer);clearTimeout(pending.timer);d.pending.delete(f.index);pump(f.id);}return;}
+  if(event.type==='FILE_BIN_CHUNK'){const d=downloads.get(f?.id),pending=d?.pending.get(f.index);if(!d||pending?.peer!==from||pending.processing)return;pending.processing=true;check(f.id);
+   if(!(p.bytes instanceof ArrayBuffer)||p.bytes.byteLength!==Math.min(d.m.chunkSize,d.m.size-f.index*d.m.chunkSize)||await digest(p.bytes,crypto)!==d.m.hashes[f.index]){if(downloads.get(f.id)!==d||d.pending.get(f.index)!==pending)return;d.attempts.get(f.index)?.set(from,maxAttemptsPerPeer);clearTimeout(pending.timer);d.pending.delete(f.index);emit('fileError',{id:f.id,from,error:'Chunk failed verification'});pump(f.id);return;}
+   check(f.id);if(!canUsePeer(from)||downloads.get(f.id)!==d||d.pending.get(f.index)!==pending)return;await chunkStore.put(f.id,f.index,p.bytes);check(f.id);if(!canUsePeer(from)||downloads.get(f.id)!==d||d.pending.get(f.index)!==pending)return;clearTimeout(pending.timer);d.pending.delete(f.index);d.have.add(f.index);emit('fileProgress',{id:f.id,index:f.index,received:d.have.size,total:d.m.total,from});pump(f.id);
   }
  }
  const off=core.onEvent(e=>{void handle(e).catch(error=>{if(e.payload?.file?.id)fail(e.payload.file.id,error);emit('fileError',{error:error.message});});});
