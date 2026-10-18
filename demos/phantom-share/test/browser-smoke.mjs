@@ -265,16 +265,32 @@ try {
   }
   const mobile = await page("Mobile", { width: 390, height: 844 });
   await mobile.page.goto(url);
+  await mobile.page.waitForFunction(()=>document.getElementById('portal-drop-zone').getAttribute('aria-disabled')==='true');
+  assert.equal(await mobile.page.locator('#file-input').isDisabled(),true);
+  assert.equal(await mobile.page.locator('#session-heading').textContent(),'Not connected');
+  await mobile.page.locator('#portal-drop-zone').click({force:true});
+  assert.equal(await mobile.page.locator('#invite-modal').evaluate(el=>el.classList.contains('hidden')),true);
   const logDownload = mobile.page.waitForEvent('download');
   await mobile.page.locator('#download-logs').click();
   const download = await logDownload;
   const report = JSON.parse(await readFile(await download.path(), 'utf8'));
-  assert.equal(report.build, 'share-peer-membership-reuse-v2');
+  assert.equal(report.build, 'share-session-cleanup-v3');
   assert.ok(report.rows.some(row=>row.type==='export'));
   assert.ok(report.rows.some(row=>row.type==='page-start'));
   console.log('disconnected mobile page exports diagnostic JSON');
   await mobile.page.locator("#connect-action").click();
   await mobile.page.screenshot({ path: out + "/pairing-mobile.png" });
+  const previousInvite=await owner.page.locator("#invite-code").inputValue();
+  await owner.page.evaluate(()=>window.closeInviteModal());
+  await owner.page.locator('#leave-action').click();
+  await owner.page.waitForFunction(()=>document.getElementById('session-heading').textContent==='Not connected');
+  assert.equal(await owner.page.locator('#connect-action').isDisabled(),false);
+  assert.equal(await owner.page.locator('#file-input').isDisabled(),true);
+  assert.equal(await owner.page.locator('#leave-action').isDisabled(),true);
+  await owner.page.locator('#connect-action').click();
+  await owner.page.locator('#create-network').click();
+  await owner.page.waitForFunction(previous=>{const code=document.getElementById('invite-code').value;return code.startsWith('P1-')&&code!==previous;},previousInvite);
+  console.log('Leave resets local session and permits a new session; empty drop zone stays disabled');
   assert.deepEqual(errors, []);
   console.log(
     "browser " +

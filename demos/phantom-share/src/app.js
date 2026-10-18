@@ -1,3 +1,4 @@
+import { leaveAndReset } from "./session-cleanup.js";
 import { createDiagnostics } from "./diagnostics.js";
 import { createBrowserIdentity as createBrowserIdentity } from "../../../packages/phantom-doorways/src/browser-entry.js";
 import { parseInvite as parseInvite } from "../../../packages/phantom-core/src/invite.js";
@@ -84,6 +85,24 @@ function peers() {
 function readyPeers() {
   return peers().filter((e) => e.connection === "ready");
 }
+function canShare() {
+  if(!sharing||!network||leaving)return false;
+  const selected=selectRecipients(peers(),recipientModes),ready=new Set(readyPeers().map(p=>p.id));
+  return selected.length>0&&selected.every(id=>ready.has(id));
+}
+function renderAvailability() {
+  const available=canShare(),ready=readyPeers().length;
+  const zone=byId('portal-drop-zone');
+  zone.classList.toggle('drop-unavailable',!available);
+  zone.setAttribute('aria-disabled',String(!available));
+  zone.tabIndex=available?0:-1;
+  byId('file-input').disabled=!available;
+  if(!available)zone.classList.remove('portal-drop-active');
+  byId('session-heading').textContent=ready?'Connected':connecting?'Connecting…':network?(peers().length?'Connecting to devices…':'No devices connected'):'Not connected';
+  byId('session-dot').classList.toggle('status-idle',!ready);
+  byId('leave-action').disabled=leaving||(!network&&!connecting);
+  byId('leave-label').textContent=leaving?'Leaving…':connecting?'Cancel':network&&!peers().length?'Leave / reset':'Leave';
+}
 function updateTargetLabel() {
   let e = peers(),
     a = e.filter((o) => recipientModes.get(o.id) === "direct");
@@ -116,6 +135,7 @@ function renderPeers() {
         : "Connect to start sharing.") +
       "</div>"),
     updateTargetLabel(),
+    renderAvailability(),
     renderIcons());
 }
 function renderTransfers() {
@@ -273,6 +293,7 @@ async function connect(code = "") {
   connecting = true;
   joinController = new AbortController();
   byId("connect-action").disabled = true;
+  renderAvailability();
   setStatus("Connecting…");
   try {
     if (!window.isSecureContext || !crypto.subtle)
@@ -321,7 +342,13 @@ async function connect(code = "") {
       },
       onError: showError,
     });
-    network.on("state", state => { diagnostics.record("network-state",state); setStatus(connectionText(state)); });
+    network.on("state", state => {
+      if(generation!==connectionGeneration)return;
+      diagnostics.record("network-state",state);
+      if(['failed','retired','closed'].includes(state.state)&&!leaving){cleanupSession(state.state==='retired'?'Session retired. Connect to start again.':'Session ended. Connect to start again.');return;}
+      renderPeers();setStatus(connectionText(state));
+    });
+    network.on('peerConnection',()=>{renderPeers();if(network)setStatus(connectionText(network.getState()));});
     for(const type of ['filePreparationProgress','filePublished','fileProgress','fileRetry','fileError','fileComplete','distributionProgress','distributionFileEvent','distributionConnectionReused','distributionJob','distributionJobFailed','distributionError','distributionComplete','distributionConnectionOpened','distributionConnectionClosed','distributionConnectionFailed','controlError']) network.on(type,data=>diagnostics.record(type,data));
     network.on("membershipChanged", event => { diagnostics.record("membershipChanged",event); renderPeers(); });
     network.on("event", (event) => {
@@ -364,10 +391,12 @@ async function connect(code = "") {
     if (generation === connectionGeneration) {
       connecting = false;
       byId("connect-action").disabled = false;
+      renderAvailability();
     }
   }
 }
 function connectionText(e) {
+  if(network&&!peers().length&&!['failed','retired','closed'].includes(e.state))return 'No devices connected · Invite a device or Leave to reset';
   return e.state === "admitted"
     ? "Connected \xB7 keep this tab open while sharing"
     : e.state === "failed"
@@ -412,6 +441,7 @@ async function copyShareLink() {
   }
 }
 function cleanupSession(message = "You left the session.") {
+  diagnostics.record("session-reset",{message});diagnostics.flush();
   ++connectionGeneration;
   joinController?.abort();
   clearTimeout(invitationTimer);
@@ -431,6 +461,8 @@ function cleanupSession(message = "You left the session.") {
   downloadUrls.clear();
   invite = "";
   shareUrl = "";
+  pendingCode = "";
+  byId("file-input").value = "";
   byId("connect-action").disabled = false;
   byId("leave-action").disabled = true;
   byId("connect-action").querySelector("span").textContent = "Connect";
@@ -450,14 +482,11 @@ async function leaveNetwork() {
     return;
   }
   leaving = true;
+  renderAvailability();
+  const current=network;
   try {
-    await network.leave();
-    cleanupSession();
-  } catch (error) {
-    showError(error);
-  } finally {
-    ((leaving = false), (invitationPending = null));
-  }
+    await leaveAndReset({leave:()=>current.leave(),onError:error=>diagnostics.record('leave-unconfirmed',{message:error.message}),reset:confirmed=>cleanupSession(confirmed?'You left the session.':'Session closed locally; Leave could not be confirmed.')});
+  }finally{leaving=false;invitationPending=null;renderAvailability();}
 }
 async function removeDevice(id) {
   if (!shareConnection?.isOwner) return;
@@ -494,13 +523,11 @@ async function sendFiles(e) {
     }
 }
 function triggerFileInput() {
-  if (!sharing) {
-    openInviteModal();
-    return;
-  }
+  if (!canShare()) return;
   byId("file-input").click();
 }
 function handleDragOver(e) {
+  if(!canShare()){e.preventDefault();return;}
   (e.preventDefault(),
     byId("portal-drop-zone").classList.add("portal-drop-active"));
 }
@@ -511,7 +538,7 @@ function handleDragLeave(e) {
 async function handleDrop(e) {
   (e.preventDefault(),
     handleDragLeave(e),
-    await sendFiles(Array.from(e.dataTransfer.files)));
+    canShare() && await sendFiles(Array.from(e.dataTransfer.files)));
 }
 function promptName() {
   (byId("name-dialog").showModal(),
