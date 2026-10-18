@@ -6,3 +6,5 @@
 .diagnostics-controls{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:12px}.diagnostics-controls .actions{flex-wrap:wrap;align-items:center}.diagnostics-controls button{padding:9px 12px}#exportStatus{font-size:11px;color:var(--ice)}@media(min-width:1000px) and (min-height:700px){main{grid-template-rows:auto auto auto auto minmax(285px,1fr) 135px auto auto auto}.diagnostics-controls{margin:0}}
 
 .window-control{display:flex;align-items:center;gap:12px;margin-bottom:8px}.window-control select{background:#17212b;color:#edf3f5;border:1px solid #647580;padding:8px;border-radius:5px;font:inherit}.comparison-help{font-size:12px;line-height:1.5;color:#a3b3bf;max-width:48em}
+/* Additional comparison controls must remain in normal flow, including short desktops. */
+@media(min-width:1000px){main{height:auto;min-height:100svh;display:block}header{margin-bottom:14px}.workspace{align-items:stretch}.transfer-panel{display:block}.transfer-panel>.integrity{border-left:0;padding-left:0;margin-top:14px}.field{margin-top:14px;height:auto}.diagnostics-controls{margin-top:14px}.inspector,footer{margin-top:14px}}

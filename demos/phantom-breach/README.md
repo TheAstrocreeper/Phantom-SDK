@@ -1,9 +1,29 @@
 # Phantom Breach
 
+## Source-read comparison
+
+Set the receiving device to **32 requests** for both runs. On the sender select
+**64 KiB reads (baseline)**, send the video and wait for verification. Then select
+**4 MiB reads (batched)** and send the same file again without leaving/reloading.
+Download both reports. The source setting is local to the sender; the request
+window is local to the receiver. Logs record the actual source block setting and
+actual native block reads. This is opt-in: SDK source reads still default to the
+original per-chunk mode. The new reader holds at most one 4 MiB block per service
+and serializes loads across sources, coalesces nearby chunk requests, copies
+individual send buffers, and retains every original chunk hash check. Sparse
+requests may read more bytes than needed, so this is not a universal default.
+Each new publication has a separate cache key. Stop clears retained data; close
+rejects active/queued work and fences late native reads.
+
+The native-browser local read benchmark (`tools/breach-comparison/source-read-browser.mjs`)
+verified identical hashes for 32 MiB. Eight concurrent 64 KiB reads took about
+198–201 ms, while 4 MiB reads took 58–63 ms in this runtime. This does not
+reproduce the phone's per-read latency or establish device transfer improvement.
+
 ## Same-connection request-window comparison
 
 This demo is recovered from `00dfcb1` and adapted to the current workspace SDK.
-Build marker: `breach-window-v1`. It exercises the actual direct peer file API,
+Build marker: `breach-source-v2`. It exercises the actual direct peer file API,
 without Share's membership authority or distribution scheduler.
 
 1. Connect the two devices once. On the **receiving** device select **8 requests**.

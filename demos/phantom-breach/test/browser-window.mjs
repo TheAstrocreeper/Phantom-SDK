@@ -27,20 +27,26 @@ try{
  await page.goto('http://127.0.0.1:'+server.address().port);await page.locator('#deploy').click();await page.waitForFunction(()=>window.fixture.created===1);
  await page.locator('#file').setInputFiles({name:'same.bin',mimeType:'application/octet-stream',buffer:Buffer.from([1,2,3,4])});
  for(let i=0;i<2;i++){
+  await page.locator('#sourceRead').selectOption(i?'4194304':'0');
   await page.locator('#inject').click();await page.waitForFunction(n=>window.fixture.published.length===n,i+1);
   await page.waitForFunction(n=>window.fixture.sent.filter(m=>m.type==='file-hash').length===n,i+1);
   await page.evaluate(()=>window.fixture.finishSend());await page.waitForFunction(()=>document.querySelector('#result').textContent==='Peer verified');
  }
+ assert.deepEqual(await page.evaluate(()=>window.fixture.published.map(p=>p.options.sourceReadBlockBytes)),[0,4194304]);
  const ids=await page.evaluate(()=>window.fixture.published.map(p=>p.options.distributionId));assert.equal(new Set(ids).size,2);assert.ok(ids.every(Boolean));
  for(const window of ['8','32']){
   await page.locator('#receiveWindow').selectOption(window);await page.evaluate(()=>window.fixture.incoming());
   await page.waitForFunction(n=>window.fixture.requested.length===n,window==='8'?1:2);
-  assert.equal(await page.locator('#receiveWindow').isDisabled(),true);
+  assert.equal(await page.locator('#receiveWindow').isDisabled(),true);assert.equal(await page.locator('#sourceRead').isDisabled(),true);
   await page.evaluate(()=>window.fixture.finishReceive());await page.waitForFunction(()=>document.querySelector('#result').textContent==='File verified');
  }
  assert.deepEqual(await page.evaluate(()=>window.fixture.requested.map(p=>p.options.requestWindow)),[8,32]);assert.equal(await page.evaluate(()=>window.fixture.created),1);
  const download=page.waitForEvent('download');await page.locator('#saveLogs').click();const dl=await download;
  const report=JSON.parse(await readFile(await dl.path(),'utf8'));assert.deepEqual(report.events.filter(e=>e.type==='comparisonStart').map(e=>e.requestWindow),[8,32]);
+ await page.setViewportSize({width:390,height:844});
+ await page.locator('#inject').click();await page.waitForFunction(()=>window.fixture.sent.filter(m=>m.type==='file-hash').length===3);
+ await page.evaluate(()=>window.fixture.finishSend());await page.waitForFunction(()=>document.querySelector('#result').textContent==='Peer verified');
+ assert.equal(await page.evaluate(()=>window.fixture.created),1);
  assert.deepEqual(errors,[]);
- console.log('Same file sends receive fresh transfer IDs; 8/32 receive options use one session; busy selector locks; verification and diagnostic export pass. Controlled SDK fixture, not native throughput.');
+ console.log('Fresh transfer IDs, both source modes, 8/32 receive settings, one session, busy locking, desktop/mobile Send access, verification and export pass. Controlled SDK fixture, not native throughput.');
 }finally{await browser.close();await new Promise(r=>server.close(r));await rm(temp,{recursive:true,force:true});}

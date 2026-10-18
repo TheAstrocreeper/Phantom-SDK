@@ -2,6 +2,17 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createFileDistribution} from '../packages/phantom-core/src/files.js';
 const core={onEvent(){return()=>{};},command(){}};
+test('block source cache is scoped to one publication and cannot warm a fresh transfer identity',async()=>{
+ const file=new Blob([new Uint8Array(65536)]),reads=[];
+ const service=createFileDistribution({core,emit:(type,p)=>{if(type==='fileSourceRead')reads.push(p);}});
+ try{
+  await assert.rejects(service.publish(file,{sourceReadBlockBytes:1}),/Source read block/);
+  const a=await service.publish(file,{chunkSize:65536,distributionId:'one',sourceReadBlockBytes:4*1024*1024});
+  await service.getFile(a.id);await service.getFile(a.id);assert.equal(reads.length,1);
+  const b=await service.publish(file,{chunkSize:65536,distributionId:'two',sourceReadBlockBytes:4*1024*1024});
+  await service.getFile(b.id);assert.notEqual(a.id,b.id);assert.equal(reads.length,2);assert.equal(reads[1].bytes,65536);
+ }finally{service.close();}
+});
 test('batched preparation preserves every chunk hash and bounds reads and hashing concurrency',async()=>{
  const size=4*1024*1024+17003,bytes=Uint8Array.from({length:size},(_,i)=>i%251),blob=new Blob([bytes]);
  let reads=0,active=0,peak=0;const progress=[];

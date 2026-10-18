@@ -1,4 +1,5 @@
 import {createPreparedSendQueue,createFileTimings} from './file-pipeline.js';
+import {createSourceBlockReader} from './source-block-reader.js';
 const hex=b=>Array.from(new Uint8Array(b),x=>x.toString(16).padStart(2,'0')).join('');
 const digest=async(b,crypto)=>hex(await crypto.subtle.digest('SHA-256',b));
 const descriptor=m=>[m.name,m.type,m.size,m.chunkSize,m.total,m.hashRoot,m.distributionId];
@@ -6,7 +7,7 @@ export function createMemoryChunkStore(){const data=new Map();return {async get(
 /** Chunked file exchange over the peer data channel with backpressure. */
 export function createFileDistribution({core,crypto=globalThis.crypto,emit=()=>{},allowed=()=>true,canUsePeer=()=>true,chunkStore=createMemoryChunkStore(),requestTimeoutMs=10000,requestWindow=8,maxAttemptsPerPeer=2,maxFileBytes=1024*1024*1024}) {
  const manifests=new Map(),sources=new Map(),offers=new Map(),downloads=new Map(),sendTimings=new Map(),activeSends=new Set(),peerGenerations=new Map();let closed=false;
- const sendQueue=createPreparedSendQueue({maxPerPeer:32}),writeQueue=[];let activeWrites=0,queuedWrites=0;
+ const sendQueue=createPreparedSendQueue({maxPerPeer:32}),sourceReader=createSourceBlockReader({onRead:p=>emit('fileSourceRead',p)}),writeQueue=[];let activeWrites=0,queuedWrites=0;
  const maxReceiveSlots=32,writeConcurrency=4;
  const now=()=>performance.now();
  function senderMetrics(to,id){const key=to+':'+id;let row=sendTimings.get(key);if(!row){row={to,id,total:0,timings:createFileTimings()};sendTimings.set(key,row);}return row;}
@@ -20,7 +21,8 @@ export function createFileDistribution({core,crypto=globalThis.crypto,emit=()=>{
  function validManifest(m){return !!m&&!(m.version!==1||typeof m.id!=='string'||!/^sha256:[0-9a-f]{64}$/.test(m.id)||!Number.isSafeInteger(m.size)||m.size<0||m.size>maxFileBytes||!Number.isInteger(m.chunkSize)||m.chunkSize<1024||m.chunkSize>65536||m.total!==Math.ceil(m.size/m.chunkSize)||m.total>65536||typeof m.name!=='string'||m.name.length>256||typeof m.type!=='string'||m.type.length>128||typeof m.distributionId!=='string'||m.distributionId.length>256||! /^[0-9a-f]{64}$/.test(m.hashRoot));}
  async function readChunk(m,index,includeSource=false,timings,prefix=''){
   const readAt=now();
-  const source=includeSource&&sources.get(m.id),bytes=source?await source.slice(index*m.chunkSize,(index+1)*m.chunkSize).arrayBuffer():await chunkStore.get(m.id,index);
+  const record=includeSource&&sources.get(m.id),source=record?.file;
+  const bytes=source?(record.blockBytes?await sourceReader.read(record,index,m.chunkSize):await source.slice(index*m.chunkSize,(index+1)*m.chunkSize).arrayBuffer()):await chunkStore.get(m.id,index);
   timings?.add(prefix+'readMs',now()-readAt);
   if(!(bytes instanceof ArrayBuffer)||bytes.byteLength!==Math.min(m.chunkSize,m.size-index*m.chunkSize))return null;
   const hashAt=now(),valid=await digest(bytes,crypto)===m.hashes[index];timings?.add(prefix+'hashMs',now()-hashAt);return valid?bytes:null;
@@ -33,9 +35,10 @@ export function createFileDistribution({core,crypto=globalThis.crypto,emit=()=>{
   const indexes=[];for(let i=0;i<m.total;i++){check(m.id);if(await readChunk(m,i))indexes.push(i);}
   check(m.id);return {manifest:publicManifest(check(m.id)),indexes};
  }
- async function publish(file,{name=file?.name||'file',type=file?.type||'application/octet-stream',chunkSize=16384,distributionId=''}={}){
+ async function publish(file,{name=file?.name||'file',type=file?.type||'application/octet-stream',chunkSize=16384,distributionId='',sourceReadBlockBytes=0}={}){
   if(closed)throw new Error('File service closed');if(!file?.slice||!Number.isSafeInteger(file.size)||file.size<0||file.size>maxFileBytes)throw new TypeError('Supply a Blob within maxFileBytes');
   if(!Number.isInteger(chunkSize)||chunkSize<1024||chunkSize>65536)throw new TypeError('Chunk size must be 1024–65536 bytes');
+  if(![0,4*1024*1024].includes(sourceReadBlockBytes))throw new TypeError('Source read block must be 0 or 4 MiB');
   if(typeof name!=='string'||name.length>256||typeof type!=='string'||type.length>128||typeof distributionId!=='string'||distributionId.length>256)throw new TypeError('Invalid file metadata');
   if(Math.ceil(file.size/chunkSize)>65536)throw new TypeError('At most 65536 chunks per file');
   const total=Math.ceil(file.size/chunkSize),hashes=new Array(total),startedAt=performance.now();let readMs=0,hashMs=0;
@@ -55,7 +58,7 @@ export function createFileDistribution({core,crypto=globalThis.crypto,emit=()=>{
    emit('filePreparationProgress',{name,processed:end,total,readMs,hashMs,elapsedMs:performance.now()-startedAt});
   }
   const m={version:1,name,type,size:file.size,chunkSize,total:hashes.length,hashRoot:await digest(new TextEncoder().encode(hashes.join('')),crypto),distributionId};
-  m.id='sha256:'+await digest(new TextEncoder().encode(JSON.stringify(descriptor(m))),crypto);m.hashes=hashes;checkAllowed(m);if(typeof chunkStore.save==='function')for(let i=0;i<m.total;i++){checkAllowed(m);if(closed)throw new Error('File service closed');await chunkStore.put(m.id,i,await file.slice(i*m.chunkSize,(i+1)*m.chunkSize).arrayBuffer());}checkAllowed(m);if(closed)throw new Error('File service closed');manifests.set(m.id,m);sources.set(m.id,file);emit('filePublished',publicManifest(m));return publicManifest(m);
+  m.id='sha256:'+await digest(new TextEncoder().encode(JSON.stringify(descriptor(m))),crypto);m.hashes=hashes;checkAllowed(m);if(typeof chunkStore.save==='function')for(let i=0;i<m.total;i++){checkAllowed(m);if(closed)throw new Error('File service closed');await chunkStore.put(m.id,i,await file.slice(i*m.chunkSize,(i+1)*m.chunkSize).arrayBuffer());}checkAllowed(m);if(closed)throw new Error('File service closed');manifests.set(m.id,m);sources.set(m.id,{file,blockBytes:sourceReadBlockBytes,size:file.size,slice:(start,end)=>file.slice(start,end)});emit('filePublished',publicManifest(m));return publicManifest(m);
  }
  function checkAllowed(m){if(!allowed(m.id,m.distributionId))throw new Error('Distribution revoked');}
  function publicManifest(m){return structuredClone(m);}
@@ -138,5 +141,5 @@ export function createFileDistribution({core,crypto=globalThis.crypto,emit=()=>{
   for(const cancel of [...activeSends])if(cancel.peer===peer)cancel();
   for(const key of offers.keys())if(key.startsWith(peer+':'))offers.delete(key);
   for(const [id,d]of downloads){d.peers=d.peers.filter(p=>p!==peer);for(const [index,p]of d.pending)if(p.peer===peer){clearTimeout(p.timer);d.pending.delete(index);}pump(id);}
- },async getFile(id){const m=check(id),parts=[];for(let i=0;i<m.total;i++){const bytes=await readChunk(m,i,true);if(!bytes)throw new Error('No complete local file copy');parts.push(bytes);}check(id);return new Blob(parts,{type:m.type});},cancel:id=>fail(id,new Error('File download cancelled')),getManifest:id=>publicManifest(check(id)),stop(target){for(const [id,d]of downloads)if(id===target||d.m.distributionId===target)fail(id,new Error('Distribution revoked'));for(const [key,row]of offers)if(row.m.id===target||row.m.distributionId===target)offers.delete(key);},close(){if(closed)return;closed=true;sendQueue.close();flushTimings();off();for(const cancel of [...activeSends])cancel();for(const id of downloads.keys())fail(id,new Error('File service closed'));offers.clear();sources.clear();manifests.clear();}};
+ },async getFile(id){const m=check(id),parts=[];for(let i=0;i<m.total;i++){const bytes=await readChunk(m,i,true);if(!bytes)throw new Error('No complete local file copy');parts.push(bytes);}check(id);return new Blob(parts,{type:m.type});},cancel:id=>fail(id,new Error('File download cancelled')),getManifest:id=>publicManifest(check(id)),stop(target){sourceReader.clear();for(const [id,d]of downloads)if(id===target||d.m.distributionId===target)fail(id,new Error('Distribution revoked'));for(const [key,row]of offers)if(row.m.id===target||row.m.distributionId===target)offers.delete(key);},close(){if(closed)return;closed=true;sourceReader.close();sendQueue.close();flushTimings();off();for(const cancel of [...activeSends])cancel();for(const id of downloads.keys())fail(id,new Error('File service closed'));offers.clear();sources.clear();manifests.clear();}};
 }

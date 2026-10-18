@@ -1,5 +1,21 @@
 # Actual Breach transfer comparison
 
+`node tools/breach-comparison/source-read-browser.mjs` isolates native browser
+File-read granularity without WebRTC. It uses a generated 32 MiB file, repeats
+eight-worker 64 KiB reads versus 4 MiB blocks, hashes every original chunk and
+requires identical hash roots. Its results describe this runtime, not the phone.
+
+The SDK's opt-in publication setting `sourceReadBlockBytes: 4194304` coalesces
+adjacent source reads behind one retained/in-flight 4 MiB block per file service.
+Default `0` retains per-chunk reads. Each publication has its own cache identity;
+individual output buffers are copied and every chunk is rehashed against the
+manifest. Loads across different sources serialize to preserve the block bound.
+Chunk sizes that do not divide 4 MiB align batches by whole chunks. Sparse access
+may amplify reads, so the option is not enabled globally. Stop clears retained
+cache and close fences late reads. Breach source-v2 compares this setting on the
+sender, with the receiving window held constant. Reports retain native block
+read counts and durations in addition to the existing chunk timings.
+
 Run the actual SDK file service over a controlled ordered software wire:
 
 ```sh
