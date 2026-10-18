@@ -32,7 +32,7 @@ function eventSurface() {
 /** Public peer-network facade with injectable transport and runtime. */
 export function createPhantom({ doorway, origin = 'https://phantom.local',
     avatar = null, storage = memoryStorage(), sessionStorage = memoryStorage(),
-    runtime = globalThis, messaging = 'manual', rtcConfiguration = {iceServers:[{urls:"stun:stun.l.google.com:19302"}]}, recoverySignaling, canSendFile = () => true, authorizeSyscon1 = () => true, canAdmitPeer = () => true } = {}) {
+    runtime = globalThis, messaging = 'manual', rtcConfiguration = {iceServers:[{urls:"stun:stun.l.google.com:19302"}]}, recoverySignaling, canSendFile = () => true, authorizeSyscon1 = () => true, canAdmitPeer = () => true, canUsePeer = () => true } = {}) {
   if(!['manual','automatic'].includes(messaging))throw new TypeError('messaging must be manual or automatic');
   if(!rtcConfiguration||typeof rtcConfiguration!=='object'||Array.isArray(rtcConfiguration))throw new TypeError('rtcConfiguration must be an object');
   if (['phantom-doorway-v1','phantom-doorway-v2'].includes(doorway?.protocol)) doorway = bridgeDoorway(doorway);
@@ -69,6 +69,7 @@ export function createPhantom({ doorway, origin = 'https://phantom.local',
     doorwayPresence: doorway.presence ?? 'live-sockets',
     WebSocket: doorway.WebSocket, RTCPeerConnection: runtime.RTCPeerConnection,
     crypto: runtime.crypto, rtcConfiguration, messaging, recoverySignaling, canSendFile, authorizeSyscon1,
+    canUsePeer: peer => {try{return canUsePeer(peer)===true;}catch{return false;}},
     canAdmitPeer: peer => { try { return canAdmitPeer(peer) === true; } catch { return false; } },
     emit(type, payload) {
       if (disposed) return;
@@ -221,3 +222,6 @@ export {createAdminController} from './admin-controller.js';
 export {createAdmissionCheckpoint, createAdmissionVerifier, AdmissionError} from './admission.js';
 
 export {createMembershipAuthority, createMemoryMembershipStore} from './membership.js';
+
+export {createMembershipAdmission} from './membership-admission.js';
+export {createMembershipRevocationVerifier} from './membership-proof.js';

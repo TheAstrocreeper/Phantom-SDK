@@ -5,10 +5,9 @@ identity-bound membership. It is separate from content publication/revocation an
 network retirement, but uses the same admin signing identity. Existing open
 networks, v1 admission grants, and invite formats remain compatible.
 
-This is the authority primitive, not a turnkey browser membership protocol.
-Share integration, authority request transport, active-connection teardown,
-revocation propagation, and compact pairing codes are not implemented here.
-Do not describe this addition alone as enforcing removal on established sessions.
+The browser SDK can enforce signed revocations on established connections through
+`createMembershipAdmission`. Share UI wiring, authority request transport, durable
+backend selection, and compact pairing codes remain application/integration work.
 
 ## Authority and persistence
 
@@ -85,22 +84,76 @@ security data and protect it against rollback or unauthorized modification.
   with `createAdmissionVerifier` does **not** check revocation. Legacy v1 grants
   remain valid in the generic verifier but are rejected by this authority.
 
-## Integration boundary
+## Browser integration and live enforcement
 
-The existing admission policy can obtain a grant with `authorize` and call the
-authority's `verify` method in its `verify` callback, through authenticated
-application-owned transport if the authority is remote. No code-to-invite lookup
-service is required by these primitives. They do require an available membership
-authority to issue/redeem grants and check current state.
+```js
+import {createMembershipAdmission} from '@phantom-local/core';
 
-Existing admission checkpoints cache approved identities, and established RTC
-channels outlive an admission check. Therefore wiring `authority.verify` into
-admission protects new checks but is insufficient for immediate Remove/Leave
-on live channels. A complete integration must distribute trustworthy membership
-changes, invalidate admission caches, stop transfers, and close revoked peers'
-existing channels. It must fail closed when current membership cannot be
-established. Authority failover requires transactional state and private signer
-custody; elected network leadership alone does not confer admin authority.
+const admission = createMembershipAdmission({
+  authorityPublicKey, // fixed trusted key; never accept a key asserted by a joiner
+  authorize: obtainOrReconnectMembership,
+  readRevocations: ({networkId, signal}) => fetchCurrentRevocations(networkId, signal),
+  // Optional fast path; polling still recovers missed notifications.
+  subscribeRevocations: ({networkId, onRevocation}) => subscribe(networkId, onRevocation),
+  leave: ({request}) => submitSignedLeaveRequest(request),
+});
+const sdk = createBrowserPhantom({identity: savedPeerIdentity, admission, /* doorways, etc. */});
+const network = await sdk.join(invite, {name: 'Device'});
+await network.refreshMembership(); // explicit refresh, in addition to polling
+await network.leave();             // signed self-revocation, then local shutdown
+```
+
+These callback names are application functions, not included backend endpoints.
+`authorize` receives the existing admission context, including network ID, full
+peer public key, operation, and abort signal. It must obtain a membership grant
+from the authority, using a single-use token for first entry or a signed reconnect
+request for an existing member. Creating a room requires bootstrapping the
+creator's membership too. An invite containing only room coordinates is not a
+membership credential.
+
+`readRevocations` must return a current, complete array of authority-signed
+revocations for the requested network over trusted transport. An old signed
+snapshot is not evidence that no later revocations exist. Authenticate the
+service/channel supplying the current snapshot. Polling defaults to five seconds;
+current-state knowledge has a 15-second freshness lease. Snapshot requests time
+out after the smaller of five seconds or the freshness lease and receive an
+abort signal. Source failure cannot extend the lease. The authority's
+`getRevocations()` and `onRevocation()` provide these callbacks when it is local;
+remote transports carry the same signed records. Every record is independently
+verified against the configured authority key and bound to a network, full peer
+identity, and membership generation. Forged or cross-network records cannot
+invalidate a member. Revocations are retained even if a later snapshot omits them.
+
+Once a valid revocation reaches a peer, its cached admission is invalidated,
+chat and SYS connections to that member are closed, pending direct transfers
+from that peer are stopped or reassigned to other sources, and distribution jobs
+and channels involving it are stopped. Incoming and outgoing frames check
+membership independently of teardown, including asynchronous binary processing
+and backpressure. Old channel callbacks and queued source reads cannot resume
+under a later membership generation. Current members can continue through the
+existing roster recovery logic; a fresh grant admits the previously removed
+identity again.
+
+The revoked device closes its own SDK network when it learns of the revocation.
+Membership expiry and a stale authority freshness lease also close an opted-in
+membership session. `membershipLost` is emitted before shutdown;
+`membershipChanged` reports verified remote membership changes. Notifications
+are fast when delivered, but this is not an instantaneous global cutoff: another
+peer may continue accepting traffic until it receives the record or exhausts its
+freshness lease. Browser timer suspension can delay cleanup; per-frame membership
+checks also reject expired/stale access when execution resumes.
+
+This live expiry lifecycle is opt-in through `createMembershipAdmission`.
+Legacy admission policies are not automatically converted to membership policies.
+Normal `network.close()` releases local resources without surrendering membership;
+use `network.leave()` to revoke it. A failed leave submission does not claim that
+membership was revoked. The browser SDK signs leave requests with the peer identity;
+the authority must still validate the exact signed request.
+
+Authority failover requires transactional state and private signer custody;
+elected network leadership alone does not confer admin authority. No
+code-to-invite lookup service is required by these primitives, but an available
+membership authority is needed to issue/redeem grants and refresh current state.
 
 Single-use claim tokens and compact room coordinates are distinct. A reusable
 room seed alone cannot enforce single-use admission. Link, QR, and future pairing

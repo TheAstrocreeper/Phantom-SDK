@@ -13,6 +13,7 @@ import {createDeferredSysOffers} from './deferred-sys-offers.js';
 import { acceptsSuccessorHandshake } from './successor-handshake.js';
 /** Peer networking engine: membership, leadership, signaling, and data channels. */
 export function createNetworkEngine(host) {
+  const canUsePeer=peer=>{try{return host.canUsePeer?host.canUsePeer(peer)===true:true;}catch{return false;}};
   const { window, document, localStorage, sessionStorage, location,
     WebSocket, RTCPeerConnection, crypto, setTimeout, clearTimeout,
     setInterval, clearInterval } = host;
@@ -7089,7 +7090,7 @@ export function createNetworkEngine(host) {
 
   function phantomCanUseChat(hKey) {
     const key = phantomShortKey(hKey);
-    if (!key) return false;
+    if (!key || !canUsePeer(key)) return false;
     if (phantomRelationshipRevoked.has(key)) return false;
     return getState(key) === VEIL.INSIDE;
   }
@@ -7635,6 +7636,7 @@ export function createNetworkEngine(host) {
   }
 
   function rtcSendDC(remoteHKey, obj) {
+    if(!canUsePeer(phantomShortKey(remoteHKey)))return false;
     const ent = phantomChatPeers.get(
       String(remoteHKey || "")
         .slice(0, 16)
@@ -8664,7 +8666,7 @@ export function createNetworkEngine(host) {
     };
 
     dc.onmessage = (ev) => {
-      if(phantomSysPeers.get(key)!==wiredEntry||wiredEntry?.pc!==wiredPc||wiredEntry?.sysdc!==dc)return;
+      if(phantomSysPeers.get(key)!==wiredEntry||wiredEntry?.pc!==wiredPc||wiredEntry?.sysdc!==dc||!canUsePeer(key))return;
       let msg = null;
       try {
         msg = JSON.parse(String(ev?.data || ""));
@@ -9642,6 +9644,7 @@ export function createNetworkEngine(host) {
     };
 
     dc.onmessage = async (ev) => {
+      if(phantomChatPeers.get(phantomShortKey(remoteHKey))?.dc!==dc||!canUsePeer(phantomShortKey(remoteHKey)))return;
       let raw = ev?.data;
 
       if (raw instanceof Blob) {
@@ -9652,6 +9655,7 @@ export function createNetworkEngine(host) {
         }
       }
 
+      if(phantomChatPeers.get(phantomShortKey(remoteHKey))?.dc!==dc||!canUsePeer(phantomShortKey(remoteHKey)))return;
       if (phantomIsArrayBuffer(raw) && !phantomCanUseChat(remoteHKey)) return;
       if (phantomIsArrayBuffer(raw)) {
         const ent = phantomChatPeers.get(
@@ -13478,6 +13482,19 @@ export function createNetworkEngine(host) {
       return;
     }
 
+    if(d.type==='PHANTOM_ADMISSION_REFRESH') {
+      const self=phantomShortKey(selfHKey);
+      const peers=new Set([...lastRoster,...phantomChatPeers.keys(),...phantomSysPeers.keys()]);
+      for(const key of peers)if(key!==self&&!host.canAdmitPeer(key)) {
+        // Trusted local checkpoint change, not an unverified remote removal request.
+        phantomTerminalExitCommand({member:key,room:videoId,reason:'membership_revoked'},'membership_revoked');
+        phantomRetireRemoteIncarnationTransport(key,'membership_revoked');
+        post('PHANTOM_MEMBERSHIP_REVOKED',{peerId:key});
+      }
+      emitSnapshot('membership_admission_refreshed');
+      return;
+    }
+
     if (d.type === "VEIL_SHELL_READY") {
       const requestedRoom = String(d.payload?.room || "").trim();
 
@@ -13898,7 +13915,7 @@ export function createNetworkEngine(host) {
       if (JSON.stringify(packet).length > 32768) return;
       const requested = d.payload?.to ? phantomShortKey(d.payload.to) : null;
       for (const [key, ent] of phantomSysPeers) {
-        if ((requested && key !== requested) || ent.sysdc?.readyState !== 'open' || phantomTemporarySysTransactions.has(key)) continue;
+        if ((requested && key !== requested) || !canUsePeer(key) || ent.sysdc?.readyState !== 'open' || phantomTemporarySysTransactions.has(key)) continue;
         try { ent.sysdc.send(JSON.stringify(packet)); } catch {}
       }
       return;
@@ -13910,7 +13927,7 @@ export function createNetworkEngine(host) {
       const requested = d.payload?.to ? phantomShortKey(d.payload.to) : null;
       const sent = new Set();
       for (const [key, ent] of phantomSysPeers) {
-        if ((requested && key !== requested) || ent.sysdc?.readyState !== 'open' || phantomTemporarySysTransactions.has(key)) continue;
+        if ((requested && key !== requested) || !canUsePeer(key) || ent.sysdc?.readyState !== 'open' || phantomTemporarySysTransactions.has(key)) continue;
         try { ent.sysdc.send(JSON.stringify(packet)); sent.add(key); } catch {}
       }
       for (const [key, ent] of phantomChatPeers) {

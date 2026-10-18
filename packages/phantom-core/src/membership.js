@@ -9,10 +9,12 @@ const clone = value => structuredClone(value);
  */
 export async function createMembershipAuthority({networkId, adminIdentity, store,
   verifyPeerRequest, crypto = globalThis.crypto, now = Date.now} = {}) {
-  if (!validKey(networkId) || !validKey(adminIdentity?.publicKey) || typeof adminIdentity.signMembership !== 'function')
+  if (!validKey(networkId) || !validKey(adminIdentity?.publicKey) || typeof adminIdentity.signMembership !== 'function' || typeof adminIdentity.signMembershipRevocation !== 'function')
     throw new TypeError('Network ID and membership-capable admin identity required');
   if (typeof store?.transaction !== 'function') throw new TypeError('Atomic durable membership store required');
   if (typeof verifyPeerRequest !== 'function') throw new TypeError('Authenticated peer request verifier required');
+  const listeners=new Set();
+  const notify=record=>{for(const fn of listeners)try{fn(clone(record));}catch{}};
   const verifier = createAdmissionVerifier({authorityPublicKey:adminIdentity.publicKey, crypto});
   const scope = `phantom-membership-v1:${networkId}:${adminIdentity.publicKey}`;
   const digest = async token => {
@@ -20,8 +22,9 @@ export async function createMembershipAuthority({networkId, adminIdentity, store
     return hex(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token))));
   };
   const transaction = fn => store.transaction(scope, async stored => {
-    const state = stored ?? {version:1, invites:{}, members:{}};
+    const state = stored ?? {version:1, invites:{}, members:{}, revocations:{}};
     if (state.version !== 1 || !state.invites || !state.members) throw new Error('Invalid membership store');
+    state.revocations??={};
     const result = await fn(state);
     return {state, result};
   });
@@ -32,6 +35,18 @@ export async function createMembershipAuthority({networkId, adminIdentity, store
   }
   async function grant(peerPublicKey, membershipId, expiresAt) {
     return adminIdentity.signMembership({networkId, peerPublicKey, membershipId, expiresAt});
+  }
+  async function revoke(peerPublicKey,membershipId,reason) {
+    if(!validKey(peerPublicKey)||typeof membershipId!=='string')throw new TypeError('Peer key and membership ID required');
+    const record=await transaction(async state=>{
+      const member=state.members[peerPublicKey];
+      if(!member||member.membershipId!==membershipId)throw new AdmissionError('Membership does not match');
+      const key=peerPublicKey+':'+membershipId;
+      if(state.revocations[key])return state.revocations[key];
+      const proof=await adminIdentity.signMembershipRevocation({networkId,peerPublicKey,membershipId,reason});
+      member.revoked=true;state.revocations[key]=proof;return proof;
+    });
+    notify(record);return record;
   }
   return Object.freeze({
     networkId, authorityPublicKey:adminIdentity.publicKey,
@@ -84,23 +99,16 @@ export async function createMembershipAuthority({networkId, adminIdentity, store
     async leave({request} = {}) {
       request = clone(request);
       const peerPublicKey = await authenticate(request, 'membership.leave', {membershipId:request?.membershipId});
-      return transaction(state => {
-        const member = state.members[peerPublicKey];
-        // Bind leave to a membership generation: replay cannot revoke a later reinvitation.
-        if (!member || request.membershipId !== member.membershipId) throw new AdmissionError('Membership does not match');
-        member.revoked = true;
-        return {peerPublicKey, membershipId:member.membershipId, reason:'left'};
-      });
+      return revoke(peerPublicKey, request.membershipId, 'left');
     },
-    // Privileged local API: expose only to the holder of adminIdentity, never as an unauthenticated RPC.
+    // Privileged local API; never expose as an unauthenticated RPC.
     async remove(peerPublicKey, membershipId) {
-      if (!validKey(peerPublicKey) || typeof membershipId !== 'string') throw new TypeError('Peer key and membership ID required');
-      return transaction(state => {
-        const member = state.members[peerPublicKey];
-        if (!member || member.membershipId !== membershipId) throw new AdmissionError('Membership does not match');
-        member.revoked = true;
-        return {peerPublicKey, membershipId, reason:'removed'};
-      });
+      return revoke(peerPublicKey, membershipId, 'removed');
+    },
+    async getRevocations() {return transaction(state=>Object.values(state.revocations));},
+    onRevocation(fn) {
+      if(typeof fn!=='function')throw new TypeError('Revocation listener required');
+      listeners.add(fn);return ()=>listeners.delete(fn);
     },
     async verify({networkId:room, peerPublicKey, credential}) {
       const c = clone(credential);

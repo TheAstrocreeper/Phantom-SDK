@@ -3,7 +3,7 @@ import {createAdminAuthorization} from './authorization.js';
 
 /** Separate distribution state. Never writes membership, election or private chat state. */
 export function createNetworkDistribution({core, networkId, adminPublicKey, lifecycle, runtime=globalThis,
-  emit=()=>{}, allowed=()=>true, readAdminOrders=async()=>[], checkAdmin, options={}}) {
+  emit=()=>{}, allowed=()=>true, canUsePeer=()=>true, readAdminOrders=async()=>[], checkAdmin, options={}}) {
   const maxConnections=options.maxConnections??3, batchSize=options.batchSize??8;
   const jobTimeoutMs=options.jobTimeoutMs??15000, intervalMs=options.intervalMs??250;
   if(!Number.isInteger(maxConnections)||maxConnections<1||maxConnections>16||!Number.isInteger(batchSize)||batchSize<1||batchSize>64||!Number.isFinite(jobTimeoutMs)||jobTimeoutMs<100||!Number.isFinite(intervalMs)||intervalMs<10)throw new TypeError('Invalid distribution limits');
@@ -19,10 +19,10 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
   const fire=(type,payload)=>{for(const fn of listeners)fn({type,payload});};
   function traceChunk(payload){if(options.traceChunks===true)emit('distributionChunkTrace',payload);}
   function error(error){if(!closed)emit('distributionError',{error:error.message});}
-  function frame(to,body){if(closed||!self()||!leader())return;const packet={networkId,from:self(),to,body};if(to===self()){void handle(self(),packet).catch(error);return;}core.command('PHANTOM_DIST_SEND',{to:isLeader()?to:leader(),frame:packet});}
+  function frame(to,body){if(closed||!self()||!leader()||!canUsePeer(to))return;const packet={networkId,from:self(),to,body};if(to===self()){void handle(self(),packet).catch(error);return;}core.command('PHANTOM_DIST_SEND',{to:isLeader()?to:leader(),frame:packet});}
   // The facade supplies the committed roster projection. Reading it never changes it.
   let roster=[];
-  function setRoster(rows){roster=rows.map(r=>r.hKey).filter(k=>/^[0-9a-f]{16}$/.test(k));}
+  function setRoster(rows){roster=rows.map(r=>r.hKey).filter(k=>/^[0-9a-f]{16}$/.test(k)&&canUsePeer(k));}
   function report(){for(const asset of assets.values())if(allowed(asset.id,asset.distributionId)&&asset.holders.has(self())){const sent=reported.get(asset.id)??new Set(),have=asset.holders.get(self());if(reported.has(asset.id)&&sent.size===have.size)continue;const indexes=[...have].filter(i=>!sent.has(i)).sort((a,b)=>a-b);for(let offset=0;offset<Math.max(1,indexes.length);offset+=128)frame(leader(),{type:'inventory',id:asset.id,total:asset.total,distributionId:asset.distributionId,proof:asset.proof,indexes:indexes.slice(offset,offset+128)});reported.set(asset.id,sent);}lastReport=Date.now();}
   function table(){return {sequence,leader:self(),assets:[...assets.values()].map(a=>({id:a.id,total:a.total,distributionId:a.distributionId,proof:a.proof,holders:[...a.holders].map(([peer,indexes])=>({peer,indexes:[...indexes].sort((a,b)=>a-b)}))}))};}
   function mirror(){if(!isLeader()||!dirty)return;dirty=false;sequence++;const mirror=state().mirror;if(mirror&&mirror!==self()){
@@ -34,7 +34,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
     // Opposite-direction jobs for the same asset can share a peer pair.
     // Requests belong to our receiving job; replies belong to our source job.
     const receiving=type==='SEND_DM'&&payload.sys==='PHANTOM_FILE_REQUEST';
-    const link=[...links.values()].find(l=>l.peer===payload.to&&l.job.asset===payload.file?.id&&
+    const link=[...links.values()].find(l=>canUsePeer(l.peer)&&l.peer===payload.to&&l.job.asset===payload.file?.id&&
       (receiving?l.job.receiver:l.job.source)===self()&&l.dc?.readyState==='open'&&
       (payload.file?.index===undefined||l.job.indexes.includes(payload.file.index)));
     if(type==='SEND_FILE_BIN_CHUNK'||type==='SEND_DM'&&['PHANTOM_FILE_REQUEST','PHANTOM_FILE_MISSING'].includes(payload.sys))traceChunk({direction:'send',kind:type==='SEND_FILE_BIN_CHUNK'?'binary':payload.sys,jobId:link?.job.id??null,peer:payload.to,index:payload.file?.index,available:!!link});
@@ -47,14 +47,14 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
     if(type==='SEND_DM'){link.dc.send(JSON.stringify({kind:'message',sys:payload.sys,file:payload.file}));return;}
     if(type==='SEND_FILE_BIN_CHUNK')void sendBinary(link,payload).catch(error);
   }};
-  const files=createFileDistribution({core:transport,crypto,allowed,emit:(type,payload)=>{
+  const files=createFileDistribution({core:transport,canUsePeer,crypto,allowed,emit:(type,payload)=>{
     if(type==='fileOffer'){const asset=assets.get(payload.manifest.id);if(!asset||asset.total!==payload.manifest.total||asset.distributionId!==payload.manifest.distributionId){error(Error('Authorized manifest metadata mismatch'));return;}const link=[...links.values()].find(l=>l.job.asset===payload.manifest.id&&l.job.receiver===self()&&l.peer===payload.from);if(link)startReceiver(link);}
     emit(type==='fileProgress'?'distributionProgress':type==='fileError'?'distributionError':'distributionFileEvent',{fileEvent:type,...payload});
   },chunkStore,...Object.fromEntries(Object.entries(options).filter(([key])=>['chunkStore','requestTimeoutMs','maxFileBytes'].includes(key)))});
   async function sendBinary(link,payload){let ok=false,reason='Distribution connection unavailable';try{
     const deadline=Date.now()+jobTimeoutMs;
-    while(link.dc.bufferedAmount>1024*1024){if(closed||links.get(link.job.id)!==link||Date.now()>deadline||!allowed(payload.file.id,payload.file.distributionId))throw Error('Distribution send stopped');await new Promise(r=>setTimeout(r,10));}
-    if(closed||links.get(link.job.id)!==link||!allowed(payload.file.id,payload.file.distributionId)||link.dc.readyState!=='open')throw Error('Distribution revoked or disconnected');
+    while(link.dc.bufferedAmount>1024*1024){if(closed||links.get(link.job.id)!==link||!canUsePeer(link.peer)||Date.now()>deadline||!allowed(payload.file.id,payload.file.distributionId))throw Error('Distribution send stopped');await new Promise(r=>setTimeout(r,10));}
+    if(closed||links.get(link.job.id)!==link||!canUsePeer(link.peer)||!allowed(payload.file.id,payload.file.distributionId)||link.dc.readyState!=='open')throw Error('Distribution revoked or disconnected');
     link.dc.send(JSON.stringify({kind:'binary',file:payload.file}));link.dc.send(payload.bytes);ok=true;
   }catch(e){reason=e.message;}fire('FILE_BIN_CHUNK_SENT',{...payload,ok,error:ok?undefined:reason});}
   function closeLink(id){pendingSignals.delete(id);closedJobs.set(id,Date.now());const link=links.get(id);if(!link)return;links.delete(id);if(link.readyTimer)clearTimeout(link.readyTimer);link.readyTimer=null;link.pc.onicecandidate=null;link.pc.onconnectionstatechange=null;link.pc.ondatachannel=null;if(link.dc){link.dc.onopen=null;link.dc.onmessage=null;link.dc.onclose=null;try{link.dc.close();}catch{}}try{link.pc.close();}catch{}link.pendingIce.length=0;link.binary=null;emit('distributionConnectionClosed',{jobId:id,peer:link.peer});}
@@ -88,7 +88,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
       if(link.job.source===self()&&!link.requireReady&&link.job.needsManifest)void files.share(link.peer,link.job.asset).catch(error);
       if(link.job.receiver===self()){if(link.requireReady)probeSource(link);startReceiver(link);}
     };
-    dc.onmessage=event=>{if(links.get(link.job.id)!==link||!allowed(link.job.asset,assets.get(link.job.asset)?.distributionId))return;
+    dc.onmessage=event=>{if(links.get(link.job.id)!==link||!canUsePeer(link.peer)||!allowed(link.job.asset,assets.get(link.job.asset)?.distributionId))return;
       if(event.data instanceof ArrayBuffer){const file=link.binary;link.binary=null;if(file?.id===link.job.asset){traceChunk({direction:'receive',kind:'binary',jobId:link.job.id,peer:link.peer,index:file.index});fire('FILE_BIN_CHUNK',{from:link.peer,file,bytes:event.data});}return;}
       let m;try{m=JSON.parse(event.data);}catch{return;}
       if(m.file?.id!==link.job.asset)return;
@@ -138,7 +138,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
     const proof=await policy.verify(body.proof);if(!proof||proof.action!=='content.publish'||proof.target!==body.id||!allowed(body.id,body.distributionId))return null;
     let asset=assets.get(body.id);if(!asset){if(assets.size>=32)return null;asset={id:body.id,total:body.total,distributionId:body.distributionId,proof,holders:new Map()};assets.set(body.id,asset);}else if(asset.total!==body.total||asset.distributionId!==body.distributionId||JSON.stringify(asset.proof.recipients)!==JSON.stringify(proof.recipients))return null;return asset;
   }
-  async function handle(from,packet){if(closed||!self()||packet?.networkId!==networkId||typeof packet.from!=='string'||!packet.body)return;await restore();if(closed)return;syncLeadership();
+  async function handle(from,packet){if(!canUsePeer(from)||!canUsePeer(packet?.from)||closed||!self()||packet?.networkId!==networkId||typeof packet.from!=='string'||!packet.body)return;await restore();if(closed||!canUsePeer(from)||!canUsePeer(packet?.from))return;syncLeadership();
     if(packet.to!==self()){
       // Only the current leader forwards, retaining the authenticated originating peer.
       if(isLeader()&&packet.from===from&&roster.includes(from)&&roster.includes(packet.to))core.command('PHANTOM_DIST_SEND',{to:packet.to,frame:packet});return;
@@ -174,7 +174,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
   }
   function finishJob(job){jobs.delete(job.id);dirty=true;for(const peer of [job.source,job.receiver])frame(peer,{type:'close',jobId:job.id});}
   function schedule(){if(!isLeader()||checkedToken!==leaderToken)return;
-    const live=new Set(roster),now=Date.now();
+    const live=new Set(roster.filter(canUsePeer)),now=Date.now();
     for(const job of [...jobs.values()])if(now>job.deadline||!live.has(job.source)||!live.has(job.receiver)||!allowed(job.asset,assets.get(job.asset)?.distributionId)){if(now>job.deadline)blockedUntil.set(job.source+':'+job.receiver,now+1000);finishJob(job);}
     for(const asset of assets.values()){
       if(!allowed(asset.id,asset.distributionId))continue;
@@ -184,6 +184,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
       for(const job of jobs.values())if(job.asset===asset.id)for(const i of job.indexes)copies.set(i,(copies.get(i)??0)+1);
       const rarity=i=>copies.get(i)??0;
       for(const receiver of roster){
+        if(!live.has(receiver))continue;
         if(asset.proof.recipients&&!asset.proof.recipients.includes(receiver))continue;
         const have=asset.holders.get(receiver)??new Set();if((have.size===asset.total&&(asset.total>0||asset.holders.has(receiver)))||[...jobs.values()].some(j=>j.receiver===receiver))continue;
         const counts=peer=>[...jobs.values()].filter(j=>j.source===peer||j.receiver===peer).length;
@@ -238,6 +239,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
   const off=core.onEvent(event=>{if(event.type==='PRESENCE_ROSTER')setRoster(event.payload?.list??[]);if(event.type==='PHANTOM_ADMIN_LINK_READY'){reported.clear();mirrored.clear();dirty=true;lastReport=0;}if(event.type==='PHANTOM_DIST')void handle(event.payload.from,event.payload.frame).catch(error);});
   const timer=setInterval(()=>{void tick().catch(error);},intervalMs);
   return {
+    dropPeer(peer){files.dropPeer(peer);roster=roster.filter(p=>p!==peer);for(const asset of assets.values())asset.holders.delete(peer);for(const job of [...jobs.values()])if(job.source===peer||job.receiver===peer)finishJob(job);for(const [id,link]of [...links])if(link.peer===peer){if(link.job.receiver===self()&&!link.completed)files.cancel(link.job.asset);closeLink(id);}for(const [id,job]of mirrorJobs)if(job.source===peer||job.receiver===peer)mirrorJobs.delete(id);dirty=true;},
     restore,
     async getFile(id){await restore();const asset=assets.get(id);if(closed||!asset||asset.holders.get(self())?.size!==asset.total)throw Error('No complete local distribution copy');return files.getFile(id);},
     async publish(file,{authorization,recipients,...settings}={}){if(closed)throw Error('Distribution closed');if(!state().admitted)throw Error('Wait for network admission before distributing');if(!policy)throw Error('Distribution requires an admin authority');await restore();if(closed)throw Error('Distribution closed');

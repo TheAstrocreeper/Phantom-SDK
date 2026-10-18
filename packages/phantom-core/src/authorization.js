@@ -1,4 +1,5 @@
 /** Admin proofs are independent of transport identities and elected roles. */
+import {membershipRevocationStatement} from './membership-proof.js';
 import {admissionStatement} from './admission.js';
 const hex = bytes => Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
 function bytes(value, length) {
@@ -35,6 +36,11 @@ function adminSigner(privateKey, publicKey, crypto) {
       const credential = {version:2,networkId,peerPublicKey,membershipId,expiresAt};
       const signature = hex(new Uint8Array(await crypto.subtle.sign('Ed25519',privateKey,admissionStatement(credential))));
       return Object.freeze({...credential,signature});
+    },
+    async signMembershipRevocation({networkId,peerPublicKey,membershipId,reason}) {
+      const record={version:1,networkId,peerPublicKey,membershipId,reason};
+      const signature=hex(new Uint8Array(await crypto.subtle.sign('Ed25519',privateKey,membershipRevocationStatement(record))));
+      return Object.freeze({...record,signature});
     },
     async exportSeed() { return {version:1, publicKey, privateKey:hex(new Uint8Array(await crypto.subtle.exportKey('pkcs8',privateKey)))}; },
     async sign({networkId, action, target, operationId, recipients}) {

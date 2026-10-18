@@ -82,7 +82,7 @@ A server may additionally enforce authorization before upgrading a connection, b
 
 - All participants must use the same trusted admission policy. Restricted admission is an application configuration, not a flag a joiner can remove from an invite.
 - The common gate supports Nostr, WebSocket/CF-style, and custom typed or raw adapters. Relay wire compatibility still matters: a server that strips the proof fields cannot admit restricted peers. Missing proofs fail closed. Open mode retains existing behavior.
-- Expiry blocks new admission and signaling; it does not disconnect already admitted peers or cancel established file transfers. This is an entry checkpoint, not a complete membership revocation system. There is no automatic credential renewal yet.
+- For legacy admission policies, expiry blocks new admission and signaling; it does not automatically disconnect already admitted peers or cancel established file transfers. For opt-in membership policies, [membership administration](membership.md) adds signed revocation, live connection/transfer teardown, and freshness leases. There is no automatic credential renewal yet.
 - Public relays may receive unauthorized messages from modified clients. Phantom rejects those messages before they affect its network; it cannot control the public relay.
 - Checks apply to honest SDK participants. An authorized participant can redistribute downloaded files or run modified software that leaks them.
 
