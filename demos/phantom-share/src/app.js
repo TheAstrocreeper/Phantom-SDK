@@ -1,3 +1,4 @@
+import { attachRampTest } from "./ramp-test.js";
 import { leaveAndReset } from "./session-cleanup.js";
 import { createDiagnostics } from "./diagnostics.js";
 import { createBrowserIdentity as createBrowserIdentity } from "../../../packages/phantom-doorways/src/browser-entry.js";
@@ -10,14 +11,38 @@ import {
 } from "./session.js";
 import { connectShare, codeFromInput } from "./membership.js";
 let diagnosticStorage;
-try { diagnosticStorage = sessionStorage; } catch {}
-const diagnostics = createDiagnostics({storage:diagnosticStorage});
-const recordEnvironment = type => { diagnostics.record(type,{visibility:document.visibilityState,online:navigator.onLine}); diagnostics.flush(); };
-for(const type of ['pageshow','online','offline']) window.addEventListener(type,()=>recordEnvironment(type));
-for(const type of ['visibilitychange','freeze','resume']) document.addEventListener(type,()=>recordEnvironment(type));
-window.addEventListener('error',e=>diagnostics.record('javascript-error',{message:e.message}));
-window.addEventListener('unhandledrejection',e=>diagnostics.record('unhandled-rejection',{message:e.reason?.message||String(e.reason)}));
-setInterval(()=>diagnostics.flush(),1000);
+try {
+  diagnosticStorage = sessionStorage;
+} catch {}
+const diagnostics = createDiagnostics({ storage: diagnosticStorage });
+const recordEnvironment = (type) => {
+  diagnostics.record(type, {
+    visibility: document.visibilityState,
+    online: navigator.onLine,
+  });
+  diagnostics.flush();
+};
+for (const type of ["pageshow", "online", "offline"])
+  window.addEventListener(type, () => recordEnvironment(type));
+for (const type of ["visibilitychange", "freeze", "resume"])
+  document.addEventListener(type, () => recordEnvironment(type));
+window.addEventListener("error", (e) =>
+  diagnostics.record("javascript-error", { message: e.message }),
+);
+window.addEventListener("unhandledrejection", (e) =>
+  diagnostics.record("unhandled-rejection", {
+    message: e.reason?.message || String(e.reason),
+  }),
+);
+setInterval(() => diagnostics.flush(), 1000);
+let rampControl = null,
+  rampBusy = false,
+  lastRampReport = null;
+try {
+  lastRampReport = JSON.parse(
+    diagnosticStorage?.getItem("phantom-ramp-report") || "null",
+  );
+} catch {}
 const JT = { default: QRCode };
 var byId = (e) => document.getElementById(e),
   recipientModes = new Map(),
@@ -50,7 +75,10 @@ var byId = (e) => document.getElementById(e),
   setStatus = (e) => {
     byId("connection-status").textContent = e;
   },
-  showError = (e) => { diagnostics.record("app-error",{message:e?.message||String(e)}); setStatus(e?.message || String(e)); },
+  showError = (e) => {
+    diagnostics.record("app-error", { message: e?.message || String(e) });
+    setStatus(e?.message || String(e));
+  },
   $T = (e) =>
     e >= 1048576
       ? (e / 1048576).toFixed(1) + " MB"
@@ -86,22 +114,38 @@ function readyPeers() {
   return peers().filter((e) => e.connection === "ready");
 }
 function canShare() {
-  if(!sharing||!network||leaving)return false;
-  const selected=selectRecipients(peers(),recipientModes),ready=new Set(readyPeers().map(p=>p.id));
-  return selected.length>0&&selected.every(id=>ready.has(id));
+  if (!sharing || !network || leaving || rampBusy) return false;
+  const selected = selectRecipients(peers(), recipientModes),
+    ready = new Set(readyPeers().map((p) => p.id));
+  return selected.length > 0 && selected.every((id) => ready.has(id));
 }
 function renderAvailability() {
-  const available=canShare(),ready=readyPeers().length;
-  const zone=byId('portal-drop-zone');
-  zone.classList.toggle('drop-unavailable',!available);
-  zone.setAttribute('aria-disabled',String(!available));
-  zone.tabIndex=available?0:-1;
-  byId('file-input').disabled=!available;
-  if(!available)zone.classList.remove('portal-drop-active');
-  byId('session-heading').textContent=ready?'Connected':connecting?'Connecting…':network?(peers().length?'Connecting to devices…':'No devices connected'):'Not connected';
-  byId('session-dot').classList.toggle('status-idle',!ready);
-  byId('leave-action').disabled=leaving||(!network&&!connecting);
-  byId('leave-label').textContent=leaving?'Leaving…':connecting?'Cancel':network&&!peers().length?'Leave / reset':'Leave';
+  const available = canShare(),
+    ready = readyPeers().length;
+  const zone = byId("portal-drop-zone");
+  zone.classList.toggle("drop-unavailable", !available);
+  zone.setAttribute("aria-disabled", String(!available));
+  zone.tabIndex = available ? 0 : -1;
+  byId("file-input").disabled = !available;
+  if (!available) zone.classList.remove("portal-drop-active");
+  byId("session-heading").textContent = ready
+    ? "Connected"
+    : connecting
+      ? "Connecting…"
+      : network
+        ? peers().length
+          ? "Connecting to devices…"
+          : "No devices connected"
+        : "Not connected";
+  byId("session-dot").classList.toggle("status-idle", !ready);
+  byId("leave-action").disabled = leaving || (!network && !connecting);
+  byId("leave-label").textContent = leaving
+    ? "Leaving…"
+    : connecting
+      ? "Cancel"
+      : network && !peers().length
+        ? "Leave / reset"
+        : "Leave";
 }
 function updateTargetLabel() {
   let e = peers(),
@@ -289,7 +333,10 @@ async function ensureInvitation() {
 async function connect(code = "") {
   if (connecting || network) return;
   const generation = ++connectionGeneration;
-  diagnostics.record("connect-start",{generation,role:code?"guest":"owner"});
+  diagnostics.record("connect-start", {
+    generation,
+    role: code ? "guest" : "owner",
+  });
   connecting = true;
   joinController = new AbortController();
   byId("connect-action").disabled = true;
@@ -305,9 +352,16 @@ async function connect(code = "") {
       code,
       name: displayName(),
       signal: joinController.signal,
-      onEvent: event => { if(/MEMBERSHIP|PRESENCE|CONNECTION|ADMISSION|RTC|SIGNAL|RECOVER|CLOSED|ERROR/.test(event.type)) diagnostics.record(event.type,event.payload); },
+      onEvent: (event) => {
+        if (
+          /MEMBERSHIP|PRESENCE|CONNECTION|ADMISSION|RTC|SIGNAL|RECOVER|CLOSED|ERROR/.test(
+            event.type,
+          )
+        )
+          diagnostics.record(event.type, event.payload);
+      },
       onState: (state) => {
-        diagnostics.record("network-state",state);
+        diagnostics.record("network-state", state);
         if (generation === connectionGeneration)
           setStatus(connectionText(state));
       },
@@ -328,6 +382,17 @@ async function connect(code = "") {
     }
     shareConnection = connection;
     network = connection.network;
+    rampControl = attachRampTest({
+      network,
+      onRequest: (peer, settings) => {
+        if (hasActiveTransfers() || document.visibilityState !== "visible")
+          return false;
+        return confirm(
+          `Run a raw connection ramp test? This profile may use up to ${settings?.maxStageBytes === 1073741824 ? "18" : "3.5"} GiB of data. Keep this page visible.`,
+        );
+      },
+      onUpdate: updateRampTest,
+    });
     admin = connection.admin;
     invite = network.invite;
     const context = parseInvite(invite);
@@ -336,26 +401,75 @@ async function connect(code = "") {
       admin: admin,
       adminPublicKey: context.adminPublicKey,
       onChange: () => {
-        for(const asset of sharing?.assets.values()||[]) diagnostics.record('transfer-state',{id:asset.id,size:asset.size,status:asset.status,received:asset.received,total:asset.total,outgoing:asset.outgoing});
+        if (rampBusy && hasActiveTransfers()) rampControl?.cancel();
+        for (const asset of sharing?.assets.values() || [])
+          diagnostics.record("transfer-state", {
+            id: asset.id,
+            size: asset.size,
+            status: asset.status,
+            received: asset.received,
+            total: asset.total,
+            outgoing: asset.outgoing,
+          });
         renderPeers();
         renderTransfers();
       },
       onError: showError,
     });
-    network.on("state", state => {
-      if(generation!==connectionGeneration)return;
-      diagnostics.record("network-state",state);
-      if(['failed','retired','closed'].includes(state.state)&&!leaving){cleanupSession(state.state==='retired'?'Session retired. Connect to start again.':'Session ended. Connect to start again.');return;}
-      renderPeers();setStatus(connectionText(state));
+    network.on("state", (state) => {
+      if (generation !== connectionGeneration) return;
+      diagnostics.record("network-state", state);
+      if (["failed", "retired", "closed"].includes(state.state) && !leaving) {
+        cleanupSession(
+          state.state === "retired"
+            ? "Session retired. Connect to start again."
+            : "Session ended. Connect to start again.",
+        );
+        return;
+      }
+      renderPeers();
+      setStatus(connectionText(state));
     });
-    network.on('peerConnection',()=>{renderPeers();if(network)setStatus(connectionText(network.getState()));});
-    for(const type of ['filePreparationProgress','filePublished','fileProgress','fileRetry','fileError','fileComplete','distributionProgress','distributionFileEvent','distributionConnectionReused','distributionJob','distributionJobFailed','distributionError','distributionComplete','distributionConnectionOpened','distributionConnectionClosed','distributionConnectionFailed','controlError']) network.on(type,data=>diagnostics.record(type,data));
-    network.on("membershipChanged", event => { diagnostics.record("membershipChanged",event); renderPeers(); });
+    network.on("peerConnection", () => {
+      renderPeers();
+      if (network) setStatus(connectionText(network.getState()));
+    });
+    for (const type of [
+      "filePreparationProgress",
+      "filePublished",
+      "fileProgress",
+      "fileRetry",
+      "fileError",
+      "fileComplete",
+      "distributionProgress",
+      "distributionFileEvent",
+      "distributionConnectionReused",
+      "distributionJob",
+      "distributionJobFailed",
+      "distributionError",
+      "distributionComplete",
+      "distributionConnectionOpened",
+      "distributionConnectionClosed",
+      "distributionConnectionFailed",
+      "controlError",
+    ])
+      network.on(type, (data) => diagnostics.record(type, data));
+    network.on("membershipChanged", (event) => {
+      diagnostics.record("membershipChanged", event);
+      renderPeers();
+    });
     network.on("event", (event) => {
-      if (event.type === "PRESENCE_ROSTER") { diagnostics.record("peer-summary",{connected:peers().length,ready:readyPeers().length}); renderPeers(); }
+      if (event.type === "PRESENCE_ROSTER") {
+        diagnostics.record("peer-summary", {
+          connected: peers().length,
+          ready: readyPeers().length,
+        });
+        renderPeers();
+      }
     });
     network.on("membershipLost", (event) => {
-      diagnostics.record("membershipLost",event); diagnostics.flush();
+      diagnostics.record("membershipLost", event);
+      diagnostics.flush();
       if (!leaving && generation === connectionGeneration) {
         const reason =
           event.reason === "revoked"
@@ -396,7 +510,12 @@ async function connect(code = "") {
   }
 }
 function connectionText(e) {
-  if(network&&!peers().length&&!['failed','retired','closed'].includes(e.state))return 'No devices connected · Invite a device or Leave to reset';
+  if (
+    network &&
+    !peers().length &&
+    !["failed", "retired", "closed"].includes(e.state)
+  )
+    return "No devices connected · Invite a device or Leave to reset";
   return e.state === "admitted"
     ? "Connected \xB7 keep this tab open while sharing"
     : e.state === "failed"
@@ -441,7 +560,11 @@ async function copyShareLink() {
   }
 }
 function cleanupSession(message = "You left the session.") {
-  diagnostics.record("session-reset",{message});diagnostics.flush();
+  diagnostics.record("session-reset", { message });
+  diagnostics.flush();
+  rampControl?.close();
+  rampControl = null;
+  rampBusy = false;
   ++connectionGeneration;
   joinController?.abort();
   clearTimeout(invitationTimer);
@@ -483,10 +606,24 @@ async function leaveNetwork() {
   }
   leaving = true;
   renderAvailability();
-  const current=network;
+  const current = network;
   try {
-    await leaveAndReset({leave:()=>current.leave(),onError:error=>diagnostics.record('leave-unconfirmed',{message:error.message}),reset:confirmed=>cleanupSession(confirmed?'You left the session.':'Session closed locally; Leave could not be confirmed.')});
-  }finally{leaving=false;invitationPending=null;renderAvailability();}
+    await leaveAndReset({
+      leave: () => current.leave(),
+      onError: (error) =>
+        diagnostics.record("leave-unconfirmed", { message: error.message }),
+      reset: (confirmed) =>
+        cleanupSession(
+          confirmed
+            ? "You left the session."
+            : "Session closed locally; Leave could not be confirmed.",
+        ),
+    });
+  } finally {
+    leaving = false;
+    invitationPending = null;
+    renderAvailability();
+  }
 }
 async function removeDevice(id) {
   if (!shareConnection?.isOwner) return;
@@ -515,7 +652,8 @@ async function sendFiles(e) {
   }
   for (let l of e)
     try {
-      (diagnostics.record("file-selected",{size:l.size,type:l.type}), setStatus("Preparing " + l.name + "\u2026"),
+      (diagnostics.record("file-selected", { size: l.size, type: l.type }),
+        setStatus("Preparing " + l.name + "\u2026"),
         await sharing.publish(l, a),
         setStatus("Sharing " + l.name));
     } catch (p) {
@@ -527,7 +665,10 @@ function triggerFileInput() {
   byId("file-input").click();
 }
 function handleDragOver(e) {
-  if(!canShare()){e.preventDefault();return;}
+  if (!canShare()) {
+    e.preventDefault();
+    return;
+  }
   (e.preventDefault(),
     byId("portal-drop-zone").classList.add("portal-drop-active"));
 }
@@ -538,7 +679,7 @@ function handleDragLeave(e) {
 async function handleDrop(e) {
   (e.preventDefault(),
     handleDragLeave(e),
-    canShare() && await sendFiles(Array.from(e.dataTransfer.files)));
+    canShare() && (await sendFiles(Array.from(e.dataTransfer.files))));
 }
 function promptName() {
   (byId("name-dialog").showModal(),
@@ -617,14 +758,112 @@ byId("name-form").onsubmit = async (e) => {
 byId("name-dialog").addEventListener("cancel", (e) => {
   displayName() || e.preventDefault();
 });
-byId('download-logs').onclick = () => {
-  recordEnvironment('export');
-  diagnostics.record('connection-summary',{state:network?.getState()?.state,connected:peers().length,ready:readyPeers().length});
-  const url=URL.createObjectURL(new Blob([JSON.stringify(diagnostics.report(),null,2)],{type:'application/json'}));
-  const link=document.createElement('a');link.href=url;link.download='phantom-share-'+new Date().toISOString().replace(/[:.]/g,'-')+'.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),60000);
+function hasActiveTransfers() {
+  return [...(sharing?.assets.values() || [])].some(
+    (asset) => !["sent", "received", "failed"].includes(asset.status),
+  );
+}
+function updateRampTest(update) {
+  rampBusy = update.status === "Complete" ? false : update.busy;
+  byId("ramp-status").textContent = update.status;
+  if (update.busy && !byId("ramp-dialog").open) byId("ramp-dialog").showModal();
+  if (update.status === "Preparing raw test") {
+    byId("ramp-results").textContent = "";
+    byId("ramp-download").disabled = true;
+  }
+  byId("ramp-start").disabled = !!rampBusy;
+  byId("ramp-stop").disabled = !rampBusy;
+  if (update.row) {
+    const r = update.row;
+    byId("ramp-results").textContent +=
+      `${(r.windowBytes / 1048576).toFixed(2)} MiB window · ${(r.receiverBytesPerSecond / 1e6).toFixed(2)} MB/s · RTT ${r.rttMedianMs?.toFixed(1) ?? "n/a"} ms${r.limitedByByteBudget ? " · BYTE BUDGET REACHED" : ""}\n`;
+    diagnostics.record("ramp-stage", {
+      bytes: r.receivedBytes,
+      elapsedMs: r.completionMs,
+    });
+  }
+  if (update.report) {
+    lastRampReport = {
+      ...update.report,
+      testConditions: byId("ramp-context").value,
+      scope:
+        "Separate raw RTC connection; compare selected routes. Per-path experimental results, not universal SDK defaults.",
+    };
+    try {
+      diagnosticStorage?.setItem(
+        "phantom-ramp-report",
+        JSON.stringify(lastRampReport),
+      );
+    } catch {}
+    byId("ramp-download").disabled = false;
+    for (const direction of update.report.directions)
+      byId("ramp-results").textContent +=
+        `${direction.direction}: ${JSON.stringify(direction.recommendation)}\n`;
+  }
+  renderAvailability();
+}
+byId("connection-test").onclick = () => {
+  byId("ramp-peer").replaceChildren(
+    ...readyPeers().map((peer) => new Option(peer.name, peer.id)),
+  );
+  byId("ramp-start").disabled =
+    rampBusy || !readyPeers().length || hasActiveTransfers();
+  byId("ramp-download").disabled = rampBusy || !lastRampReport;
+  byId("ramp-dialog").showModal();
+};
+byId("ramp-start").onclick = () => {
+  if (!rampControl || hasActiveTransfers()) {
+    byId("ramp-status").textContent =
+      "Connect a ready peer and finish file transfers first.";
+    return;
+  }
+  byId("ramp-results").textContent = "";
+  void rampControl
+    .start(byId("ramp-peer").value, {
+      extended: byId("ramp-profile").value === "extended",
+    })
+    .catch((error) => {
+      byId("ramp-status").textContent = error.message;
+    });
+};
+byId("ramp-stop").onclick = () => rampControl?.cancel();
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState !== "visible" && rampBusy) rampControl?.cancel();
+});
+byId("ramp-download").onclick = () => {
+  if (!lastRampReport) return;
+  const report = { ...lastRampReport, diagnostics: diagnostics.report() };
+  const url = URL.createObjectURL(
+    new Blob([JSON.stringify(report, null, 2)], { type: "application/json" }),
+  );
+  const link = document.createElement("a");
+  link.href = url;
+  link.download =
+    "phantom-ramp-" + new Date().toISOString().replace(/[:.]/g, "-") + ".json";
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+};
+byId("download-logs").onclick = () => {
+  recordEnvironment("export");
+  diagnostics.record("connection-summary", {
+    state: network?.getState()?.state,
+    connected: peers().length,
+    ready: readyPeers().length,
+  });
+  const url = URL.createObjectURL(
+    new Blob([JSON.stringify(diagnostics.report(), null, 2)], {
+      type: "application/json",
+    }),
+  );
+  const link = document.createElement("a");
+  link.href = url;
+  link.download =
+    "phantom-share-" + new Date().toISOString().replace(/[:.]/g, "-") + ".json";
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
 };
 window.addEventListener("pagehide", () => {
-  recordEnvironment('pagehide');
+  recordEnvironment("pagehide");
   (shareConnection?.close(),
     sharing?.close(),
     network?.close(),

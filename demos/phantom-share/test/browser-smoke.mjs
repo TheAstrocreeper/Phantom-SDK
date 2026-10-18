@@ -270,11 +270,16 @@ try {
   assert.equal(await mobile.page.locator('#session-heading').textContent(),'Not connected');
   await mobile.page.locator('#portal-drop-zone').click({force:true});
   assert.equal(await mobile.page.locator('#invite-modal').evaluate(el=>el.classList.contains('hidden')),true);
+  await mobile.page.locator('#connection-test').click();
+  assert.equal(await mobile.page.locator('#ramp-start').isDisabled(),true);
+  assert.equal(await mobile.page.locator('#ramp-dialog').evaluate(el=>el.open),true);
+  await mobile.page.screenshot({path:out+'/ramp-panel-mobile.png'});
+  await mobile.page.locator('#ramp-dialog').evaluate(el=>el.close());
   const logDownload = mobile.page.waitForEvent('download');
   await mobile.page.locator('#download-logs').click();
   const download = await logDownload;
   const report = JSON.parse(await readFile(await download.path(), 'utf8'));
-  assert.equal(report.build, 'share-session-cleanup-v3');
+  assert.equal(report.build, 'share-ramp-test-v4');
   assert.ok(report.rows.some(row=>row.type==='export'));
   assert.ok(report.rows.some(row=>row.type==='page-start'));
   console.log('disconnected mobile page exports diagnostic JSON');

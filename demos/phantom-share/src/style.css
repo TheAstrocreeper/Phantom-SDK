@@ -4,3 +4,6 @@
 #portal-drop-zone.drop-unavailable {filter:grayscale(1);opacity:.4;cursor:not-allowed;border-color:rgba(148,163,184,.3);}
 #portal-drop-zone.drop-unavailable * {animation:none!important;}
 #session-dot.status-idle {animation:none;background:#64748b;}
+
+#ramp-dialog {max-height:calc(100dvh - 2rem);overflow:auto;max-width:36rem;width:calc(100% - 2rem);}
+#ramp-peer,#ramp-profile,#ramp-peer option,#ramp-profile option {background:#151720;color:#f3f4f6;padding:.5rem;border-radius:.5rem;}

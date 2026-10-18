@@ -146,6 +146,7 @@
     <!-- FOOTER CREDIT -->
     <footer class="py-4 text-center text-xs font-mono text-phantom-mutedIvory/60 border-t border-white/5 bg-phantom-deep/80 backdrop-blur-md">
         <span><a href="https://github.com/TheAstrocreeper/Phantom-SDK" target="_blank" rel="noopener noreferrer" class="hover:text-phantom-ivory transition-colors">Powered by <strong class="text-phantom-mutedIvory">Phantom-SDK</strong></a> • Connect. Drop. Share.</span>
+        <button id="connection-test" class="ml-3 underline hover:text-white" type="button">Connection test</button>
         <button id="download-logs" class="ml-3 underline hover:text-white" type="button">Download logs</button>
     </footer>
 
@@ -194,3 +195,13 @@
 <dialog id="history-dialog"><h2 class="text-lg font-display mb-3">Transfers</h2><div id="history-list"></div><form method="dialog"><button>Close</button></form></dialog>
 </body>
 </html>
+
+<dialog id="ramp-dialog"><h2 class="text-lg font-display mb-3">Connection ramp test</h2>
+<p class="text-xs mb-3">Raw RTC test in both directions: 256 KiB → 1 MiB → 4 MiB → 16 MiB, then back down. About 45–60 seconds plus draining. Keep both pages visible and pause file transfers.</p>
+<p class="text-xs mb-3">Standard: up to 3.5 GiB. Extended: up to 18 GiB of generated test traffic; no file is saved on the receiver. Limits are experimental test bounds, not SDK defaults. Results describe this route and run.</p>
+<label class="text-xs" for="ramp-peer">Peer</label><select id="ramp-peer" class="native-action w-full"></select>
+<label class="text-xs" for="ramp-profile">Sweep range</label><select id="ramp-profile" class="native-action w-full"><option value="standard">Standard: up to 16 MiB in flight</option><option value="extended">Extended: up to 64 MiB in flight</option></select>
+<label class="text-xs" for="ramp-context">Test conditions (optional)</label><input id="ramp-context" class="native-action w-full" placeholder="e.g. Android Wi-Fi → Linux Ethernet, home LAN" maxlength="200">
+<div class="flex gap-2 my-3"><button id="ramp-start" class="native-action">Start test</button><button id="ramp-stop" class="native-action" disabled>Stop</button><button id="ramp-download" class="native-action" disabled>Download results</button></div>
+<p id="ramp-status" role="status" class="text-xs mb-3">Connect a ready peer to begin.</p><pre id="ramp-results" class="text-xs" style="white-space:pre-wrap;max-height:35vh;overflow:auto"></pre>
+<form method="dialog"><button class="native-action">Close panel</button></form></dialog>
