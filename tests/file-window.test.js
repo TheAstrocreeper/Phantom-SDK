@@ -9,9 +9,17 @@ async function fixture({window=8,sourceWindow=window,delay=0,timeout=1000,drop=(
  const cores=ids.map((id,i)=>({onEvent(fn){listeners[i].add(fn);return()=>listeners[i].delete(fn);},command(type,p){const j=ids.indexOf(p.to),deliver=e=>{for(const f of listeners[j])f(e);};if(type==='SEND_DM'){if(p.sys==='PHANTOM_FILE_REQUEST')requests.push(p.file.index);schedule(()=>deliver({type:'INCOMING_MSG',payload:{from:id,...p}}));}else{sent.push(p.file.index);if(!drop(p.file.index,requests.filter(x=>x===p.file.index).length))schedule(()=>deliver({type:'FILE_BIN_CHUNK',payload:{from:id,file:p.file,bytes:p.bytes}}));queueMicrotask(()=>{for(const f of listeners[i])f({type:'FILE_BIN_CHUNK_SENT',payload:{to:p.to,file:p.file,ok:true}});});}}}));
  const services=cores.map((core,i)=>createFileDistribution({core,canUsePeer:i===1?receiverAllowed:()=>true,requestWindow:i===0?sourceWindow:window,requestTimeoutMs:timeout,...(i===1&&receiverStore?{chunkStore:receiverStore}:{}),emit:(type,data)=>{if(type==='fileTransferTiming')timings.push({side:i,...data});if(i===1){events.push({type,data});if(type==='fileOffer')offered(data);}}}));
  const bytes=new Uint8Array(length);crypto.getRandomValues(bytes);const blob=new Blob([bytes]),source={size:blob.size,slice(...args){const part=blob.slice(...args);return {async arrayBuffer(){if(!prepared||!readDelay)return part.arrayBuffer();reading++;peakReads=Math.max(peakReads,reading);try{await new Promise(r=>setTimeout(r,readDelay));return await part.arrayBuffer();}finally{reading--;}}};}};const m=await services[0].publish(source,{chunkSize:1024});prepared=true;await services[0].share(ids[1],m.id);await offer;
- return {requests,events,timings,sent,get peakReads(){return peakReads;},cancel:()=>services[1].cancel(m.id),m,bytes,download:()=>services[1].request(m.id,{peers:[ids[0]]}),close(){services.forEach(s=>s.close());for(const t of timers)clearTimeout(t);}};
+ return {requests,events,timings,sent,get peakReads(){return peakReads;},cancel:()=>services[1].cancel(m.id),m,bytes,download:(options={})=>services[1].request(m.id,{peers:[ids[0]],...options}),close(){services.forEach(s=>s.close());for(const t of timers)clearTimeout(t);}};
 }
 test('window queues eight unique requests before any delayed response and verifies all bytes',async()=>{const f=await fixture({delay:8});try{const p=f.download();await tick();assert.deepEqual(f.requests,[0,1,2,3,4,5,6,7]);const blob=await p;assert.deepEqual(new Uint8Array(await blob.arrayBuffer()),f.bytes);assert.equal(f.events.filter(e=>e.type==='fileProgress').length,32);}finally{f.close();}});
+test('per-transfer window overrides the configured default and rejects invalid values before requesting',async()=>{
+ const f=await fixture({delay:10});try{
+  for(const requestWindow of [0,33,1.5])await assert.rejects(f.download({requestWindow}),/request window/);
+  assert.equal(f.requests.length,0);
+  const result=f.download({requestWindow:32});await tick();
+  assert.equal(f.requests.length,32);assert.deepEqual(new Uint8Array(await (await result).arrayBuffer()),f.bytes);
+ }finally{f.close();}
+});
 test('opt-in window 32 stays within receive admission and is served by a default-window source without retries',async()=>{
  const store=createMemoryChunkStore();let release,started=0;const gate=new Promise(r=>release=r);
  const f=await fixture({window:32,sourceWindow:8,length:65536,receiverStore:{get:store.get,async put(...args){started++;await gate;return store.put(...args);}}});

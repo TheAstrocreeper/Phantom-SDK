@@ -13795,7 +13795,9 @@ export function createNetworkEngine(host) {
         }
 
         const channel = phantomChatPeers.get(phantomShortKey(to))?.dc;
+        const bufferWaitStartedAt=performance.now();
         const drained = await rtcWaitDCDrain(channel,bytes.byteLength);
+        const bufferWaitMs=performance.now()-bufferWaitStartedAt;
         if (!drained || channel !== phantomChatPeers.get(phantomShortKey(to))?.dc || !phantomCanUseChat(to) || host.canSendFile?.(file) === false) {
           postLocal('FILE_BIN_CHUNK_SENT', {ok:false,to,file,error:'File channel unavailable'});
           return;
@@ -13821,6 +13823,7 @@ export function createNetworkEngine(host) {
 
         postLocal("FILE_BIN_CHUNK_SENT", {
           ok: !!binOk,
+          bufferWaitMs,
           to,
           file: {
             id: file.id,

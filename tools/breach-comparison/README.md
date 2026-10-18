@@ -23,6 +23,12 @@ that the larger window does not bypass the receiver's memory/storage bound,
 including a source using its default request window. A larger configured window
 is not a demonstrated device throughput fix.
 
+`network.requestFile(id, {peers, requestWindow: 32})` overrides the configured
+window for that request only, with the same 1–32 validation and receiver bounds.
+The restored `demos/phantom-breach` uses this to compare 8/32 over one existing
+connection and gives every send a fresh distribution identity to avoid cache
+hits. Its README documents the procedure.
+
 Analyze saved receiver reports without another device run:
 
 ```sh
