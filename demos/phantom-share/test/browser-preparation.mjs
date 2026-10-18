@@ -217,8 +217,8 @@ try {
     nativeDialogs++;
     void dialog.dismiss();
   });
-  async function incomingTest() {
-    return page.evaluate(async () => {
+  async function incomingTest(compare = false) {
+    return page.evaluate(async (compare) => {
       const pc = new RTCPeerConnection();
       pc.createDataChannel("phantom-ramp");
       await pc.setLocalDescription(await pc.createOffer());
@@ -232,11 +232,18 @@ try {
           kind: "offer",
           id,
           description: pc.localDescription,
-          settings: { durationMs: 3000, maxStageBytes: 268435456 },
+          settings: compare
+            ? {
+                durationMs: 3000,
+                maxStageBytes: 67108864,
+                windows: [262144, 1048576, 4194304, 1048576, 262144],
+                flowControls: ["receiver-credit", "native-buffer"],
+              }
+            : { durationMs: 3000, maxStageBytes: 268435456 },
         }),
       });
       return id;
-    });
+    }, compare);
   }
   async function remoteStop() {
     await page.evaluate(() => {
@@ -267,8 +274,9 @@ try {
     ),
     false,
   );
-  await incomingTest();
+  await incomingTest(true);
   await page.locator("#ramp-accept").waitFor({ state: "visible" });
+  assert.match(await page.locator("#ramp-approval-text").textContent(), /1.25/);
   await page.locator("#ramp-accept").click();
   await page.waitForFunction(() =>
     window.__messages.some(

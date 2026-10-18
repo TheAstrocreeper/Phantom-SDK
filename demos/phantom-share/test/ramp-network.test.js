@@ -30,6 +30,7 @@ for (const initiator of [0, 1])
         },
         settings: {
           windows: [65536, 131072, 65536],
+          flowControls: ["receiver-credit", "native-buffer"],
           durationMs: 30,
           maxStageBytes: 131072,
         },
@@ -55,7 +56,9 @@ for (const initiator of [0, 1])
         for (const direction of report.directions)
           for (const row of direction.rows) {
             assert.equal(row.sentBytes, row.receivedBytes);
-            assert.ok(row.peakOutstandingBytes <= row.windowBytes);
+            if (row.flowControl === "native-buffer")
+              assert.equal(row.peakOutstandingBytes, null);
+            else assert.ok(row.peakOutstandingBytes <= row.windowBytes);
           }
       }
     } finally {

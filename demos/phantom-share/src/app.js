@@ -419,7 +419,7 @@ async function connect(code = "") {
           decline: byId("ramp-decline"),
           label: byId("ramp-approval-text"),
           signal,
-          message: `The other device requests a connection test. Up to ${settings?.maxStageBytes === 1073741824 ? "18" : "3.5"} GiB of generated traffic may be sent. Keep both pages visible.`,
+          message: `The other device requests a connection test. Up to ${settings?.flowControls?.length === 2 ? "1.25" : settings?.maxStageBytes === 1073741824 ? "18" : "3.5"} GiB of generated traffic may be sent. Keep both pages visible.`,
         });
       },
       onUpdate: updateRampTest,
@@ -816,7 +816,7 @@ function updateRampTest(update) {
   if (update.row) {
     const r = update.row;
     byId("ramp-results").textContent +=
-      `${(r.windowBytes / 1048576).toFixed(2)} MiB window · ${(r.receiverBytesPerSecond / 1e6).toFixed(2)} MB/s · RTT ${r.rttMedianMs?.toFixed(1) ?? "n/a"} ms${r.limitedByByteBudget ? " · BYTE BUDGET REACHED" : ""}\n`;
+      `${r.flowControl === "native-buffer" ? "Native buffer" : "Receiver credit"} · ${(r.windowBytes / 1048576).toFixed(2)} MiB window · ${(r.receiverBytesPerSecond / 1e6).toFixed(2)} MB/s · channel response ${r.rttMedianMs?.toFixed(1) ?? "n/a"} ms${r.limitedByByteBudget ? " · BYTE BUDGET REACHED" : ""}\n`;
     diagnostics.record("ramp-stage", {
       bytes: r.receivedBytes,
       elapsedMs: r.completionMs,
@@ -861,6 +861,7 @@ byId("ramp-start").onclick = () => {
   void rampControl
     .start(byId("ramp-peer").value, {
       extended: byId("ramp-profile").value === "extended",
+      comparePacing: byId("ramp-profile").value === "compare",
     })
     .catch((error) => {
       byId("ramp-status").textContent = error.message;

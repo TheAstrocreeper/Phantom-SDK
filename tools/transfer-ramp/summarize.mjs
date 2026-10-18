@@ -24,11 +24,16 @@ for (const file of files) {
           baselineRttMs: d.baselineRttMs,
           recommendation: d.recommendation,
           stages: d.rows.map((r) => ({
+            flowControl: r.flowControl ?? "receiver-credit",
             windowMiB: r.windowBytes / 1048576,
             receivedMBps: r.receiverBytesPerSecond / 1e6,
             rttMs: r.rttMedianMs,
             peakQueuedMiB: r.peakBufferedBytes / 1048576,
-            peakUnackedMiB: r.peakOutstandingBytes / 1048576,
+            peakUnackedMiB:
+              r.peakOutstandingBytes == null
+                ? null
+                : r.peakOutstandingBytes / 1048576,
+            wakeDelayP95Ms: r.wakeDelayP95Ms ?? null,
             drainMs: Math.max(0, r.completionMs - r.activeMs),
             byteCapped: r.limitedByByteBudget,
           })),

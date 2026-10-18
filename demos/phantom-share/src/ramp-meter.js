@@ -58,7 +58,10 @@ export function createRampMeter(
       }
       incoming.bytes += data.byteLength;
       incoming.sinceAck += data.byteLength;
-      if (incoming.sinceAck >= Math.min(incoming.window / 2, 256 * 1024)) {
+      if (
+        incoming.flowControl === "receiver-credit" &&
+        incoming.sinceAck >= Math.min(incoming.window / 2, 256 * 1024)
+      ) {
         incoming.sinceAck = 0;
         send({ kind: "credit", stage: incoming.id, bytes: incoming.bytes });
       }
@@ -93,6 +96,9 @@ export function createRampMeter(
     if (m.kind === "start") {
       if (
         incoming ||
+        !["receiver-credit", "native-buffer"].includes(
+          m.flowControl ?? "receiver-credit",
+        ) ||
         !Number.isInteger(m.window) ||
         m.window < chunkBytes ||
         m.window > 64 * 1024 * 1024
@@ -103,6 +109,7 @@ export function createRampMeter(
       incoming = {
         id: m.stage,
         window: m.window,
+        flowControl: m.flowControl ?? "receiver-credit",
         bytes: 0,
         sinceAck: 0,
         start: now(),
@@ -137,6 +144,7 @@ export function createRampMeter(
   }
   async function run({
     windows = DEFAULT_WINDOWS,
+    flowControls = ["receiver-credit"],
     durationMs = 3000,
     maxStageBytes = 256 * 1024 * 1024,
     signal,
@@ -144,6 +152,13 @@ export function createRampMeter(
   } = {}) {
     if (outgoing) throw Error("A ramp is already running");
     if (
+      !Array.isArray(flowControls) ||
+      !flowControls.length ||
+      flowControls.length > 2 ||
+      new Set(flowControls).size !== flowControls.length ||
+      flowControls.some(
+        (mode) => !["receiver-credit", "native-buffer"].includes(mode),
+      ) ||
       !Array.isArray(windows) ||
       !windows.length ||
       windows.length > 20 ||
@@ -163,12 +178,16 @@ export function createRampMeter(
     const rows = [],
       payload = new Uint8Array(chunkBytes);
     crypto.getRandomValues(payload);
-    for (let step = 0; step < windows.length; step++) {
+    for (let stage = 0; stage < windows.length * flowControls.length; stage++) {
+      const step = Math.floor(stage / flowControls.length),
+        order = step % 2 ? [...flowControls].reverse() : flowControls,
+        flowControl = order[stage % flowControls.length];
       if (signal?.aborted || closed) throw Error("Test cancelled");
       const id = crypto.randomUUID(),
         window = windows[step],
-        rtts = [];
-      await ask("start", { stage: id, window });
+        rtts = [],
+        wakeDelays = [];
+      await ask("start", { stage: id, window, flowControl });
       const start = now();
       let last = start,
         waiting = null,
@@ -215,7 +234,10 @@ export function createRampMeter(
               now() - start < durationMs &&
               row.sent + chunkBytes <= maxStageBytes
             ) {
-              if (row.sent - row.acked + chunkBytes > window) {
+              if (
+                flowControl === "receiver-credit" &&
+                row.sent - row.acked + chunkBytes > window
+              ) {
                 waiting = "credit";
                 break;
               }
@@ -250,7 +272,12 @@ export function createRampMeter(
         row.wake = () => {
           if (!queued) {
             queued = true;
-            setTimeout(pump, 0);
+            const scheduledAt = now();
+            setTimeout(() => {
+              if (!finished && wakeDelays.length < 256)
+                wakeDelays.push(now() - scheduledAt);
+              pump();
+            }, 0);
           }
         };
         signal?.addEventListener("abort", cancel, { once: true });
@@ -280,7 +307,9 @@ export function createRampMeter(
       if (result.receivedBytes !== row.sent)
         throw Error("Receiver byte count mismatch");
       const sample = {
-        step,
+        step: stage,
+        windowStep: step,
+        flowControl,
         windowBytes: window,
         sentBytes: row.sent,
         ...result,
@@ -292,7 +321,15 @@ export function createRampMeter(
         rttMedianMs: median(rtts),
         rttMaxMs: rtts.length ? Math.max(...rtts) : null,
         peakBufferedBytes,
-        peakOutstandingBytes,
+        peakOutstandingBytes:
+          flowControl === "receiver-credit" ? peakOutstandingBytes : null,
+        wakeDelayMedianMs: median(wakeDelays),
+        wakeDelayP95Ms: wakeDelays.length
+          ? [...wakeDelays].sort((a, b) => a - b)[
+              Math.ceil(wakeDelays.length * 0.95) - 1
+            ]
+          : null,
+        wakeDelaySamples: wakeDelays.length,
         bufferStallMs,
         creditStallMs,
         limitedByByteBudget: limitReached,
@@ -301,12 +338,19 @@ export function createRampMeter(
       onStage(sample);
     }
     return {
+      flowControls,
       baselineRttMs: median(baseline),
       chunkBytes,
       durationMs,
       maxStageBytes,
       rows,
-      recommendation: recommendWindow(rows, median(baseline)),
+      recommendation:
+        flowControls.length > 1
+          ? {
+              status: "comparison",
+              reason: "Matched pacing trials; no SDK default recommendation",
+            }
+          : recommendWindow(rows, median(baseline)),
     };
   }
   return { run, close };
