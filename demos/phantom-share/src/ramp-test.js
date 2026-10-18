@@ -4,6 +4,7 @@ export function attachRampTest({
   network,
   onRequest = () => false,
   onUpdate = () => {},
+  onDiagnostic = () => {},
   runtime = globalThis,
   settings = { durationMs: 3000, maxStageBytes: 256 * 1024 * 1024 },
   createMeter = (dc, options) => createRampMeter(dc, options),
@@ -30,7 +31,14 @@ export function attachRampTest({
     closed = false,
     pendingOffer = null,
     lastSession = null;
-  const update = (m) => onUpdate({ ...m, busy: !!active });
+  const trace = (type, data = {}) => onDiagnostic(type, data);
+  const update = (m) => {
+    trace("ramp-state", {
+      status: m.status,
+      peer: active?.peer ?? pendingOffer?.peer,
+    });
+    onUpdate({ ...m, busy: !!(active || pendingOffer) });
+  };
   const ready = (peer) =>
     network
       .getPeerConnections()
@@ -39,20 +47,32 @@ export function attachRampTest({
     if (closed || !ready(peer)) throw Error("Test peer unavailable");
     network.send(peer, JSON.stringify({ app, ...message }));
   };
-  function stop(reason = "Test stopped") {
-    if (!active) return;
-    const s = active;
+  function stop(reason = "Test stopped", notify = true) {
+    const s = active,
+      offer = pendingOffer;
+    if (!s && !offer) return;
+    const target = s ?? offer;
+    trace("ramp-stop", { id: target.id, peer: target.peer, reason });
+    if (notify)
+      try {
+        send(target.peer, { kind: "stop", id: target.id, reason });
+      } catch {}
     active = null;
-    clearTimeout(s.timer);
-    s.controller.abort();
-    s.meter?.close();
-    s.dc?.close();
-    s.pc?.close();
-    s.reject?.(Error(reason));
-    if (s.report.directions.length) {
+    pendingOffer = null;
+    if (offer) {
+      clearTimeout(offer.timer);
+      offer.controller.abort();
+    }
+    if (s) {
+      clearTimeout(s.timer);
+      s.controller.abort();
+      s.meter?.close();
+      s.dc?.close();
+      s.pc?.close();
+      s.reject?.(Error(reason));
       lastReport = { ...s.report, status: "incomplete", reason };
-      update({ status: reason, report: lastReport });
-    } else update({ status: reason });
+    }
+    update({ status: reason, ...(s ? { report: lastReport } : {}) });
   }
   async function selectedPath(pc) {
     const stats = await pc.getStats(),
@@ -103,6 +123,7 @@ export function attachRampTest({
     s.pc.onicecandidate = (e) => {
       if (e.candidate && active === s)
         try {
+          s.candidateCount = (s.candidateCount ?? 0) + 1;
           const candidate = e.candidate.toJSON?.() ?? e.candidate;
           if (s.signaled) send(peer, { kind: "ice", id, candidate });
           else if (s.outIce.length < 64) s.outIce.push(candidate);
@@ -110,7 +131,21 @@ export function attachRampTest({
           stop("Test signaling unavailable");
         }
     };
+    s.pc.onicegatheringstatechange = () =>
+      trace("ramp-ice", {
+        id: s.id,
+        peer: s.peer,
+        iceGatheringState: s.pc.iceGatheringState,
+        total: s.candidateCount ?? 0,
+      });
     s.pc.onconnectionstatechange = () => {
+      trace("ramp-rtc", {
+        id: s.id,
+        peer: s.peer,
+        connectionState: s.pc.connectionState,
+        iceConnectionState: s.pc.iceConnectionState,
+        iceGatheringState: s.pc.iceGatheringState,
+      });
       if (
         active === s &&
         ["failed", "closed"].includes(s.pc.connectionState) &&
@@ -126,6 +161,7 @@ export function attachRampTest({
       s.dc = dc;
 
       dc.onopen = () => {
+        trace("ramp-channel-open", { id: s.id, peer: s.peer });
         const maximum = s.pc.sctp?.maxMessageSize;
         const chunkBytes =
           Number.isFinite(maximum) && maximum > 0
@@ -172,6 +208,7 @@ export function attachRampTest({
     clearTimeout(s.timer);
     s.report.finishedAt = new Date().toISOString();
     lastReport = s.report;
+    s.finished = true;
     send(s.peer, { kind: "complete", id: s.id, report: s.report });
     update({ status: "Complete", report: s.report });
     active = null;
@@ -202,30 +239,82 @@ export function attachRampTest({
       if (pendingOffer.ice.length < 64) pendingOffer.ice.push(m.candidate);
       return;
     }
+    if (m.kind === "stop") {
+      const reason =
+        typeof m.reason === "string"
+          ? m.reason.slice(0, 160)
+          : "Peer stopped the test";
+      if (
+        (active?.id === m.id && active.peer === from) ||
+        (pendingOffer?.id === m.id && pendingOffer.peer === from)
+      ) {
+        stop("Peer: " + reason, false);
+        return;
+      }
+      if (
+        lastSession?.id === m.id &&
+        lastSession.peer === from &&
+        !lastSession.finished
+      ) {
+        lastReport = {
+          ...lastSession.report,
+          status: "incomplete",
+          reason: "Peer: " + reason,
+        };
+        trace("ramp-stop", { id: m.id, peer: from, reason: lastReport.reason });
+        update({ status: lastReport.reason, report: lastReport });
+      }
+      return;
+    }
     if (m.kind === "offer") {
       if (active || pendingOffer) {
         send(from, { kind: "reject", id: m.id });
         return;
       }
-      const offer = { id: m.id, peer: from, ice: [] };
+      const offer = {
+        id: m.id,
+        peer: from,
+        ice: [],
+        controller: new AbortController(),
+      };
       pendingOffer = offer;
+      trace("ramp-approval-request", { id: m.id, peer: from });
+      update({ status: "Approve the connection test on this device" });
+      offer.timer = setTimeout(() => {
+        if (pendingOffer === offer) stop("Test approval timed out");
+      }, 60000);
       let accepted;
       try {
-        accepted = await onRequest(from, m.settings);
+        accepted = await onRequest(from, m.settings, {
+          signal: offer.controller.signal,
+        });
       } finally {
-        if (pendingOffer === offer) pendingOffer = null;
+        clearTimeout(offer.timer);
       }
+      if (pendingOffer !== offer || offer.controller.signal.aborted || closed)
+        return;
+      pendingOffer = null;
+      trace("ramp-approval-result", {
+        id: m.id,
+        peer: from,
+        admitted: !!accepted,
+      });
       if (!accepted) {
         send(from, { kind: "reject", id: m.id });
+        update({ status: "Test declined" });
         return;
       }
-      if (closed || active || !ready(from)) return;
+      if (active || !ready(from)) {
+        update({ status: "Test peer unavailable" });
+        return;
+      }
       // Settings are deliberately fixed on the accepting endpoint as well.
       if (
         JSON.stringify(m.settings) !== JSON.stringify(settings) &&
         JSON.stringify(m.settings) !== JSON.stringify(extendedSettings)
       ) {
         send(from, { kind: "reject", id: m.id });
+        update({ status: "Unsupported test settings" });
         return;
       }
       const s = create(m.id, from, false, m.settings);
@@ -252,6 +341,7 @@ export function attachRampTest({
       const s = lastSession;
       clearTimeout(s.timer);
       lastReport = m.report;
+      s.finished = true;
       active = null;
       update({ status: "Complete", report: lastReport });
       s.meter.close();
@@ -262,6 +352,7 @@ export function attachRampTest({
     const s = active;
     if (!s || s.id !== m.id || s.peer !== from) return;
     if (m.kind === "answer" && s.initiator) {
+      update({ status: "Connecting the test channel" });
       await s.pc.setRemoteDescription(m.description);
       for (const c of s.ice.splice(0)) await s.pc.addIceCandidate(c);
     }
@@ -311,12 +402,13 @@ export function attachRampTest({
   });
   return {
     async start(peer, { extended = false } = {}) {
-      if (closed || active || !ready(peer))
+      if (closed || active || pendingOffer || !ready(peer))
         throw Error(
           "Choose one ready peer and finish active file transfers first",
         );
       const selected = extended ? extendedSettings : settings;
       const s = create(crypto.randomUUID(), peer, true, selected);
+      trace("ramp-start", { id: s.id, peer });
       update({ status: "Waiting for peer approval" });
       try {
         await s.pc.setLocalDescription(await s.pc.createOffer());
@@ -334,12 +426,8 @@ export function attachRampTest({
         throw error;
       }
     },
-    cancel() {
-      if (active)
-        try {
-          send(active.peer, { kind: "stop", id: active.id });
-        } catch {}
-      stop();
+    cancel(reason = "Test stopped by user") {
+      stop(reason);
     },
     getReport: () => lastReport,
     close() {

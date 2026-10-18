@@ -1,3 +1,4 @@
+import { requestRampApproval } from "./ramp-approval.js";
 import { attachRampTest } from "./ramp-test.js";
 import { leaveAndReset } from "./session-cleanup.js";
 import { createDiagnostics } from "./diagnostics.js";
@@ -408,12 +409,18 @@ async function connect(code = "") {
     network = connection.network;
     rampControl = attachRampTest({
       network,
-      onRequest: (peer, settings) => {
+      onDiagnostic: (type, data) => diagnostics.record(type, data),
+      onRequest: (peer, settings, { signal } = {}) => {
         if (hasActiveTransfers() || document.visibilityState !== "visible")
           return false;
-        return confirm(
-          `Run a raw connection ramp test? This profile may use up to ${settings?.maxStageBytes === 1073741824 ? "18" : "3.5"} GiB of data. Keep this page visible.`,
-        );
+        return requestRampApproval({
+          root: byId("ramp-approval"),
+          accept: byId("ramp-accept"),
+          decline: byId("ramp-decline"),
+          label: byId("ramp-approval-text"),
+          signal,
+          message: `The other device requests a connection test. Up to ${settings?.maxStageBytes === 1073741824 ? "18" : "3.5"} GiB of generated traffic may be sent. Keep both pages visible.`,
+        });
       },
       onUpdate: updateRampTest,
     });
@@ -425,7 +432,8 @@ async function connect(code = "") {
       admin: admin,
       adminPublicKey: context.adminPublicKey,
       onChange: () => {
-        if (rampBusy && hasActiveTransfers()) rampControl?.cancel();
+        if (rampBusy && hasActiveTransfers())
+          rampControl?.cancel("File transfer started");
         for (const asset of sharing?.assets.values() || [])
           diagnostics.record("transfer-state", {
             id: asset.id,
@@ -860,7 +868,8 @@ byId("ramp-start").onclick = () => {
 };
 byId("ramp-stop").onclick = () => rampControl?.cancel();
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState !== "visible" && rampBusy) rampControl?.cancel();
+  if (document.visibilityState !== "visible" && rampBusy)
+    rampControl?.cancel("Test stopped because this page became hidden");
 });
 byId("ramp-download").onclick = () => {
   if (!lastRampReport) return;

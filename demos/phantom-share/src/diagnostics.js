@@ -18,6 +18,6 @@ export function createDiagnostics({storage,now=Date.now,limit=1200}={}){
  }
  rows.push({at:now(),type:text(type),data:clean(data)});if(rows.length>limit){dropped+=rows.length-limit;rows.splice(0,rows.length-limit);}};
  const flush=()=>{try{storage?.setItem(key,JSON.stringify({rows,dropped}));}catch{storageError=true;}};
- const report=()=>({schema:1,build:'share-preparation-v7',exportedAt:now(),dropped,storageError,rows:structuredClone(rows)});
+ const report=()=>({schema:1,build:'share-approval-v8',exportedAt:now(),dropped,storageError,rows:structuredClone(rows)});
  record('page-start');return {record,flush,report};
 }
