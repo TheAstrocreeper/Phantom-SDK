@@ -125,6 +125,7 @@ test("matched native-buffer control removes credit waits while keeping native bu
   for (const [i, local] of channels.entries()) {
     const remote = channels[1 - i];
     let lastDelivery = 0;
+    const deliveryQueue = [];
     local.send = (data) => {
       const binary = data instanceof ArrayBuffer,
         copy = binary ? data.slice(0) : data;
@@ -151,10 +152,15 @@ test("matched native-buffer control removes credit waits while keeping native bu
         lastDelivery + 0.1,
       );
       lastDelivery = deliveryAt;
+      const entry = { ready: false, data: copy };
+      deliveryQueue.push(entry);
       const deliver = setTimeout(
         () => {
           timers.delete(deliver);
-          remote.onmessage?.({ data: copy });
+          entry.ready = true;
+          // Ordered RTC delivery must survive timer rounding under CPU load.
+          while (deliveryQueue[0]?.ready)
+            remote.onmessage?.({ data: deliveryQueue.shift().data });
         },
         Math.max(0, deliveryAt - performance.now()),
       );
@@ -202,5 +208,35 @@ test("matched native-buffer control removes credit waits while keeping native bu
     sender.close();
     receiver.close();
     for (const timer of timers) clearTimeout(timer);
+  }
+});
+
+test("native pump uses microtasks and low-water events without zero-delay polling timers", async () => {
+  const [a, b] = pair(),
+    sender = createRampMeter(a, { chunkBytes: 1024 }),
+    receiver = createRampMeter(b, { chunkBytes: 1024 }),
+    original = setTimeout;
+  let polls = 0;
+  globalThis.setTimeout = (fn, ms, ...args) => {
+    if (ms === 0) polls++;
+    return original(fn, ms, ...args);
+  };
+  try {
+    const report = await sender.run({
+      windows: [16384],
+      lowWaterBytes: 4096,
+      flowControls: ["native-buffer"],
+      durationMs: 30,
+      maxStageBytes: 65536,
+    });
+    assert.equal(report.rows[0].sentBytes, 65536);
+    assert.equal(report.rows[0].receivedBytes, 65536);
+    assert.equal(report.rows[0].lowWaterBytes, 4096);
+    assert.equal(report.rows[0].creditStallMs, 0);
+    assert.equal(polls, 0);
+  } finally {
+    globalThis.setTimeout = original;
+    sender.close();
+    receiver.close();
   }
 });

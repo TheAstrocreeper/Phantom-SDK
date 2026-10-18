@@ -232,14 +232,23 @@ try {
           kind: "offer",
           id,
           description: pc.localDescription,
-          settings: compare
-            ? {
-                durationMs: 3000,
-                maxStageBytes: 67108864,
-                windows: [262144, 1048576, 4194304, 1048576, 262144],
-                flowControls: ["receiver-credit", "native-buffer"],
-              }
-            : { durationMs: 3000, maxStageBytes: 268435456 },
+          settings:
+            compare === "event"
+              ? {
+                  durationMs: 5000,
+                  maxStageBytes: 67108864,
+                  windows: [16777216],
+                  flowControls: ["native-buffer"],
+                  lowWaterBytes: 4194304,
+                }
+              : compare
+                ? {
+                    durationMs: 3000,
+                    maxStageBytes: 67108864,
+                    windows: [262144, 1048576, 4194304, 1048576, 262144],
+                    flowControls: ["receiver-credit", "native-buffer"],
+                  }
+                : { durationMs: 3000, maxStageBytes: 268435456 },
         }),
       });
       return id;
@@ -292,6 +301,23 @@ try {
   await page.evaluate(() => document.getElementById("ramp-dialog").close());
   console.log(
     "Remote-initiated 3.5 GiB approval is nonblocking; cancel invalidates acceptance; accepted offer answers; peer stop reason survives",
+  );
+  await incomingTest("event");
+  await page.locator("#ramp-accept").waitFor({ state: "visible" });
+  assert.match(
+    await page.locator("#ramp-approval-text").textContent(),
+    /0.125/,
+  );
+  await page.locator("#ramp-accept").click();
+  await page.waitForFunction(() =>
+    window.__messages.some(
+      (m) => m.kind === "answer" && m.id === window.__approvalId,
+    ),
+  );
+  await remoteStop();
+  await page.evaluate(() => document.getElementById("ramp-dialog").close());
+  console.log(
+    "16 MiB / 4 MiB event-driven preset is accepted with the 128 MiB total bound",
   );
   const logsReady = page.waitForEvent("download");
   await page.locator("#download-logs").click();

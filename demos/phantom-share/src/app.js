@@ -419,7 +419,7 @@ async function connect(code = "") {
           decline: byId("ramp-decline"),
           label: byId("ramp-approval-text"),
           signal,
-          message: `The other device requests a connection test. Up to ${settings?.flowControls?.length === 2 ? "1.25" : settings?.maxStageBytes === 1073741824 ? "18" : "3.5"} GiB of generated traffic may be sent. Keep both pages visible.`,
+          message: `The other device requests a connection test. Up to ${settings?.lowWaterBytes === 4194304 ? "0.125" : settings?.flowControls?.length === 2 ? "1.25" : settings?.maxStageBytes === 1073741824 ? "18" : "3.5"} GiB of generated traffic may be sent. Keep both pages visible.`,
         });
       },
       onUpdate: updateRampTest,
@@ -862,6 +862,7 @@ byId("ramp-start").onclick = () => {
     .start(byId("ramp-peer").value, {
       extended: byId("ramp-profile").value === "extended",
       comparePacing: byId("ramp-profile").value === "compare",
+      eventDriven: byId("ramp-profile").value === "event",
     })
     .catch((error) => {
       byId("ramp-status").textContent = error.message;

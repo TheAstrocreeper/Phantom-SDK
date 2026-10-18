@@ -1,3 +1,4 @@
+import {waitForDataChannelCapacity} from './data-channel-capacity.js';
 import {createSequentialSignaling} from './sequential-signaling.js';
 import {createSysOutageClock} from './sys-outage-clock.js';
 import {createIceTrace} from './ice-trace.js';
@@ -7652,22 +7653,8 @@ export function createNetworkEngine(host) {
     }
   }
 
-  function rtcWaitDCDrain(dc) {
-    return new Promise((resolve) => {
-      if (!dc || dc.readyState !== "open") return resolve(false);
-
-      dc.bufferedAmountLowThreshold = 512 * 1024;
-
-      if (dc.bufferedAmount < 2 * 1024 * 1024) return resolve(true);
-
-      const done = () => {
-        dc.removeEventListener("bufferedamountlow", done);
-        resolve(dc.readyState === "open");
-      };
-
-      dc.addEventListener("bufferedamountlow", done, { once: true });
-      setTimeout(done, 5000);
-    });
+  function rtcWaitDCDrain(dc,bytes=0) {
+    return waitForDataChannelCapacity(dc,{bytes,timeoutMs:5000,setTimeout,clearTimeout}).then(()=>true,()=>false);
   }
 
   async function rtcSendRawDC(remoteHKey, buf) {
@@ -7679,7 +7666,7 @@ export function createNetworkEngine(host) {
     const dc = ent?.dc;
     if (!dc || dc.readyState !== "open") return false;
 
-    const ok = await rtcWaitDCDrain(dc);
+    const ok = await rtcWaitDCDrain(dc,buf.byteLength??0);
     if (!ok || dc.readyState !== "open") return false;
 
     try {
@@ -13808,7 +13795,7 @@ export function createNetworkEngine(host) {
         }
 
         const channel = phantomChatPeers.get(phantomShortKey(to))?.dc;
-        const drained = await rtcWaitDCDrain(channel);
+        const drained = await rtcWaitDCDrain(channel,bytes.byteLength);
         if (!drained || channel !== phantomChatPeers.get(phantomShortKey(to))?.dc || !phantomCanUseChat(to) || host.canSendFile?.(file) === false) {
           postLocal('FILE_BIN_CHUNK_SENT', {ok:false,to,file,error:'File channel unavailable'});
           return;

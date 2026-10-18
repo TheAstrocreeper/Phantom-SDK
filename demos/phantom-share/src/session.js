@@ -355,6 +355,14 @@ function YT({
     }
   }
 
+  // Sessions may be attached after the transport is already ready.
+  queueMicrotask(() => {
+    if (H) return;
+    for (const peer of B()) {
+      V(peer, { type: "hello" });
+      I(peer).catch(p);
+    }
+  });
   return {
     assets: h,
     publish: W,

@@ -37,6 +37,13 @@ export function attachRampTest({
     ],
     flowControls: ["receiver-credit", "native-buffer"],
   };
+  const eventDrivenSettings = {
+    durationMs: 5000,
+    maxStageBytes: 64 * 1024 * 1024,
+    windows: [16 * 1024 * 1024],
+    flowControls: ["native-buffer"],
+    lowWaterBytes: 4 * 1024 * 1024,
+  };
   const app = "phantom-ramp/1";
   let active = null,
     lastReport = null,
@@ -324,7 +331,8 @@ export function attachRampTest({
       if (
         JSON.stringify(m.settings) !== JSON.stringify(settings) &&
         JSON.stringify(m.settings) !== JSON.stringify(extendedSettings) &&
-        JSON.stringify(m.settings) !== JSON.stringify(comparisonSettings)
+        JSON.stringify(m.settings) !== JSON.stringify(comparisonSettings) &&
+        JSON.stringify(m.settings) !== JSON.stringify(eventDrivenSettings)
       ) {
         send(from, { kind: "reject", id: m.id });
         update({ status: "Unsupported test settings" });
@@ -414,16 +422,21 @@ export function attachRampTest({
     void handle(message).catch((error) => stop(error.message));
   });
   return {
-    async start(peer, { extended = false, comparePacing = false } = {}) {
+    async start(
+      peer,
+      { extended = false, comparePacing = false, eventDriven = false } = {},
+    ) {
       if (closed || active || pendingOffer || !ready(peer))
         throw Error(
           "Choose one ready peer and finish active file transfers first",
         );
-      const selected = comparePacing
-        ? comparisonSettings
-        : extended
-          ? extendedSettings
-          : settings;
+      const selected = eventDriven
+        ? eventDrivenSettings
+        : comparePacing
+          ? comparisonSettings
+          : extended
+            ? extendedSettings
+            : settings;
       const s = create(crypto.randomUUID(), peer, true, selected);
       trace("ramp-start", { id: s.id, peer });
       update({ status: "Waiting for peer approval" });

@@ -1,3 +1,4 @@
+import {waitForDataChannelCapacity} from './data-channel-capacity.js';
 import {createFileDistribution,createMemoryChunkStore} from './files.js';
 import {createAdminAuthorization} from './authorization.js';
 
@@ -56,13 +57,12 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
     emit(type==='fileProgress'?'distributionProgress':type==='fileError'?'distributionError':'distributionFileEvent',{fileEvent:type,...payload});
   },chunkStore,...Object.fromEntries(Object.entries(options).filter(([key])=>['chunkStore','requestTimeoutMs','requestWindow','maxAttemptsPerPeer','maxFileBytes'].includes(key)))});
   async function sendBinary(link,payload){let ok=false,reason='Distribution connection unavailable',bufferWaitMs=0;const waitAt=performance.now();try{
-    const deadline=Date.now()+jobTimeoutMs;
-    while(link.dc.bufferedAmount>1024*1024){if(closed||links.get(link.job.id)!==link||!canUsePeer(link.peer)||Date.now()>deadline||!allowed(payload.file.id,payload.file.distributionId))throw Error('Distribution send stopped');await new Promise(r=>setTimeout(r,10));}
+    await waitForDataChannelCapacity(link.dc,{bytes:payload.bytes.byteLength,timeoutMs:jobTimeoutMs,signal:link.sendController.signal});
     bufferWaitMs=performance.now()-waitAt;
     if(closed||links.get(link.job.id)!==link||!canUsePeer(link.peer)||!allowed(payload.file.id,payload.file.distributionId)||link.dc.readyState!=='open')throw Error('Distribution revoked or disconnected');
     link.dc.send(JSON.stringify({kind:'binary',file:payload.file}));link.dc.send(payload.bytes);ok=true;
   }catch(e){reason=e.message;}fire('FILE_BIN_CHUNK_SENT',{...payload,ok,bufferWaitMs,error:ok?undefined:reason});}
-  function closeLink(id){pendingSignals.delete(id);closedJobs.set(id,Date.now());const link=links.get(id);if(!link)return;links.delete(id);files.flushTimings(link.peer,link.job.asset);if(link.readyTimer)clearTimeout(link.readyTimer);link.readyTimer=null;link.pc.onicecandidate=null;link.pc.onconnectionstatechange=null;link.pc.ondatachannel=null;if(link.dc){link.dc.onopen=null;link.dc.onmessage=null;link.dc.onclose=null;try{link.dc.close();}catch{}}try{link.pc.close();}catch{}link.pendingIce.length=0;link.binary=null;emit('distributionConnectionClosed',{jobId:id,peer:link.peer});}
+  function closeLink(id){pendingSignals.delete(id);closedJobs.set(id,Date.now());const link=links.get(id);if(!link)return;links.delete(id);link.sendController.abort();files.flushTimings(link.peer,link.job.asset);if(link.readyTimer)clearTimeout(link.readyTimer);link.readyTimer=null;link.pc.onicecandidate=null;link.pc.onconnectionstatechange=null;link.pc.ondatachannel=null;if(link.dc){link.dc.onopen=null;link.dc.onmessage=null;link.dc.onclose=null;try{link.dc.close();}catch{}}try{link.pc.close();}catch{}link.pendingIce.length=0;link.binary=null;emit('distributionConnectionClosed',{jobId:id,peer:link.peer});}
   async function receive(link){const job=link.job,startedAt=performance.now();let succeeded=false;
     emit('distributionBatchStarted',{jobId:job.id,batch:job.batch??0,total:job.indexes.length,peer:link.peer});try{
     await files.request(job.asset,{peers:[link.peer],indexes:job.indexes});
@@ -121,7 +121,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
     const asset=assets.get(job.asset);if(!asset||!allowed(asset.id,asset.distributionId))return;
     const peer=job.source===self()?job.receiver:job.source;
     try{
-    const pc=new runtime.RTCPeerConnection(options.rtcConfiguration??{}),link={pc,peer,job,started:false,pendingIce:[]};links.set(job.id,link);
+    const pc=new runtime.RTCPeerConnection(options.rtcConfiguration??{}),link={pc,peer,job,sendController:new AbortController(),started:false,pendingIce:[]};links.set(job.id,link);
     pc.onicecandidate=e=>{if(e.candidate)frame(peer,{type:'signal',jobId:job.id,candidate:e.candidate.toJSON?.()??e.candidate});};
     pc.onconnectionstatechange=()=>{if(['failed','closed'].includes(pc.connectionState)&&links.get(job.id)===link){
       const interrupted=job.receiver===self()&&!link.completed;

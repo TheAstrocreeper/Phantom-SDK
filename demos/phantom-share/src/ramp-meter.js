@@ -145,6 +145,7 @@ export function createRampMeter(
   async function run({
     windows = DEFAULT_WINDOWS,
     flowControls = ["receiver-credit"],
+    lowWaterBytes = null,
     durationMs = 3000,
     maxStageBytes = 256 * 1024 * 1024,
     signal,
@@ -152,6 +153,11 @@ export function createRampMeter(
   } = {}) {
     if (outgoing) throw Error("A ramp is already running");
     if (
+      (lowWaterBytes !== null &&
+        (!Number.isSafeInteger(lowWaterBytes) ||
+          lowWaterBytes < 0 ||
+          !Array.isArray(windows) ||
+          windows.some((window) => lowWaterBytes >= window))) ||
       !Array.isArray(flowControls) ||
       !flowControls.length ||
       flowControls.length > 2 ||
@@ -199,7 +205,7 @@ export function createRampMeter(
         limitReached = false;
       const row = { id, sent: 0, acked: 0, wake: () => {}, abort: () => {} };
       outgoing = row;
-      dc.bufferedAmountLowThreshold = Math.floor(window / 2);
+      dc.bufferedAmountLowThreshold = lowWaterBytes ?? Math.floor(window / 2);
       await new Promise((resolve, reject) => {
         let timer,
           pinger,
@@ -273,11 +279,11 @@ export function createRampMeter(
           if (!queued) {
             queued = true;
             const scheduledAt = now();
-            setTimeout(() => {
+            queueMicrotask(() => {
               if (!finished && wakeDelays.length < 256)
                 wakeDelays.push(now() - scheduledAt);
               pump();
-            }, 0);
+            });
           }
         };
         signal?.addEventListener("abort", cancel, { once: true });
@@ -311,6 +317,7 @@ export function createRampMeter(
         windowStep: step,
         flowControl,
         windowBytes: window,
+        lowWaterBytes: dc.bufferedAmountLowThreshold,
         sentBytes: row.sent,
         ...result,
         activeMs,
