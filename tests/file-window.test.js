@@ -13,6 +13,21 @@ async function fixture({window=8,delay=0,timeout=1000,drop=()=>false,readDelay=0
 }
 test('window queues eight unique requests before any delayed response and verifies all bytes',async()=>{const f=await fixture({delay:8});try{const p=f.download();await tick();assert.deepEqual(f.requests,[0,1,2,3,4,5,6,7]);const blob=await p;assert.deepEqual(new Uint8Array(await blob.arrayBuffer()),f.bytes);assert.equal(f.events.filter(e=>e.type==='fileProgress').length,32);}finally{f.close();}});
 test('one dropped response is retried, with no duplicate verified progress',async()=>{const f=await fixture({timeout:30,drop:(index,attempt)=>index===5&&attempt===1});try{await f.download();assert.equal(f.requests.filter(i=>i===5).length,2);const progress=f.events.filter(e=>e.type==='fileProgress');assert.equal(progress.length,32);assert.equal(new Set(progress.map(e=>e.data.index)).size,32);}finally{f.close();}});
+test('persisted progress preserves Breach byte, elapsed, verification and in-flight fields',async()=>{
+ const f=await fixture({length:32*1024+17});try{
+  await f.download();let bytes=0,elapsed=0,verification=0;
+  for(const {data:p} of f.events.filter(e=>e.type==='fileProgress')){
+   assert.equal(p.bytes,Math.min(1024,f.bytes.length-p.index*1024));bytes+=p.bytes;
+   assert.equal(p.verifiedBytes,bytes);
+   assert.ok(Number.isFinite(p.elapsedMs)&&p.elapsedMs>=elapsed);elapsed=p.elapsedMs;
+   assert.ok(Number.isFinite(p.verificationMs)&&p.verificationMs>=verification);verification=p.verificationMs;
+   assert.ok(Number.isInteger(p.inFlight)&&p.inFlight>=0&&p.inFlight<=8);
+   // The recovered application formats this field on every verified chunk.
+   assert.doesNotThrow(()=>p.verificationMs.toFixed(0));
+  }
+  assert.equal(bytes,f.bytes.length);
+ }finally{f.close();}
+});
 test('failed transfer resumes from verified cache and requests only the missing chunk',async()=>{let block=true;const f=await fixture({timeout:20,drop:i=>block&&i===5});try{await assert.rejects(f.download(),/remaining chunks/);assert.equal(f.events.filter(e=>e.type==='fileProgress').length,31);const count=f.requests.length;block=false;const blob=await f.download();assert.deepEqual(f.requests.slice(count),[5]);assert.deepEqual(new Uint8Array(await blob.arrayBuffer()),f.bytes);}finally{f.close();}});
 test('latency fixture benchmark compares verified window 1 and 8 transfers',async t=>{const durations=[];for(const window of [1,8]){const f=await fixture({window,delay:10});try{const start=performance.now();const blob=await f.download();durations.push(performance.now()-start);assert.deepEqual(new Uint8Array(await blob.arrayBuffer()),f.bytes);}finally{f.close();}}t.diagnostic(`Simulated 20 ms request/response latency: window 1 ${durations[0].toFixed(0)} ms; window 8 ${durations[1].toFixed(0)} ms. Not a real-device throughput benchmark.`);assert.ok(durations[1]<durations[0]/2);});
 

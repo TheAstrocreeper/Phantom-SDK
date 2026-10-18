@@ -1,5 +1,26 @@
 # Actual Breach transfer comparison
 
+Analyze saved receiver reports without another device run:
+
+```sh
+node tools/breach-comparison/analyze.mjs /path/to/reference.json /path/to/current.json
+```
+
+This reports verified chunk gaps, completion time, loaded application ping and
+missing progress metrics. It does not label those gaps as pure network time.
+
+The pipeline refactor dropped `bytes`, `verifiedBytes`, `elapsedMs`,
+`verificationMs` and `inFlight` from `fileProgress`. Recovered Breach uses these
+fields and formats `verificationMs.toFixed(0)` on every chunk. They are restored
+at successful persistence: `bytes` is this chunk, `verifiedBytes` counts newly
+persisted bytes in this request (excluding prior cached bytes), `elapsedMs`
+starts after the request's initial cache scan, `verificationMs` sums overlapping
+hash-through-persistence work including write-queue delay, and `inFlight` counts
+pending requests. The aggregate is not wall-time attribution. A regression test
+fails before the fix and checks exact bytes, a short final chunk, finite timings
+and the application's formatting call. This repairs API compatibility, not a
+proven cause of native throughput loss.
+
 Build the recovered Breach application twice, with identical application source:
 
 ```sh
