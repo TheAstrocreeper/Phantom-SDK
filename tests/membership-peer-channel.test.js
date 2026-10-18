@@ -16,3 +16,10 @@ test('membership peer RPC pins responses to its owner, supports abort, and settl
   const closed=client.request('status',{request:{peerPublicKey:keys[1]}});client.close();await assert.rejects(closed,/closed/);
  }finally{client.close();host.close();}
 });
+test('an authenticated host rejection is tagged separately from transport timeout',async()=>{
+ const f=fixture();
+ const host=openMembershipPeerChannel({network:f.networks[0],onRequest:()=>{throw Error('Invalid signed membership request');}});
+ const client=openMembershipPeerChannel({network:f.networks[1],remotePublicKey:keys[0]});
+ try{await assert.rejects(client.request('revocations',{request:{peerPublicKey:keys[1]}}),error=>error.code==='MEMBERSHIP_REJECTED');}
+ finally{client.close();host.close();}
+});

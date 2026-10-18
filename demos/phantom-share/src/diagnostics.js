@@ -1,4 +1,4 @@
-const fields = new Set('state reason nextAction role admitted type id from to peer peerId jobId index received total processed size bytes elapsedMs readMs hashMs error message code visibility online connected ready outgoing status generation batch fileEvent connectionState iceConnectionState iceGatheringState signalingState source receiver retryAfterMs reportedBy phase metrics readMs hashMs queueMs bufferWaitMs submitMs requestToReceiveMs writeMs writeQueueMs cache_readMs cache_hashMs count sum max p50 p95 sampleCount'.split(' '));
+const fields = new Set('freshForMs state reason nextAction role admitted type id from to peer peerId jobId index received total processed size bytes elapsedMs readMs hashMs error message code visibility online connected ready outgoing status generation batch fileEvent connectionState iceConnectionState iceGatheringState signalingState source receiver retryAfterMs reportedBy phase metrics readMs hashMs queueMs bufferWaitMs submitMs requestToReceiveMs writeMs writeQueueMs cache_readMs cache_hashMs count sum max p50 p95 sampleCount'.split(' '));
 const text = v => String(v).replace(/sha256:([0-9a-f]{64})/gi,(_,hash)=>'asset:'+hash.slice(0,12)).replace(/https?:\/\/\S+|wss?:\/\/\S+|P1(?:[-\s]?[0-9A-Z]){28,}|[0-9a-f]{64,}/gi,'[redacted]').slice(0,300);
 function clean(v,depth=0){
  if(v==null||typeof v==='boolean'||typeof v==='number')return v;
@@ -18,6 +18,6 @@ export function createDiagnostics({storage,now=Date.now,limit=1200}={}){
  }
  rows.push({at:now(),type:text(type),data:clean(data)});if(rows.length>limit){dropped+=rows.length-limit;rows.splice(0,rows.length-limit);}};
  const flush=()=>{try{storage?.setItem(key,JSON.stringify({rows,dropped}));}catch{storageError=true;}};
- const report=()=>({schema:1,build:'share-event-driven-v10',exportedAt:now(),dropped,storageError,rows:structuredClone(rows)});
+ const report=()=>({schema:1,build:'share-window-evidence-v11',exportedAt:now(),dropped,storageError,rows:structuredClone(rows)});
  record('page-start');return {record,flush,report};
 }

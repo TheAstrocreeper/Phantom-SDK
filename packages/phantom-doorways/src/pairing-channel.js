@@ -83,7 +83,7 @@ export async function openPairingChannel({
       clearTimeout(task.timer);
       message.ok
         ? task.resolve(message.data)
-        : task.reject(new Error(message.error || "Pairing request denied"));
+        : task.reject(Object.assign(new Error(message.error || "Pairing request denied"),{code:'MEMBERSHIP_REJECTED'}));
       return;
     }
     if (message.kind === "event") {

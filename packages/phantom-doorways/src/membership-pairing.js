@@ -1,4 +1,5 @@
 import { openMembershipPeerChannel } from "./membership-peer-channel.js";
+import { createMembershipControlRequest } from "./membership-control-request.js";
 import {
   createPairingCode,
   parsePairingCode,
@@ -300,6 +301,7 @@ export async function connectMembershipPairing({
   signal,
   onError = () => {},
   onControlPath = () => {},
+  onRefresh = () => {},
 } = {}) {
   code = (await parsePairingCode(code)).code;
   let policy, credential, context, peerChannel;
@@ -319,12 +321,7 @@ export async function connectMembershipPairing({
       for (const fn of listeners) fn(event.record);
     },
   });
-  const request = async (action,data,options) => {
-    if(peerChannel?.ready()){
-      try{onControlPath({path:'peer',action});return await peerChannel.request(action,data,options);}catch(error){if(options?.signal?.aborted)throw error;}
-    }
-    onControlPath({path:'pairing',action});return channel.request(action,data,options);
-  };
+  const request = createMembershipControlRequest({getPeer:()=>peerChannel,pairing:channel,onControlPath});
   try {
     const firstRequest = {
       request: signed(
@@ -354,6 +351,7 @@ export async function connectMembershipPairing({
       return credential;
     };
     policy = createMembershipAdmission({
+      onRefresh,
       authorityPublicKey: context.authorityPublicKey,
       authorize,
       readRevocations: ({ networkId, signal }) =>

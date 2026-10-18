@@ -6,14 +6,14 @@ export function createMemoryChunkStore(){const data=new Map();return {async get(
 /** Chunked file exchange over the peer data channel with backpressure. */
 export function createFileDistribution({core,crypto=globalThis.crypto,emit=()=>{},allowed=()=>true,canUsePeer=()=>true,chunkStore=createMemoryChunkStore(),requestTimeoutMs=10000,requestWindow=8,maxAttemptsPerPeer=2,maxFileBytes=1024*1024*1024}) {
  const manifests=new Map(),sources=new Map(),offers=new Map(),downloads=new Map(),sendTimings=new Map(),activeSends=new Set(),peerGenerations=new Map();let closed=false;
- const sendQueue=createPreparedSendQueue(),writeQueue=[];let activeWrites=0,queuedWrites=0;
+ const sendQueue=createPreparedSendQueue({maxPerPeer:32}),writeQueue=[];let activeWrites=0,queuedWrites=0;
  const maxReceiveSlots=32,writeConcurrency=4;
  const now=()=>performance.now();
  function senderMetrics(to,id){const key=to+':'+id;let row=sendTimings.get(key);if(!row){row={to,id,total:0,timings:createFileTimings()};sendTimings.set(key,row);}return row;}
  function flushTimings(to,id){for(const [key,row]of sendTimings)if((!to||row.to===to)&&(!id||row.id===id)){if(row.total)emit('fileTransferTiming',{id:row.id,to:row.to,phase:'send',total:row.total,metrics:row.timings.summary()});sendTimings.delete(key);}}
 
  if(!Number.isFinite(requestTimeoutMs)||requestTimeoutMs<=0||!Number.isSafeInteger(maxFileBytes)||maxFileBytes<0)throw new TypeError('Invalid file service limits');
- if(!Number.isInteger(requestWindow)||requestWindow<1||requestWindow>8||!Number.isInteger(maxAttemptsPerPeer)||maxAttemptsPerPeer<1||maxAttemptsPerPeer>3)throw new TypeError('Invalid file request window or retry limit');
+ if(!Number.isInteger(requestWindow)||requestWindow<1||requestWindow>32||!Number.isInteger(maxAttemptsPerPeer)||maxAttemptsPerPeer<1||maxAttemptsPerPeer>3)throw new TypeError('Invalid file request window or retry limit');
  const check=id=>{if(closed)throw new Error('File service closed');const m=manifests.get(id);if(!m)throw new Error('Unknown file');if(!allowed(id,m.distributionId))throw new Error('Distribution revoked');return m;};
  const peerAllowed=peer=>{if(!canUsePeer(peer))throw new Error('Peer membership inactive');};
  const packet=(to,sys,file)=>{peerAllowed(to);core.command('SEND_DM',{to,sys,file});};

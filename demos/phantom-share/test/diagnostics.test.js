@@ -21,3 +21,11 @@ test('stage timing percentiles survive diagnostic sanitization and reload',()=>{
  d.record('distributionTransferTiming',{id:'asset:test',phase:'receive',metrics:{hashMs:{count:32,p50:1,p95:3,max:4,sum:40,sampleCount:32},writeMs:{count:32,p50:2,p95:5,max:6,sum:70,sampleCount:32}},payload:'secret'});d.flush();
  const restored=createDiagnostics({storage});const row=restored.report().rows.find(r=>r.type==='distributionTransferTiming');assert.equal(row.data.metrics.hashMs.p95,3);assert.equal(row.data.metrics.writeMs.sum,70);assert.equal(JSON.stringify(row).includes('secret'),false);
 });
+test('membership path outcomes and refresh deadline evidence survive sanitization',()=>{
+ const d=createDiagnostics();
+ d.record('MEMBERSHIP_CONTROL_PATH',{type:'peer',reason:'revocations',status:'failure',code:'timeout',elapsedMs:2000,request:{token:'SECRET'}});
+ d.record('MEMBERSHIP_REFRESH',{status:'failure',code:'timeout',elapsedMs:5000,freshForMs:0,credential:'SECRET'});
+ const rows=d.report().rows.slice(-2);
+ assert.equal(rows[0].data.code,'timeout');assert.equal(rows[0].data.elapsedMs,2000);
+ assert.equal(rows[1].data.freshForMs,0);assert.equal(JSON.stringify(rows).includes('SECRET'),false);
+});

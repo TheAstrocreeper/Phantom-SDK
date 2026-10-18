@@ -1,5 +1,28 @@
 # Actual Breach transfer comparison
 
+Run the actual SDK file service over a controlled ordered software wire:
+
+```sh
+node tools/breach-comparison/window-benchmark.mjs
+```
+
+It transfers and verifies 4 MiB with 64 KiB chunks over an 8 MiB/s wire at
+10/200 ms RTT, using windows 1, 8 and 32. It reports queued bytes and gaps
+between source binary messages separately from serialization time. The model
+includes ordered metadata/raw payload delivery, real asynchronous read/hash
+and persistence, but not native SCTP, browser scheduling, radio loss or devices.
+Its throughput cannot establish the cause of the uploaded device results.
+
+The SDK now accepts an opt-in `requestWindow` from 1 to 32; the default remains
+8, and Share remains at 8. Source admission accommodates 32 requests per peer
+under the existing 64-job global bound and eight preparation workers. Receiver
+admission remains 32 verification/write/request slots with four active writes.
+At 64 KiB this permits 2 MiB rather than 512 KiB in requested payload; native
+send buffering remains separately bounded. The blocked-write regression checks
+that the larger window does not bypass the receiver's memory/storage bound,
+including a source using its default request window. A larger configured window
+is not a demonstrated device throughput fix.
+
 Analyze saved receiver reports without another device run:
 
 ```sh

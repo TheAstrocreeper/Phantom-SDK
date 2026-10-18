@@ -159,3 +159,23 @@ Single-use claim tokens and compact room coordinates are distinct. A reusable
 room seed alone cannot enforce single-use admission. Link, QR, and future pairing
 codes must carry or securely establish the same invitation claim. Encoding the
 claim for human entry is a separate change.
+
+### Refresh diagnostics
+
+`createMembershipAdmission({onRefresh})` optionally reports refresh `status`
+(`start`, `success`, `failure`), `elapsedMs`, and remaining `freshForMs`.
+Failures have a fixed `code`: `timeout`, `request_failed`, `invalid_snapshot`,
+`invalid_revocation`, or `snapshot_expired`. Requests merged into an existing
+refresh share one diagnostic attempt. Observer errors do not affect admission.
+Freshness and fail-closed deadlines are unchanged.
+
+`connectMembershipPairing` forwards `onRefresh` and reports each control-path
+attempt through `onControlPath`: `path` (`peer`, `pairing`), `action`, `status`,
+`elapsedMs` on completion, and failure `code` (`timeout`, `aborted`, `rejected`,
+`unavailable`, `request_failed`). Peer failure precedes fallback; abort does not
+start fallback. Remote rejection replies are tagged without copying their text
+into diagnostics. No requests, proof material, credentials or remote error text
+are included. Share records these as `MEMBERSHIP_CONTROL_PATH` and
+`MEMBERSHIP_REFRESH`, including the owner's local refresh result. These events
+provide evidence for a later device failure; they do not establish why previous
+refresh attempts failed.

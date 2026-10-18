@@ -10,7 +10,7 @@ export function openMembershipPeerChannel({network,remotePublicKey,onRequest,onE
    if(from!==peer)return;
    if(m.kind==='event'){onEvent(m.data);return;}
    const row=pending.get(m.id);if(m.kind!=='response'||!row)return;
-   row.finish(m.error?new Error(String(m.error).slice(0,200)):null,m.data);return;
+   row.finish(m.error?Object.assign(new Error(String(m.error).slice(0,200)),{code:'MEMBERSHIP_REJECTED'}):null,m.data);return;
   }
   if(m.kind!=='request'||typeof m.id!=='string'||m.id.length>64||working>=16||typeof m.action!=='string')return;
   const key=m.data?.request?.peerPublicKey;

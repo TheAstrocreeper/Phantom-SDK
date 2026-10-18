@@ -5,7 +5,8 @@ import {createMembershipRevocationVerifier} from './membership-proof.js';
  * readRevocations must return a current complete snapshot over trusted transport.
  */
 export function createMembershipAdmission({authorityPublicKey,authorize,readRevocations,subscribeRevocations,leave,
-  crypto=globalThis.crypto,now=Date.now,pollIntervalMs=5000,maxAgeMs=15000,runtime=globalThis}={}) {
+  onRefresh=()=>{},crypto=globalThis.crypto,now=Date.now,pollIntervalMs=5000,maxAgeMs=15000,runtime=globalThis}={}) {
+  if(typeof onRefresh!=='function')throw new TypeError('Membership refresh observer must be a function');
   if(typeof authorize!=='function'||typeof readRevocations!=='function')throw new TypeError('Membership authorize and readRevocations callbacks required');
   if(leave!==undefined&&typeof leave!=='function')throw new TypeError('Invalid membership leave callback');
   if(subscribeRevocations!==undefined&&typeof subscribeRevocations!=='function')throw new TypeError('Invalid revocation subscription');
@@ -35,14 +36,21 @@ export function createMembershipAdmission({authorityPublicKey,authorize,readRevo
     if(state.pending)return state.pending;
     state.pending=(async()=>{
       // Freshness begins at request start, not at arrival of a potentially slow response.
-      const started=now();
+      const started=now();let stage='request',timedOut=false;
+      const notify=(status,code)=>{try{onRefresh({status,...(code?{code}:{}),elapsedMs:now()-started,freshForMs:Math.max(0,state.freshUntil-now())});}catch{}};
+      notify('start');
+      try {
       const controller=new AbortController();let timer;
-      let rows;try{rows=await Promise.race([Promise.resolve().then(()=>readRevocations({networkId,signal:controller.signal})),new Promise((_,reject)=>{timer=runtime.setTimeout(()=>{controller.abort();reject(new AdmissionError('Membership refresh timed out'));},Math.min(5000,maxAgeMs));})]);}finally{runtime.clearTimeout(timer);}
+      let rows;try{rows=await Promise.race([Promise.resolve().then(()=>readRevocations({networkId,signal:controller.signal})),new Promise((_,reject)=>{timer=runtime.setTimeout(()=>{timedOut=true;controller.abort();reject(new AdmissionError('Membership refresh timed out'));},Math.min(5000,maxAgeMs));})]);}finally{runtime.clearTimeout(timer);}
+      stage='snapshot';
       if(!Array.isArray(rows)||rows.length>65536)throw new AdmissionError('Invalid membership revocation snapshot');
+      stage='revocation';
       for(const raw of rows){if(raw?.networkId!==networkId)throw new AdmissionError('Wrong revocation network');await applyRevocation(raw);}
+      stage='freshness';
       state.freshUntil=started+maxAgeMs;
       if(!fresh(state))throw new AdmissionError('Membership snapshot expired in transit');
-      return true;
+      notify('success');return true;
+      }catch(error){notify('failure',timedOut?'timeout':stage==='snapshot'?'invalid_snapshot':stage==='revocation'?'invalid_revocation':stage==='freshness'?'snapshot_expired':'request_failed');throw error;}
     })();
     try {return await state.pending;}
     finally {state.pending=null;}

@@ -47,7 +47,8 @@ export async function connectShare({
   try {
     if (code) {
       control = await connectMembershipPairing({
-        onControlPath: ({path,action}) => onEvent?.({type:"MEMBERSHIP_CONTROL_PATH",payload:{type:path,reason:action}}),
+        onControlPath: ({path,action,...detail}) => onEvent?.({type:"MEMBERSHIP_CONTROL_PATH",payload:{type:path,reason:action,...detail}}),
+        onRefresh: detail => onEvent?.({type:"MEMBERSHIP_REFRESH",payload:detail}),
         code,
         identity,
         doorwayFactory,
@@ -72,6 +73,7 @@ export async function connectShare({
       admin = await createAdminIdentity();
       const store = createBrowserMembershipStore();
       const admission = createMembershipAdmission({
+        onRefresh: detail => onEvent?.({type:"MEMBERSHIP_REFRESH",payload:detail}),
         authorityPublicKey: admin.publicKey,
         authorize: async ({ networkId }) => {
           authority ??= await createMembershipAuthority({
