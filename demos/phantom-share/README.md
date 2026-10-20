@@ -22,26 +22,27 @@ changes an existing service.
 
 ## Pairing
 
-Create a session and share its QR, link, or pairing code. A code has 28 letters /
-numbers grouped into blocks, plus the `P1` version prefix. It contains 128 random
-bits and a typing checksum. Code entry is case-insensitive and tolerates spaces,
-hyphens, and commonly confused characters. A TV or other camera-less device can
-open the app and type the same code.
+Create a session and share its QR, link, or six-character pairing code, such as
+`7KH9T2`. Manual entry ignores case and spaces and accepts common ambiguous
+glyphs. QR/link carries a high-entropy P1 bootstrap code automatically.
 
-The app reconstructs temporary bootstrap coordinates from the code and uses the
-SDK's existing Nostr signaling transport to exchange the actual invitation and
-identity-bound membership grant. Bootstrap messages are AES-GCM encrypted with a
-separate key derived from the code. There is no separate code-to-invite lookup
-backend. This is an online exchange with the inviting device, not offline LAN
-discovery or full invitation data compressed into a few characters.
+Manual codes use a two-character public routing bucket and four-character PAKE
+secret. SPAKE2 verifies code possession before releasing the P1 bootstrap code;
+existing encrypted enrollment then obtains the identity-bound membership grant.
+Discovery and handshake use the existing Nostr relays, with no Cloudflare lookup
+service. Both client candidates and host handshake starts are limited to five.
+Shared routing buckets and hostile peers can exhaust that budget and deny a join.
 
-Each invitation admits one device. Retrying with that same signing identity is
-idempotent while its original membership remains active. Another device cannot
-reuse the code. The invitation expires after five minutes if unused. Each member
-can request a fresh invitation from the connected owner. The modal replaces a
-consumed code with a new one; link, QR, and displayed code always represent the
-same invitation. Older room-only invitations are intentionally rejected by this
-app because they do not carry single-use enrollment.
+Each invitation admits one device and expires after two minutes. A successful
+manual bootstrap consumes its short code; membership redemption consumes the
+shared invitation for both code and QR/link paths. The modal replaces used codes.
+Leave or Remove requires a fresh invitation for the next membership generation.
+
+Deploy the **entire** `dist/` directory, including `spake2-glue.js`, `spake2.wasm`
+and license files. These are local static assets, not a remote crypto loader.
+This short-code integration is experimental and has not been independently
+audited. Local protocol and enrollment tests pass; real-browser and live-relay
+validation remain outstanding.
 
 ## Membership
 

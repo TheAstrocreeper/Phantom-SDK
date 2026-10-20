@@ -27,7 +27,7 @@ function YT({
     B = () =>
       e
         .getPeerConnections()
-        .filter((P) => P.state === "ready")
+        .filter((P) => P.state === "ready" && e.getPeers().some(peer => peer.hKey === P.peerId))
         .map((P) => P.peerId),
     z = sa({ networkId: e.networkId, adminPublicKey: o }),
     V = (P, tt) => {
@@ -36,6 +36,24 @@ function YT({
     U = () => {
       H || l();
     };
+  function updateConnectivity() {
+    const ready = new Set(B());
+    for (const asset of h.values()) {
+      if (!["receiving", "sharing", "interrupted"].includes(asset.status)) continue;
+      const pending = asset.outgoing ? asset.recipients.filter(peer => !asset.delivered.has(peer)) : [];
+      const disconnected = asset.outgoing
+        ? pending.length > 0 && pending.every(peer => !ready.has(peer))
+        : ready.size === 0;
+      if (disconnected) {
+        asset.status = "interrupted";
+        asset.error = "Transfer interrupted — device disconnected";
+      } else if (asset.status === "interrupted") {
+        asset.status = asset.outgoing ? "sharing" : "receiving";
+        delete asset.error;
+      }
+    }
+  }
+  C.push(e.on("state", () => { updateConnectivity(); U(); }));
   function j(P) {
     return {
       id: P.id,
@@ -63,6 +81,7 @@ function YT({
         V(P, { type: "asset", asset: j(tt) });
   }
   function S(P, tt) {
+    if (H) return;
     if (
       ((P.blob = tt),
       (P.received = P.total),
@@ -72,13 +91,14 @@ function YT({
       b.add(P.id);
       for (let et of B()) V(et, { type: "receipt", id: P.id });
     }
+    delete P.error;
     U();
   }
   (C.push(
     e.on("peerConnection", (P) => {
       (P.state === "ready" &&
         (V(P.peerId, { type: "hello" }), I(P.peerId).catch(p)),
-        U());
+        updateConnectivity(), U());
     }),
   ),
     C.push(
@@ -111,7 +131,8 @@ function YT({
           ((tt.received = P.received),
           (tt.total = P.total),
           (tt.status = "receiving"),
-          U());
+          delete tt.error,
+          updateConnectivity(), U());
       }),
     ),
     C.push(
@@ -131,9 +152,10 @@ function YT({
       }),
     ),
     C.push(
-      e.on("distributionConnectionFailed", () =>
-        p(Error("Transfer interrupted. Phantom is attempting recovery.")),
-      ),
+      e.on("distributionConnectionFailed", () => {
+        updateConnectivity(); U();
+        p(Error("Transfer interrupted. Phantom is attempting recovery."));
+      }),
     ),
     C.push(
       e.on("message", ({ from: P, text: tt }) => {
@@ -249,6 +271,7 @@ function YT({
           total: it.total,
           recipients: T.recipients,
           proof: T,
+          sourcePeer: P,
         }),
           h.set(it.id, st));
         try {
@@ -328,6 +351,7 @@ function YT({
       const prepared = await e.prepareDistributionFile(P, {
         distributionId: crypto.randomUUID(),
         chunkSize: 65536,
+        sourceReadBlockBytes: 4 * 1024 * 1024,
       });
       if (H) throw Error("Network closed during file preparation.");
       h.delete(temporaryId);
@@ -372,6 +396,11 @@ function YT({
       for (let P of g.values())
         (clearTimeout(P.timer), P.reject(Error("Network closed")));
       g.clear();
+      h.clear();
+      b.clear();
+      w.clear();
+      preparing = null;
+      N = null;
     },
   };
 }

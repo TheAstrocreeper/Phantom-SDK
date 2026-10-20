@@ -1,6 +1,9 @@
+import {saveBlob,cancelNativeSave,ownsNativeSession} from './native-save.js';
+function reportSaveError(error){if(error.code!=='SAVE_CANCELLED')showError(error);}
+import { createQRScanner } from "./qr-scanner.js";
 import { requestRampApproval } from "./ramp-approval.js";
 import { attachRampTest } from "./ramp-test.js";
-import { leaveAndReset } from "./session-cleanup.js";
+import { leaveAndReset, closeSessionOwners } from "./session-cleanup.js";
 import { createDiagnostics } from "./diagnostics.js";
 import { createBrowserIdentity as createBrowserIdentity } from "../../../packages/phantom-doorways/src/browser-entry.js";
 import { parseInvite as parseInvite } from "../../../packages/phantom-core/src/invite.js";
@@ -10,15 +13,21 @@ import {
   selectRecipients as selectRecipients,
   createShareSession as createShareSession,
 } from "./session.js";
+import { createConnectionQueue } from "./connection-queue.js";
 import { connectShare, codeFromInput } from "./membership.js";
 let diagnosticStorage;
 try {
   diagnosticStorage = sessionStorage;
 } catch {}
 const diagnostics = createDiagnostics({ storage: diagnosticStorage });
+const connectionQueue = createConnectionQueue({onState: state => diagnostics.record("session-lifecycle", {state})});
+let nativeForeground = true;
+const appVisible = () => document.visibilityState === "visible" &&
+  (!globalThis.PhantomNative || nativeForeground);
 const recordEnvironment = (type) => {
   diagnostics.record(type, {
     visibility: document.visibilityState,
+    ...(globalThis.PhantomNative ? {nativeForeground} : {}),
     online: navigator.onLine,
   });
   diagnostics.flush();
@@ -137,6 +146,20 @@ function canShare() {
   return selected.length > 0 && selected.every((id) => ready.has(id));
 }
 function renderAvailability() {
+  const ending = connectionQueue.phase === "ending";
+  byId("join-network").disabled = connecting || ending || !!network;
+  byId("join-network").textContent = connecting ? "Joining…" : "Join session";
+  byId("join-network").setAttribute("aria-busy", String(connecting));
+  byId("paste-invite").disabled = connecting || ending;
+  byId("scan-qr").disabled = connecting || ending;
+  byId("pairing-back").disabled = connecting || ending;
+  byId("choose-create").disabled = connecting || ending;
+  byId("choose-join").disabled = connecting || ending || !!network;
+  byId("cancel-join").hidden = !connecting || pairingIntent !== "connect";
+  const nameLocked = !!network || connecting || leaving;
+  byId("profile-action").hidden = nameLocked;
+  byId("session-name").hidden = !nameLocked;
+  byId("session-name").textContent = displayName();
   const available = canShare(),
     ready = readyPeers().length;
   const zone = byId("portal-drop-zone");
@@ -144,6 +167,7 @@ function renderAvailability() {
   zone.setAttribute("aria-disabled", String(!available));
   zone.tabIndex = available ? 0 : -1;
   byId("file-input").disabled = !available;
+
   if (!available) zone.classList.remove("portal-drop-active");
   byId("session-heading").textContent = ready
     ? "Connected"
@@ -178,81 +202,55 @@ function setRecipientMode(e, a) {
     renderPeers());
 }
 function renderPeers() {
-  let e = peers();
-  ((byId("peer-count-text").textContent =
-    e.length + " connected device" + (e.length === 1 ? "" : "s")),
-    byId("routing-legend").classList.toggle("hidden", e.length < 2));
-  let a = byId("orbital-peers-container");
-  ((a.innerHTML = e.length
-    ? e
-        .map((o) => {
-          let l = recipientModes.get(o.id) || "default";
-          return `<div class="glass-card rounded-2xl p-4 border transition-all flex flex-col justify-between gap-3 ${l === "exclude" ? "opacity-40 grayscale border-white/5 bg-black/40" : l === "direct" ? "border-phantom-neonBlue bg-phantom-spectral/30" : "border-white/10"}"><div class="flex items-center gap-2.5"><div class="w-8 h-8 rounded-xl border border-white/10 flex items-center justify-center bg-white/5 text-phantom-neonBlue"><i data-lucide="monitor" class="w-4 h-4"></i></div><div class="min-w-0"><h4 class="text-xs font-bold text-white truncate">${escapeHtml(o.name)}</h4><span class="text-[10px] font-mono text-phantom-ghostBlue">${o.id.slice(-4)} \xB7 ${escapeHtml(o.connection)}</span></div></div>${e.length > 1 ? `<div class="pt-2 border-t border-white/5 flex items-center justify-between gap-2"><span class="text-[10px] font-mono text-phantom-mutedIvory">${l.toUpperCase()}</span><div class="flex gap-1"><button data-peer="${o.id}" data-mode="direct" aria-pressed="${l === "direct"}" class="px-2 py-1 rounded text-[10px] font-mono ${l === "direct" ? "bg-phantom-neonBlue text-black" : "bg-white/5 text-phantom-mutedIvory"}">Direct</button><button data-peer="${o.id}" data-mode="exclude" aria-pressed="${l === "exclude"}" class="px-2 py-1 rounded text-[10px] font-mono ${l === "exclude" ? "bg-lime-500/20 text-lime-200" : "bg-white/5 text-phantom-mutedIvory"}">Exclude</button></div></div>` : ""}${shareConnection?.isOwner ? `<button data-peer="${o.id}" data-mode="remove" class="text-[10px] font-mono text-phantom-mutedIvory self-end hover:text-white" aria-label="Remove ${escapeHtml(o.name)}">Remove</button>` : ""}</div>`;
-        })
-        .join("")
-    : '<div class="col-span-full text-center py-4 font-mono text-xs text-phantom-mutedIvory">' +
-      (network
-        ? "Waiting for someone to join. Share your invitation."
-        : "Connect to start sharing.") +
-      "</div>"),
-    updateTargetLabel(),
-    renderAvailability(),
-    renderIcons());
+  const rows = peers();
+  byId("peer-count-text").textContent = rows.length + " device" + (rows.length === 1 ? "" : "s");
+  byId("routing-legend").classList.add("hidden");
+  byId("orbital-peers-container").innerHTML = rows.length ? rows.map(peer => {
+    const mode = recipientModes.get(peer.id) || "default";
+    const label = escapeHtml(peer.name);
+    return `<div class="share-peer ${mode === "exclude" ? "is-excluded" : ""}">
+      <div class="share-peer-info"><span class="share-avatar"><i data-lucide="monitor"></i></span><div class="share-peer-name"><h4 title="${label}">${label}</h4><span class="share-peer-state">${escapeHtml(peer.connection)}</span></div></div>
+      <div class="share-peer-actions"><select class="share-recipient-select" data-recipient-peer="${peer.id}" aria-label="Recipients for ${label}">${[["default","All peers"],["direct","Only this device"],["exclude","Exclude this device"]].map(([value,title]) => `<option value="${value}"${mode === value ? " selected" : ""}>${title}</option>`).join("")}</select>
+      ${shareConnection?.isOwner ? `<button class="share-remove" data-peer="${peer.id}" data-mode="remove" aria-label="Remove ${label}" title="Remove device">Remove</button>` : ""}</div></div>`;
+  }).join("") : `<div class="share-empty">${network ? "Waiting for someone to join. Share your invitation." : "Connect to start sharing."}</div>`;
+  updateTargetLabel();
+  renderAvailability();
+  renderIcons();
 }
 function renderTransfers() {
-  let e = [...(sharing?.assets.values() || [])].reverse();
-  byId("transfer-count-badge").textContent =
-    e.filter((o) => !["sent", "received", "failed"].includes(o.status)).length +
-    " active";
-  let a = byId("transfers-container");
-  if (
-    ((a.innerHTML =
-      e
-        .slice(0, 1)
-        .map((o) => {
-          let l = 0,
-            p = o.status;
-          if (o.outgoing)
-            ((l =
-              o.status === "preparing"
-                ? o.total
-                  ? Math.round((o.received / o.total) * 100)
-                  : 0
-                : o.recipients.length
-                  ? Math.round((o.delivered.size / o.recipients.length) * 100)
-                  : 0),
-              (p =
-                o.status === "sharing"
-                  ? `${o.delivered.size}/${o.recipients.length} recipients received`
-                  : o.status));
-          else {
-            let h = network
-              ?.getDistributionState()
-              ?.assets.find((g) => g.id === o.id)
-              ?.holders.find((g) => g.peer === network.getState().peerId);
-            l =
-              o.status === "received"
-                ? 100
-                : o.total
-                  ? Math.round(
-                      (Math.max(o.received || 0, h?.indexes.length || 0) /
-                        o.total) *
-                        100,
-                    )
-                  : 0;
-          }
-          return `<div class="glass-card rounded-2xl p-4 border border-white/10 flex flex-col gap-2"><div class="flex items-center justify-between gap-3"><div class="min-w-0"><h4 class="text-xs font-bold text-white truncate">${escapeHtml(o.name)}</h4><span class="text-[10px] font-mono text-phantom-mutedIvory">${$T(o.size)} \xB7 ${escapeHtml(o.error || p)}</span></div>${o.blob && !o.outgoing ? `<button data-download="${o.id}" class="px-3 py-1 rounded-lg bg-phantom-spectral/40 border border-phantom-spectral text-phantom-neonBlue text-xs">Save</button>` : ""}</div><progress class="w-full h-1 accent-lime-300" max="100" value="${l}" aria-label="${o.status === "preparing" ? "File preparation" : o.outgoing ? "Recipients completed" : "File received"}"></progress></div>`;
-        })
-        .join("") ||
-      '<div class="text-center py-3 font-mono text-xs text-phantom-mutedIvory/60">No transfers yet.</div>'),
-    e.length > 1)
-  ) {
-    let o = document.createElement("button");
-    ((o.textContent = `View all ${e.length} transfers`),
-      (o.className = "text-xs text-phantom-neonBlue"),
-      (o.onclick = () => showHistory(e)),
-      a.append(o));
+  const assets = [...(sharing?.assets.values() || [])].reverse();
+  const terminal = new Set(["sent", "received", "failed", "interrupted"]);
+  const active = assets.filter(asset => !terminal.has(asset.status));
+  const complete = assets.filter(asset => terminal.has(asset.status));
+  const shown = [...active.slice(0, 2), ...complete.slice(0, active.length ? 1 : 2)];
+  byId("transfer-count-badge").textContent = active.length + " active";
+  const container = byId("transfers-container");
+  container.innerHTML = shown.map(asset => {
+    let progress = 0, status = asset.status;
+    if (asset.outgoing) {
+      progress = asset.status === "preparing" ? (asset.total ? Math.round(asset.received / asset.total * 100) : 0)
+        : asset.recipients.length ? Math.round(asset.delivered.size / asset.recipients.length * 100) : 0;
+      if (status === "sharing") status = `${asset.delivered.size}/${asset.recipients.length} recipients received`;
+    } else {
+      const holder = network?.getDistributionState()?.assets.find(row => row.id === asset.id)?.holders.find(row => row.peer === network.getState().peerId);
+      progress = asset.status === "received" ? 100 : asset.total ? Math.round(Math.max(asset.received || 0, holder?.indexes.length || 0) / asset.total * 100) : 0;
+    }
+    progress = Math.max(0, Math.min(100, progress));
+    const downloadable = asset.blob && !asset.outgoing;
+    const filename = downloadable ? `<button class="share-file-link" data-download="${asset.id}" title="Save ${escapeHtml(asset.name)}">${escapeHtml(asset.name)}</button>` : `<span class="share-filename" title="${escapeHtml(asset.name)}">${escapeHtml(asset.name)}</span>`;
+    const label = asset.status === "preparing" ? "File preparation" : asset.outgoing ? "Recipients completed" : "File received";
+    return `<article class="share-transfer"><div class="share-transfer-label"><span>${asset.outgoing ? "Sending" : "Receiving"}${asset.status === "received" ? " · complete" : asset.status === "sent" ? " · complete" : ""}</span><span>${progress}%</span></div>
+      <div class="share-file-row"><span class="share-file-icon"><i data-lucide="file"></i></span><div class="share-file-info">${filename}<span class="share-file-detail">${$T(asset.size)} · ${escapeHtml(asset.error || status)}</span></div>${downloadable ? `<button data-download="${asset.id}" class="share-save">Save</button>` : ""}</div>
+      <div class="share-progress" role="progressbar" aria-label="${label}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progress}"><span style="width:${progress}%"></span></div></article>`;
+  }).join("") || '<div class="share-empty">No transfers yet.</div>';
+  if (assets.length > shown.length) {
+    const history = document.createElement("button");
+    history.textContent = `View all ${assets.length} transfers`;
+    history.className = "share-history";
+    history.onclick = () => showHistory(assets);
+    container.append(history);
   }
+  renderIcons();
 }
 function showHistory(e) {
   let a = byId("history-dialog");
@@ -278,12 +276,14 @@ function showHistory(e) {
 function saveFile(e) {
   let a = sharing?.assets.get(e);
   if (!a?.blob) return;
+  if(globalThis.PhantomNative?.postMessage){void saveBlob(a.blob,a.name).catch(reportSaveError);return;}
   let o = downloadUrls.get(e);
   o || ((o = URL.createObjectURL(a.blob)), downloadUrls.set(e, o));
   let l = document.createElement("a");
-  ((l.href = o), (l.download = a.name), l.click());
+  ((l.href = o), (l.download = a.name));
+  document.body.append(l); l.click(); l.remove();
 }
-async function acquireIdentityLock() {
+async function acquireIdentityLock(generation) {
   navigator.locks &&
     (await new Promise((e, a) => {
       navigator.locks
@@ -296,6 +296,10 @@ async function acquireIdentityLock() {
             );
             return;
           }
+          if (generation !== connectionGeneration) {
+            a(new Error("Connection cancelled."));
+            return;
+          }
           return new Promise((l) => {
             ((releaseIdentityLock = l), e());
           });
@@ -303,6 +307,24 @@ async function acquireIdentityLock() {
         .catch(a);
     }));
 }
+let pairingIntent = null;
+let pairingCreatesSession = false, pairingPanelGeneration = 0;
+const scanner = createQRScanner({
+  video: byId("scanner-video"), canvas: byId("scanner-canvas"),
+  onStatus: (text) => { byId("scanner-status").textContent = text; },
+  onCode: (text) => {
+    try {
+      const code = codeFromInput(text);
+      byId("paste-invite").value = code;
+      byId("scanner-status").textContent = "Invitation scanned. Joining…";
+      byId("scanner-panel").hidden = true;
+      void connect(code).then((connected) => { if (connected) closeInviteModal(); });
+    } catch { byId("scanner-status").textContent = "This QR is not a Phantom invitation. Point at an invitation QR."; throw new Error("This QR is not a Phantom invitation. Tap Scan QR to try again."); }
+  },
+});
+byId("scan-qr").onclick = () => { byId("scanner-panel").hidden = false; void scanner.start(); };
+byId("stop-scan").onclick = () => { scanner.stop(); byId("scanner-panel").hidden = true; byId("scanner-status").textContent = "Camera stopped. You can enter an invitation below."; };
+document.addEventListener("visibilitychange", () => { if (!appVisible()) { scanner.stop(); byId("scanner-panel").hidden = true; } });
 let shareConnection = null,
   currentInvitation = null,
   invitationTimer = null,
@@ -311,7 +333,7 @@ let shareConnection = null,
 async function ensureInvitation() {
   const connection = shareConnection;
   if (!connection) return;
-  if (!currentInvitation || currentInvitation.expiresAt <= Date.now()) {
+  if (!currentInvitation || Math.min(currentInvitation.expiresAt,currentInvitation.codeExpiresAt??Infinity) <= Date.now()) {
     if (!invitationPending) {
       const pending = connection
         .newInvite()
@@ -327,15 +349,15 @@ async function ensureInvitation() {
   }
   if (shareConnection !== connection || !currentInvitation) return;
   const shown = currentInvitation,
-    url = new URL(location.href);
+    url = new URL(document.querySelector('meta[name="phantom-public-url"]')?.content || location.href);
   url.search = "";
-  url.hash = new URLSearchParams({ pair: shown.code }).toString();
+  url.hash = new URLSearchParams({ pair: shown.linkCode ?? shown.code }).toString();
   shareUrl = url.href;
   byId("invite-link").value = shareUrl;
   byId("invite-code").value = shown.code;
   byId("invite-expiry").textContent =
     "One device · expires in " +
-    Math.max(1, Math.ceil((shown.expiresAt - Date.now()) / 60000)) +
+    Math.max(1, Math.ceil((Math.min(shown.expiresAt,shown.codeExpiresAt??Infinity) - Date.now()) / 60000)) +
     " min";
   await JT.default.toCanvas(byId("invite-qr"), shareUrl, {
     width: 164,
@@ -353,18 +375,22 @@ async function ensureInvitation() {
       if (!byId("invite-modal").classList.contains("hidden"))
         void ensureInvitation().catch(showError);
     },
-    Math.max(1, shown.expiresAt - Date.now()),
+    Math.max(1, Math.min(shown.expiresAt,shown.codeExpiresAt??Infinity) - Date.now()),
   );
 }
 async function connect(code = "") {
-  if (connecting || network) return;
+  if (connecting || network || connectionQueue.busy) return;
+  scanner.stop();
+  byId("scanner-panel").hidden = true;
+  const submittedInput = byId("paste-invite").value;
   const generation = ++connectionGeneration;
+  if (code) byId("join-status").textContent = "Joining… Keep this screen open.";
   diagnostics.record("connect-start", {
     generation,
     role: code ? "guest" : "owner",
   });
   connecting = true;
-  joinController = new AbortController();
+  const controller = joinController = new AbortController();
   byId("connect-action").disabled = true;
   renderAvailability();
   setStatus("Connecting…");
@@ -372,37 +398,45 @@ async function connect(code = "") {
     if (!window.isSecureContext || !crypto.subtle)
       throw Error("Open Phantom Share over HTTPS or localhost.");
     if (!savedIdentity) throw Error("Site storage is required.");
-    await acquireIdentityLock();
-    const connection = await connectShare({
-      seed: savedIdentity,
-      code,
-      name: displayName(),
-      signal: joinController.signal,
-      onEvent: (event) => {
-        if (
-          /MEMBERSHIP|PRESENCE|CONNECTION|ADMISSION|RTC|SIGNAL|RECOVER|CLOSED|ERROR/.test(
-            event.type,
+    const connection = await connectionQueue.run(async () => {
+      await acquireIdentityLock(generation);
+      if (controller.signal.aborted || generation !== connectionGeneration) throw Error("Connection cancelled.");
+      return connectShare({
+        seed: savedIdentity,
+        code,
+        name: displayName(),
+        signal: controller.signal,
+        onEvent: (event) => {
+          if (generation !== connectionGeneration) return;
+          if (
+            /MEMBERSHIP|PRESENCE|CONNECTION|ADMISSION|RTC|SIGNAL|OFFER_ORDER|RECOVER|CLOSED|ERROR/.test(
+              event.type,
+            )
           )
-        )
-          diagnostics.record(event.type, event.payload);
-      },
-      onState: (state) => {
-        diagnostics.record("network-state", state);
-        if (generation === connectionGeneration) updateConnectionStatus(state);
-      },
-      onError: showError,
-      onClaim: ({ code: claimed }) => {
-        if (currentInvitation?.code === claimed) {
-          currentInvitation = null;
-          byId("invite-code").value = "Used";
-          byId("invite-link").value = "";
-          if (!byId("invite-modal").classList.contains("hidden"))
-            void ensureInvitation().catch(showError);
-        }
-      },
-    });
+            diagnostics.record(event.type, event.payload);
+        },
+        onState: (state) => {
+          if (generation !== connectionGeneration) return;
+          diagnostics.record("network-state", state);
+          updateConnectionStatus(state);
+        },
+        onError: (error) => {
+          if (generation === connectionGeneration) showError(error);
+        },
+        onClaim: ({ code: claimed }) => {
+          if (generation !== connectionGeneration) return;
+          if (currentInvitation?.code === claimed) {
+            currentInvitation = null;
+            byId("invite-code").value = "Used";
+            byId("invite-link").value = "";
+            if (!byId("invite-modal").classList.contains("hidden"))
+              void ensureInvitation().catch(showError);
+          }
+        },
+      });
+    }, controller.signal);
     if (generation !== connectionGeneration) {
-      connection.close();
+      await connection.close();
       return;
     }
     shareConnection = connection;
@@ -411,7 +445,7 @@ async function connect(code = "") {
       network,
       onDiagnostic: (type, data) => diagnostics.record(type, data),
       onRequest: (peer, settings, { signal } = {}) => {
-        if (hasActiveTransfers() || document.visibilityState !== "visible")
+        if (hasActiveTransfers() || !appVisible())
           return false;
         return requestRampApproval({
           root: byId("ramp-approval"),
@@ -422,7 +456,9 @@ async function connect(code = "") {
           message: `The other device requests a connection test. Up to ${settings?.lowWaterBytes === 4194304 ? "0.125" : settings?.flowControls?.length === 2 ? "1.25" : settings?.maxStageBytes === 1073741824 ? "18" : "3.5"} GiB of generated traffic may be sent. Keep both pages visible.`,
         });
       },
-      onUpdate: updateRampTest,
+      onUpdate: (update) => {
+        if (generation === connectionGeneration) updateRampTest(update);
+      },
     });
     admin = connection.admin;
     invite = network.invite;
@@ -432,6 +468,7 @@ async function connect(code = "") {
       admin: admin,
       adminPublicKey: context.adminPublicKey,
       onChange: () => {
+        if (generation !== connectionGeneration) return;
         if (rampBusy && hasActiveTransfers())
           rampControl?.cancel("File transfer started");
         for (const asset of sharing?.assets.values() || [])
@@ -445,9 +482,12 @@ async function connect(code = "") {
           });
         renderPeers();
         renderTransfers();
+        shareConnection?.setTransferActive(hasActiveTransfers());
         if (preparationActivity()) updateConnectionStatus(network.getState());
       },
-      onError: showError,
+      onError: (error) => {
+        if (generation === connectionGeneration) showError(error);
+      },
     });
     network.on("state", (state) => {
       if (generation !== connectionGeneration) return;
@@ -464,6 +504,7 @@ async function connect(code = "") {
       updateConnectionStatus(state);
     });
     network.on("peerConnection", () => {
+      if (generation !== connectionGeneration) return;
       renderPeers();
       if (network) updateConnectionStatus(network.getState());
     });
@@ -491,10 +532,12 @@ async function connect(code = "") {
     ])
       network.on(type, (data) => diagnostics.record(type, data));
     network.on("membershipChanged", (event) => {
+      if (generation !== connectionGeneration) return;
       diagnostics.record("membershipChanged", event);
       renderPeers();
     });
     network.on("event", (event) => {
+      if (generation !== connectionGeneration) return;
       if (event.type === "PRESENCE_ROSTER") {
         diagnostics.record("peer-summary", {
           connected: peers().length,
@@ -521,22 +564,24 @@ async function connect(code = "") {
     pendingCode = "";
     byId("join-section").hidden = true;
     byId("leave-action").disabled = false;
-    byId("connect-action").querySelector("span").textContent = "Invite";
+    byId("connect-action").hidden = false;
     renderPeers();
     renderTransfers();
     updateConnectionStatus(network.getState());
+    if (code) byId("join-status").textContent = "Connected.";
+    return true;
   } catch (error) {
     if (generation === connectionGeneration) {
-      shareConnection?.close();
-      shareConnection = null;
-      sharing?.close();
-      sharing = null;
-      network?.close();
-      network = null;
-      releaseIdentityLock?.();
-      releaseIdentityLock = null;
+      cleanupSession(error.message);
       showError(error);
+      if (code) {
+        pairingIntent = "connect";
+        byId("paste-invite").value = submittedInput || code;
+        await openPairingModal();
+        byId("join-status").textContent = error.message;
+      }
     }
+    return false;
   } finally {
     if (generation === connectionGeneration) {
       connecting = false;
@@ -548,6 +593,7 @@ async function connect(code = "") {
 function connectionText(e) {
   if (
     network &&
+    !readyPeers().length && !connecting &&
     !peers().length &&
     !["failed", "retired", "closed"].includes(e.state)
   )
@@ -564,25 +610,75 @@ function connectionText(e) {
             ? "Disconnected"
             : "Connecting \xB7 " + (e.reason || e.state || "finding peers");
 }
+async function openConnectionMenu() {
+  pairingIntent = "choice";
+  return openPairingModal();
+}
+async function openConnectModal() {
+  pairingIntent = "connect";
+  return openPairingModal();
+}
 async function openInviteModal() {
+  pairingCreatesSession = !network && !connecting;
+  pairingIntent = "invite";
+  return openPairingModal();
+}
+async function openPairingModal() {
+  const panelGeneration = ++pairingPanelGeneration;
   if (!displayName()) {
     promptName();
     return;
   }
-  byId("join-section").hidden = !!network;
-  byId("share-section").hidden = !network;
+  const choosing = pairingIntent === "choice";
+  const joining = pairingIntent === "connect";
+  byId("connection-choice").hidden = !choosing;
+  byId("pairing-back").hidden = choosing;
+  byId("choose-join").disabled = !!network;
+  scanner.stop();
+  byId("scanner-panel").hidden = true;
+  byId("scanner-status").textContent = "";
+  byId("join-status").textContent = "";
+  byId("pairing-title").textContent = choosing ? "Connect" : joining ? "Join" : "Create";
+  byId("pairing-description").textContent = choosing ? "Create a connection or join another device." : joining
+    ? "Enter a pairing code, paste a link, or scan a QR."
+    : "Scan this QR on the other device, or share the code or link.";
+  byId("join-section").hidden = !joining;
+  byId("share-section").hidden = choosing || joining;
   byId("invite-modal").classList.remove("hidden");
   byId("invite-modal").classList.add("flex");
-  if (network)
-    try {
-      await ensureInvitation();
-    } catch (error) {
-      showError(error);
-    }
+  if (choosing || joining) return;
+  byId("invite-code").value = "Generating…";
+  byId("invite-link").value = "";
+  const qr = byId("invite-qr");
+  qr.getContext("2d")?.clearRect(0, 0, qr.width, qr.height);
+  try {
+    if (!network) await connect();
+    if (panelGeneration !== pairingPanelGeneration) return;
+    if (network) await ensureInvitation();
+    else byId("invite-code").value = "Unable to create invitation. Try Invite again.";
+  } catch (error) {
+    byId("invite-code").value = "Unable to create invitation. Try Invite again.";
+    showError(error);
+  }
 }
 function closeInviteModal() {
+  ++pairingPanelGeneration;
+  pairingCreatesSession = false;
+  scanner.stop();
+  byId("scanner-panel").hidden = true;
   (byId("invite-modal").classList.add("hidden"),
     byId("invite-modal").classList.remove("flex"));
+}
+function dismissPairingModal() {
+  const cancelCreated = pairingCreatesSession && !peers().length;
+  closeInviteModal();
+  if (cancelCreated) cleanupSession("Creation cancelled. Connect to create or join.");
+}
+async function backFromPairingModal() {
+  dismissPairingModal();
+  const generation = connectionGeneration;
+  await connectionQueue.settled();
+  if (generation === connectionGeneration) return openConnectionMenu();
 }
 async function copyShareLink() {
   try {
@@ -598,32 +694,61 @@ async function copyShareLink() {
 function cleanupSession(message = "You left the session.") {
   diagnostics.record("session-reset", { message });
   diagnostics.flush();
-  rampControl?.close();
+  // Invalidate callbacks and detach live references before closing transports.
+  ++connectionGeneration;
+  const old = {
+    ramp: rampControl, controller: joinController, connection: shareConnection,
+    session: sharing, network, release: releaseIdentityLock,
+  };
   rampControl = null;
   rampBusy = false;
-  ++connectionGeneration;
-  joinController?.abort();
+  joinController = null;
+  shareConnection = null;
+  sharing = null;
+  network = null;
+  admin = null;
+  releaseIdentityLock = null;
   clearTimeout(invitationTimer);
+  invitationTimer = null;
   currentInvitation = null;
   invitationPending = null;
-  shareConnection?.close();
-  shareConnection = null;
-  sharing?.close();
-  sharing = null;
-  network?.close();
-  network = null;
-  releaseIdentityLock?.();
-  releaseIdentityLock = null;
+  const dispose = (action) => {
+    try { action(); }
+    catch (error) { diagnostics.record("reset-error", { message: error.message }); }
+  };
+  dispose(() => old.controller?.abort());
+  // Register ending synchronously, before any UI can start a replacement.
+  void connectionQueue.cleanup(async () => {
+    try {
+      await closeSessionOwners([old.ramp,old.session,old.connection,old.network],
+        error => diagnostics.record("reset-error", {message:error.message}));
+    } finally { dispose(() => old.release?.()); }
+  });
   connecting = false;
+  leaving = false;
+  renderAvailability();
   recipientModes.clear();
   for (const url of downloadUrls.values()) URL.revokeObjectURL(url);
   downloadUrls.clear();
+  cancelNativeSave();
   invite = "";
   shareUrl = "";
   pendingCode = "";
   byId("file-input").value = "";
-  byId("connect-action").disabled = false;
+  for (const id of ["invite-code", "invite-link", "paste-invite"])
+    byId(id).value = "";
+  byId("invite-expiry").textContent = "";
+  byId("scanner-status").textContent = "";
+  const qr = byId("invite-qr");
+  qr.getContext("2d")?.clearRect(0, 0, qr.width, qr.height);
+  for (const id of ["ramp-dialog", "history-dialog"])
+    document.getElementById(id)?.close?.();
+  byId("ramp-approval").classList.add("hidden");
+  byId("toast").classList.add("opacity-0");
+  byId("portal-drop-zone").classList.remove("portal-drop-active");
+  byId("connect-action").disabled = connectionQueue.busy;
   byId("leave-action").disabled = true;
+  byId("connect-action").hidden = false;
   byId("connect-action").querySelector("span").textContent = "Connect";
   const url = new URL(location.href);
   url.hash = "";
@@ -632,7 +757,18 @@ function cleanupSession(message = "You left the session.") {
   closeInviteModal();
   renderPeers();
   renderTransfers();
-  setStatus(message);
+  if (connectionQueue.busy) {
+    const resetGeneration = connectionGeneration;
+    setStatus("Cleaning up connection…");
+    void connectionQueue.settled().then(() => {
+      diagnostics.record("connection-cleanup", {generation:resetGeneration,status:"complete"});
+      diagnostics.flush();
+      if (resetGeneration !== connectionGeneration) return;
+      byId("connect-action").disabled = false;
+      setStatus(message);
+      renderAvailability();
+    });
+  } else setStatus(message);
 }
 async function leaveNetwork() {
   if (!network && !connecting) return;
@@ -642,34 +778,40 @@ async function leaveNetwork() {
   }
   leaving = true;
   renderAvailability();
-  const current = network;
+  const current = network, generation = connectionGeneration;
   try {
     await leaveAndReset({
       leave: () => current.leave(),
       onError: (error) =>
         diagnostics.record("leave-unconfirmed", { message: error.message }),
-      reset: (confirmed) =>
+      reset: (confirmed) => {
+        if (generation !== connectionGeneration || network !== current) return;
         cleanupSession(
           confirmed
             ? "You left the session."
             : "Session closed locally; Leave could not be confirmed.",
-        ),
+        );
+      },
     });
   } finally {
-    leaving = false;
-    invitationPending = null;
-    renderAvailability();
+    // A revoked/closed session may already have reset and been replaced.
+    if (generation === connectionGeneration && network === current) {
+      leaving = false;
+      renderAvailability();
+    }
   }
 }
 async function removeDevice(id) {
   if (!shareConnection?.isOwner) return;
+  const connection = shareConnection, generation = connectionGeneration;
   try {
-    await shareConnection.removePeer(id);
+    await connection.removePeer(id);
+    if (generation !== connectionGeneration || connection !== shareConnection) return;
     recipientModes.delete(id);
     renderPeers();
     setStatus("Device removed. Returning requires a fresh invitation.");
   } catch (error) {
-    showError(error);
+    if (generation === connectionGeneration) showError(error);
   }
 }
 async function handleFileSelect(e) {
@@ -722,13 +864,16 @@ async function handleDrop(e) {
     canShare() && (await sendFiles(Array.from(e.dataTransfer.files))));
 }
 function promptName() {
+  if (network || connecting || leaving) return;
   (byId("name-dialog").showModal(),
     (byId("display-name").value = displayName()),
     byId("display-name").focus());
 }
 Object.assign(window, {
+  openConnectionMenu,
+  openConnectModal,
   openInviteModal: openInviteModal,
-  closeInviteModal: closeInviteModal,
+  closeInviteModal: dismissPairingModal,
   copyShareLink: copyShareLink,
   leaveNetwork: leaveNetwork,
   triggerFileInput: triggerFileInput,
@@ -745,34 +890,47 @@ byId("portal-drop-zone").addEventListener("keydown", (e) => {
     (e.preventDefault(), triggerFileInput());
 });
 byId("invite-modal").addEventListener("keydown", (e) => {
-  e.key === "Escape" && closeInviteModal();
+  e.key === "Escape" && dismissPairingModal();
 });
 byId("orbital-peers-container").addEventListener("click", (e) => {
-  let a = e.target.closest("[data-peer]");
+  let a = e.target.closest("button[data-peer]");
   a &&
     (a.dataset.mode === "remove"
       ? removeDevice(a.dataset.peer)
       : setRecipientMode(a.dataset.peer, a.dataset.mode));
 });
+byId("orbital-peers-container").addEventListener("change", (e) => {
+  const select = e.target.closest("select[data-recipient-peer]");
+  if (!select || !["default", "direct", "exclude"].includes(select.value)) return;
+  setRecipientMode(select.dataset.recipientPeer, select.value);
+  const replacement = [...byId("orbital-peers-container").querySelectorAll("select[data-recipient-peer]")].find(el => el.dataset.recipientPeer === select.dataset.recipientPeer);
+  replacement?.focus({ preventScroll: true });
+});
 byId("transfers-container").addEventListener("click", (e) => {
   let a = e.target.closest("[data-download]");
   a && saveFile(a.dataset.download);
 });
-byId("create-network").onclick = async () => {
-  await connect();
-  if (network) {
-    byId("join-section").hidden = true;
-    byId("share-section").hidden = false;
-    await ensureInvitation().catch(showError);
-  }
-};
+byId("choose-create").onclick = openInviteModal;
+byId("choose-join").onclick = openConnectModal;
+byId("pairing-back").onclick = backFromPairingModal;
 byId("join-network").onclick = async () => {
+  if (connecting || network || connectionQueue.busy) return;
+  byId("join-status").textContent = "";
   try {
-    await connect(codeFromInput(byId("paste-invite").value));
-    if (network) closeInviteModal();
+    const code = codeFromInput(byId("paste-invite").value);
+    if (await connect(code)) closeInviteModal();
   } catch (error) {
+    byId("join-status").textContent = error.message;
     showError(error);
   }
+};
+byId("cancel-join").onclick = () => {
+  if (!connecting || network) return;
+  cleanupSession("Joining cancelled.");
+  pairingIntent = "connect";
+  void openPairingModal().then(() => {
+    byId("join-status").textContent = "Joining cancelled. Enter an invitation to try again.";
+  });
 };
 byId("profile-action").onclick = promptName;
 byId("name-form").onsubmit = async (e) => {
@@ -782,7 +940,7 @@ byId("name-form").onsubmit = async (e) => {
     setStatus("Enter a name of 1\u2013128 characters.");
     return;
   }
-  if (network) {
+  if (network || connecting || leaving) {
     setStatus("Leave the session before changing your name.");
     return;
   }
@@ -790,7 +948,7 @@ byId("name-form").onsubmit = async (e) => {
     (localStorage.setItem("phantom-share-name", a),
       (byId("your-name").textContent = a),
       byId("name-dialog").close(),
-      pendingCode ? await connect(pendingCode) : await openInviteModal());
+      pendingCode ? await connect(pendingCode) : pairingIntent ? await openPairingModal() : setStatus("Invite a device, or Connect using an invitation."));
   } catch (o) {
     showError(o);
   }
@@ -800,7 +958,7 @@ byId("name-dialog").addEventListener("cancel", (e) => {
 });
 function hasActiveTransfers() {
   return [...(sharing?.assets.values() || [])].some(
-    (asset) => !["sent", "received", "failed"].includes(asset.status),
+    (asset) => !["sent", "received", "failed", "interrupted"].includes(asset.status),
   );
 }
 function updateRampTest(update) {
@@ -870,21 +1028,14 @@ byId("ramp-start").onclick = () => {
 };
 byId("ramp-stop").onclick = () => rampControl?.cancel();
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState !== "visible" && rampBusy)
+  if (!appVisible() && rampBusy)
     rampControl?.cancel("Test stopped because this page became hidden");
 });
 byId("ramp-download").onclick = () => {
   if (!lastRampReport) return;
   const report = { ...lastRampReport, diagnostics: diagnostics.report() };
-  const url = URL.createObjectURL(
-    new Blob([JSON.stringify(report, null, 2)], { type: "application/json" }),
-  );
-  const link = document.createElement("a");
-  link.href = url;
-  link.download =
-    "phantom-ramp-" + new Date().toISOString().replace(/[:.]/g, "-") + ".json";
-  link.click();
-  setTimeout(() => URL.revokeObjectURL(url), 60000);
+  void saveBlob(new Blob([JSON.stringify(report,null,2)],{type:'application/json'}),
+    'phantom-ramp-'+new Date().toISOString().replace(/[:.]/g,'-')+'.json').catch(reportSaveError);
 };
 byId("download-logs").onclick = () => {
   recordEnvironment("export");
@@ -893,19 +1044,19 @@ byId("download-logs").onclick = () => {
     connected: peers().length,
     ready: readyPeers().length,
   });
-  const url = URL.createObjectURL(
-    new Blob([JSON.stringify(diagnostics.report(), null, 2)], {
-      type: "application/json",
-    }),
-  );
-  const link = document.createElement("a");
-  link.href = url;
-  link.download =
-    "phantom-share-" + new Date().toISOString().replace(/[:.]/g, "-") + ".json";
-  link.click();
-  setTimeout(() => URL.revokeObjectURL(url), 60000);
+  void saveBlob(new Blob([JSON.stringify(diagnostics.report(),null,2)],{type:'application/json'}),
+    'phantom-share-'+new Date().toISOString().replace(/[:.]/g,'-')+'.json').catch(reportSaveError);
 };
+window.addEventListener("phantom-network-change", event => {
+  if (!ownsNativeSession(event.detail?.token)) return;
+  diagnostics.record("network-change", {reason:event.detail.reason});
+  cleanupSession("Network changed. Connect again.");
+});
+window.addEventListener("phantom-foreground",()=>{nativeForeground=true;recordEnvironment("native-foreground");});
+window.addEventListener("phantom-background",()=>{nativeForeground=false;scanner.stop();byId("scanner-panel").hidden=true;if(rampBusy)rampControl?.cancel("Test stopped because app was backgrounded");recordEnvironment("native-background");});
 window.addEventListener("pagehide", () => {
+  cancelNativeSave();
+  scanner.stop();
   recordEnvironment("pagehide");
   (shareConnection?.close(),
     sharing?.close(),

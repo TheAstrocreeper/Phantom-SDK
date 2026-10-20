@@ -1,0 +1,50 @@
+/* Light mineral theme: black type, signal coral, carbon details. */
+:root{color-scheme:light;--share-text:#202020;--share-muted:#686868;--share-line:#26262622;--share-accent:#ff6759}
+body{background:#e4e4e1;color:#202020}
+body>.share-header>.share-header-inner{background:linear-gradient(115deg,#f4f4f0,#deded8);border:1px solid #a4a49a66;box-shadow:0 8px 24px #24242409;backdrop-filter:none;position:relative}
+.share-header-inner:after{content:"";position:absolute;bottom:0;left:20px;right:20px;height:3px;background:repeating-linear-gradient(118deg,#151515 0 2px,#343430 2px 4px);opacity:.8;pointer-events:none}
+.share-brand,.share-brand em{color:#191919}.share-brand em{color:#505050;opacity:1;font-weight:400}.phantom-symbol{filter:brightness(0)}
+.share-brand-copy #session-name,.share-brand-copy #profile-action,#profile-action,#session-name{color:#666}
+.share-brand-copy #profile-action:hover{color:#222}
+.share-peers-panel,.share-transfers-panel{background:linear-gradient(145deg,#f5f5f0,#e9e9e2);border:1px solid #92928a55;box-shadow:inset 0 1px #fff9;backdrop-filter:none}
+#portal-drop-zone.share-drop{background:linear-gradient(130deg,#e0e0d8,#d0d0c8);border:1px solid #92928a66;box-shadow:inset 0 1px #ffffff77;color:#202020}
+#portal-drop-zone:before{border-color:#72726666}
+#portal-drop-zone h3,#portal-drop-zone h3 span{color:#202020}
+#portal-drop-zone h3 span{font-weight:500}
+#portal-drop-zone .share-drop-content>p,#portal-drop-zone .share-drop-note{color:#5b5b53}
+.share-signal{color:#ff7565;background:repeating-linear-gradient(118deg,#151515 0 2px,#292924 2px 4px);border:1px solid #10100d;box-shadow:0 3px 10px #1b1b1b20,inset 0 1px #ffffff18}
+#active-target-badge{background:#f3f3ec66;border-color:#70705b55;color:#535345;border-radius:6px}#active-target-name{color:#28281d}
+.share-panel-heading h2,.share-panel-heading h3{color:#242424}
+.share-avatar,.share-file-icon{background:#d6d6cd;border-color:#95958055;color:#3f3f31}
+#orbital-peers-container .share-peer-name h4{color:#272727}.share-peer-state,.share-empty,.share-file-detail,.share-transfer-label{color:#666}
+.share-recipient-select{background:#f3f3ed;color:#333;border-color:#96968077;color-scheme:light}
+.share-recipient-select option{background:#f0f0e8;color:#282828}
+.share-recipient-select:focus,.share-recipient-select:focus-visible{border-color:#d65c49;box-shadow:inset 0 0 0 1px #d65c49;outline:none}
+.share-remove{color:#666}.share-remove:hover{color:#a13d2e}
+.share-header-actions button{background:#f0f0e9;border-color:#93938255;color:#292929;box-shadow:none}
+.share-header-actions button:hover{background:#e4e4dc;border-color:#73736677}
+.share-header-actions .connect-button,.share-header-actions .connect-button:hover,.native-primary{background:#ff6759!important;border-color:#c5443544!important;color:#241a14!important;box-shadow:inset 0 1px #ffc4a666}
+.share-save,.share-save:hover,.history-item button{background:repeating-linear-gradient(118deg,#151515 0 2px,#292924 2px 4px)!important;border-color:#0e0e0a!important;color:#f1f1e8!important}
+.share-filename,.share-file-link{color:#313131}.share-file-link:hover{color:#a13d2e}.share-file-link{text-decoration-color:#73735e77}.share-history{color:#646450}
+.share-progress{background:#a3a39233}.share-progress>span{background:#ec6050}
+#connection-status{color:#64645b}
+body>footer{background:transparent;color:#626250}footer>button{color:#626250}footer a strong{color:#333}footer a:hover,footer>button:hover{color:#a13d2e}
+#session-dot{background:#e85849}#session-dot.status-idle{background:#888}
+#invite-modal{background:#16161680;backdrop-filter:blur(5px)}
+#invite-modal>.glass-dock,dialog{background:#ededE7;color:#292929;border-color:#98988488;box-shadow:0 15px 50px #0003}
+#invite-modal h3,#invite-modal label,#invite-modal p,#invite-modal button,#invite-modal .text-white,dialog .text-white{color:#333}
+#invite-modal input,#invite-modal textarea,dialog input,dialog textarea,dialog select,#ramp-peer,#ramp-profile,#ramp-peer option,#ramp-profile option{background:#fafaf5;color:#272727;border-color:#98988477}
+#invite-modal .text-phantom-mutedIvory,dialog .text-phantom-mutedIvory{color:#666}
+#invite-modal .native-primary{color:#241a14!important}
+#invite-modal button.absolute{background:#deded455;color:#333}
+#invite-modal .text-phantom-neonBlue{color:#a13d2e;background:#ff675911;border-color:#ff675944}
+.portal-drop-active{background:#ff675915!important;border-color:#ff6759!important;box-shadow:0 0 20px #ff67591a!important}
+a:focus-visible,button:focus-visible{outline-color:#b64839}
+
+/* Final light-theme contrast details. */
+body>footer.share-footer{background:none!important;background-image:none!important;backdrop-filter:none!important;-webkit-backdrop-filter:none!important;border:0;box-shadow:none;color:#595950}
+body>footer.share-footer button,body>footer.share-footer a,body>footer.share-footer strong{color:#45453f}
+#portal-drop-zone h3 span{color:#c74b3d;font-weight:600}
+#invite-modal #choose-join{background:#deded7;border:1px solid #88887e;color:#292929;font-weight:600;box-shadow:inset 0 1px #ffffff88}
+#invite-modal #choose-join:hover:not(:disabled){background:#d4d4ca;border-color:#68685f}
+#invite-modal #choose-join:disabled{opacity:.6;color:#4b4b43;border-color:#96968b}

@@ -1,3 +1,8 @@
+import {closeSessionOwners} from './session-cleanup.js';
+import {disposeFailedAttempt} from "./failed-connection.js";
+import {prepareNativeConnection, startNativeSession} from './native-save.js';
+import {loadBrowserPake} from './browser-pake.js';
+import {parseShortCode} from '../../../packages/phantom-doorways/src/short-pairing-prototype.js';
 import { createAdminIdentity } from "../../../packages/phantom-core/src/authorization.js";
 import { createMembershipAuthority } from "../../../packages/phantom-core/src/membership.js";
 import { createMembershipAdmission } from "../../../packages/phantom-core/src/membership-admission.js";
@@ -40,18 +45,28 @@ export async function connectShare({
   onClaim,
   onError,
 } = {}) {
+  if(signal?.aborted)throw Error("Connection cancelled");
+  await prepareNativeConnection();
+  if(signal?.aborted)throw Error("Connection cancelled");
+  const pake = await loadBrowserPake();
+  if(signal?.aborted)throw Error("Connection cancelled");
   const identity = createNostrIdentity(seed),
     relays = getDefaultRelays(),
     doorwayFactory = () => createNostrDoorway({ identity, relays });
-  let authority, control, network, admin;
+  let authority, control, network, admin, nativeSession, pairingStarted = false;
   try {
+    nativeSession = await startNativeSession();
+    if (nativeSession) onEvent?.({type:"NATIVE_SESSION",payload:{status:"active"}});
+    if (signal?.aborted) throw Error("Connection cancelled");
     if (code) {
+      pairingStarted = true;
       control = await connectMembershipPairing({
         onControlPath: ({path,action,...detail}) => onEvent?.({type:"MEMBERSHIP_CONTROL_PATH",payload:{type:path,reason:action,...detail}}),
         onRefresh: detail => onEvent?.({type:"MEMBERSHIP_REFRESH",payload:detail}),
         code,
         identity,
         doorwayFactory,
+        pake,
         signal,
         onError,
       });
@@ -110,8 +125,10 @@ export async function connectShare({
         authority,
         invite: network.invite,
         doorwayFactory,
+        pake,
         canIssueInvite: () => true,
         onClaim,
+        onCodeUsed:onClaim,
         onError,
       });
     }
@@ -120,25 +137,32 @@ export async function connectShare({
       network,
       admin,
       isOwner: !!admin,
+      cancel: () => disposeFailedAttempt({nativeSession,control,network,code,onEvent}),
+      setTransferActive: active => nativeSession?.setTransferActive(active),
       newInvite: () => control.newInvite(),
       removePeer: (id) => {
         if (!admin)
           throw new Error("Only the session owner can remove a device");
         return control.removePeer(id);
       },
-      close: () => {
-        network.close();
-        control.close();
-      },
+      close: (() => {
+        let closing;
+        return () => closing ??= closeSessionOwners([nativeSession,control,network],error =>
+          onEvent?.({type:"CONNECTION_CLEANUP_ERROR",payload:{message:error.message}}));
+      })(),
     };
   } catch (error) {
-    network?.close();
-    control?.close();
+    if (pairingStarted && !control && !signal?.aborted)
+      error.message = "Couldn't pair. Check that the code is current and try again.";
+    if (error.code === "ADMISSION_TIMEOUT")
+      error.message = "Connection attempt ended before the session was established. Try a fresh invitation.";
+    await disposeFailedAttempt({nativeSession,control,network,code,onEvent});
     throw error;
   }
 }
 export function codeFromInput(value) {
   const text = value.trim();
+  if(text.replace(/[\s-]/g, "").length===6)return parseShortCode(text).code;
   if (/^P1/i.test(text)) return text;
   try {
     const url = new URL(text);

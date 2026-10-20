@@ -50,3 +50,14 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
+## jsQR 1.4.0 (Phantom Share camera scanning)
+Copyright (c) 2017 Cosmo Wolfe. Licensed under the Apache License, Version 2.0.
+Full license: demos/phantom-share/node_modules/jsqr/LICENSE (included in camera builds as jsQR-LICENSE.txt).
+
+## spake2-wasm 0.2.0 (optional short-code pairing; Phantom Share)
+
+MIT. Package-provided license text: `MIT`.
+Source: https://github.com/okdistribute/spake2-wasm
+The demo redistributes the package WASM and adapted wasm-bindgen ESM glue;
+the package license file is included as SPAKE2-LICENSE.txt. No independent audit
+of this wrapper was established during integration.

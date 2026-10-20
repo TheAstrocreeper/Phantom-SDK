@@ -1,0 +1,122 @@
+/* Approved layout with original Phantom glass, purple, lime and cyan. */
+:root{color-scheme:dark;--share-text:#fcfaf7;--share-muted:#b5b0c6;--share-line:#ffffff18}
+body{gap:14px;padding:20px 0 10px;font-family:"Plus Jakarta Sans",system-ui,sans-serif}
+body>.share-header{width:min(1180px,calc(100% - 48px));max-width:none;padding:0!important;margin:0 auto;flex:none}
+body>.share-header>.share-header-inner{padding:14px 20px!important;border-radius:15px;display:flex;justify-content:space-between;align-items:center;gap:18px}
+.share-brand{display:flex;align-items:center;gap:12px;min-width:0;color:var(--share-text);font-family:Syne,system-ui,sans-serif;font-size:23px;font-weight:750;letter-spacing:-.7px;white-space:nowrap}
+.share-brand em{font-style:normal;font-weight:500;color:#d5cee7}.phantom-symbol{width:38px;height:45px;object-fit:contain;flex:none}
+.share-header-actions{display:flex;align-items:center;gap:10px}.share-header-actions button{display:inline-flex;align-items:center;justify-content:center;gap:7px;padding:9px 13px;border:1px solid #ffffff20;border-radius:9px;background:#ffffff08;font-size:12px;white-space:nowrap;transition:background .15s,border-color .15s}
+.share-header-actions button:hover{background:#6c11ff26;border-color:#8b55ce}.share-header-actions button svg{width:16px;height:16px}.share-header-actions .connect-button{background:#c5f75a;color:#11170a;border-color:#e1ffa2;font-weight:700;box-shadow:0 3px 16px #c5f75a16}.share-header-actions .connect-button:hover{background:#d5ff7d}
+#profile-action,#session-name{font-size:12px;color:var(--share-muted);max-width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#profile-action{border:0;background:transparent}
+body>.share-layout{width:min(1180px,calc(100% - 48px));max-width:none;margin:0 auto;padding:0!important;display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:20px!important;min-height:0;overflow:hidden}
+.share-layout>.share-drop-column{display:flex;flex-direction:column;gap:0!important;padding:0!important;border:0;border-radius:0;background:none;box-shadow:none;min-width:0;min-height:0}
+#portal-drop-zone.share-drop{position:relative;display:flex;flex:1;min-height:0!important;margin:0;padding:28px!important;align-items:center;justify-content:center;text-align:center;border:1px solid #ffffff1a;border-radius:15px;background:radial-gradient(circle at center,#00f0ff0d,transparent 70%),rgba(13,15,20,.72);overflow:hidden;box-shadow:0 12px 35px #0003}
+#portal-drop-zone:before{content:"";position:absolute;inset:12px;border:1px dashed #9769dd40;border-radius:9px;pointer-events:none}#portal-drop-zone:hover:before{border-color:#00f0ff88}#portal-drop-zone.drop-unavailable{opacity:.65;filter:grayscale(.65)}
+.share-drop-content{position:relative;display:flex;flex-direction:column;align-items:center;width:100%;max-width:520px}
+.share-signal{display:grid;place-items:center;width:86px;height:86px;border-radius:50%;background:linear-gradient(145deg,#382060aa,#171a31cc);color:#00f0ff;border:1px solid #9a62fa66;box-shadow:0 0 0 11px #6c11ff0a,0 0 40px #6c11ff24,inset 0 1px 0 #ffffff0d;margin-bottom:30px;flex:none}
+.share-signal svg{width:37px;height:37px;stroke-width:1.7}
+#portal-drop-zone h3{font-family:"Plus Jakarta Sans",system-ui,sans-serif;font-size:25px;font-weight:650;letter-spacing:-.8px;line-height:1.3;margin:0 0 10px}#portal-drop-zone h3 span{color:#c5f75a}
+#portal-drop-zone .share-drop-content>p{font-size:12px;color:var(--share-muted);line-height:1.6;margin:0}
+#active-target-badge{display:inline-flex;align-items:center;justify-content:center;gap:7px;max-width:95%;padding:7px 12px;border-radius:24px;border:1px solid #9c6bdf55;background:#6c11ff20;color:#ded1f7;font-size:12px;margin-top:25px!important;overflow-wrap:anywhere}
+#active-target-badge svg{width:15px;height:15px;flex:none}#active-target-name{font-weight:550}
+#portal-drop-zone .share-drop-note{position:absolute;bottom:26px;left:15px;right:15px;color:#aaa2bc;font-size:11px}
+.share-sidebar{display:flex;flex-direction:column;gap:18px;min-height:0;min-width:0}.share-peers-panel,.share-transfers-panel{padding:19px 20px;border-radius:15px;min-width:0;background:rgba(22,26,38,.6)}
+.share-peers-panel{flex:none;max-height:48%;display:flex;flex-direction:column}.share-transfers-panel{flex:1;min-height:0;overflow:auto}
+.share-panel-heading{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:14px;flex:none}.share-heading-label{display:flex;align-items:center;gap:7px;min-width:0}.share-panel-heading h2,.share-panel-heading h3{font-size:15px;font-weight:650;line-height:1.35;letter-spacing:-.2px;color:var(--share-text);margin:0}
+#session-dot{width:5px;height:5px;border-radius:50%;background:#c5f75a;flex:none}#peer-count-text,#transfer-count-badge{font:10px "Fira Code",monospace;color:var(--share-muted);white-space:nowrap}
+#orbital-peers-container{display:block;min-height:0;max-height:230px;overflow:auto;padding:0!important}.share-peer{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:11px 0;border-top:1px solid var(--share-line)}
+.share-peer-info{display:flex;align-items:center;gap:9px;min-width:0}.share-avatar{display:grid;place-items:center;width:32px;height:32px;border-radius:9px;background:linear-gradient(145deg,#392358,#211e36);color:#d9c5f5;flex:none}.share-avatar svg{width:16px;height:16px}
+.share-peer-name{min-width:0}.share-peer-name h4{font-size:12px;font-weight:600;color:#fcfaf7;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;margin:0;max-width:120px}.share-peer-state{font-size:10px;color:var(--share-muted);text-transform:capitalize}
+.share-peer-actions{display:flex;align-items:center;gap:4px}.share-modes{display:flex;gap:2px;padding:2px;border:1px solid #76539b66;background:#07080b99;border-radius:7px}.share-modes button{display:grid;place-items:center;padding:5px;border:0;border-radius:4px;color:#b4a7c9}.share-modes button svg{width:13px;height:13px}.share-modes button[aria-pressed="true"]{background:#6c11ff;color:white}.share-modes button:hover{background:#6c11ff40}.share-remove{color:#a79ab9;display:grid;place-items:center;padding:3px}.share-remove svg{width:12px;height:12px}.share-remove:hover{color:white}.share-peer.is-excluded .share-peer-info{opacity:.35;filter:grayscale(1)}.share-peer.is-excluded .share-modes button[aria-pressed="true"]{background:#39343f;color:#c3baca}
+#routing-legend.share-routing-legend{font:10px/1.5 "Fira Code",monospace;color:#a99bbd;padding-top:10px;margin:0;border-top:1px solid var(--share-line);flex:none}
+.share-empty{padding:12px 0;font-size:12px;line-height:1.6;color:var(--share-muted)}
+.share-transfer+.share-transfer{margin-top:18px;padding-top:15px;border-top:1px solid var(--share-line)}.share-transfer-label{display:flex;justify-content:space-between;gap:10px;margin-bottom:10px;font:9px "Fira Code",monospace;text-transform:uppercase;letter-spacing:1px;color:var(--share-muted)}
+.share-file-row{display:flex;align-items:center;gap:9px;min-width:0}.share-file-icon{display:grid;place-items:center;width:28px;height:33px;border:1px solid #8d72aa44;border-radius:5px;color:#c5b4d8;flex:none}.share-file-icon svg{width:16px;height:16px}.share-file-info{display:flex;flex-direction:column;min-width:0;flex:1;gap:3px}.share-filename,.share-file-link{font-size:12px;line-height:1.4;font-weight:550;text-align:left;color:#fcfaf7;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%}.share-file-link{text-decoration:underline;text-underline-offset:3px;text-decoration-color:#ac84df88}.share-file-link:hover{color:#d9c4ff}.share-file-detail{font:10px/1.5 "Fira Code",monospace;color:var(--share-muted);overflow-wrap:anywhere}
+.share-save{font-size:11px;font-weight:650;color:#211b2c;background:#fcfaf7;border:1px solid #fcfaf7;border-radius:7px;padding:6px 10px;flex:none}.share-save:hover{background:white}.share-progress{height:5px;margin-top:13px;border-radius:6px;background:#292036;overflow:hidden}.share-progress>span{display:block;height:100%;border-radius:6px;background:#00d6e5}.share-history{display:block;color:#d7c2fa;font-size:11px;text-decoration:underline;margin-top:16px}.history-item button{background:#fcfaf7;color:#211b2c}
+#connection-status{font-family:"Fira Code",monospace;color:#c8c3d5;padding:0 24px;font-size:10px;line-height:1.5;min-height:15px;flex:none}
+body>footer{width:min(1180px,calc(100% - 48px));margin:0 auto;background:none;border:0;text-align:left;padding:0!important;display:flex;align-items:center;justify-content:flex-start;flex-wrap:wrap;gap:8px 15px;font-size:10px;color:#a69cb7}footer>button{margin:0!important;color:#bfb4d3}footer>span{margin-right:auto}
+#invite-modal button,#invite-modal textarea,#invite-modal input{font-family:inherit}#invite-modal>div{border-radius:18px}#invite-modal .connection-choice button{border-radius:9px}
+@media(max-width:760px){body{padding-top:12px;gap:10px}body>.share-header,body>.share-layout,body>footer{width:calc(100% - 24px)}body>.share-layout{grid-template-columns:minmax(0,1fr) 300px;gap:14px!important}.share-brand{font-size:20px}.share-header-actions{gap:7px}.share-header-actions button{padding:8px 10px}.share-peers-panel,.share-transfers-panel{padding:16px}#portal-drop-zone h3{font-size:22px}#session-name{max-width:65px}.share-brand{gap:8px}}
+@media(max-width:620px){body{padding:8px 0;gap:8px}body>.share-header>.share-header-inner{padding:10px 12px!important}.share-brand{font-size:18px;gap:7px}.phantom-symbol{width:29px;height:35px}.share-brand em{display:inline}.share-header-actions button{font-size:11px}#session-name,#profile-action{max-width:56px;font-size:10px}#leave-label{display:none}body>.share-layout{display:flex;flex-direction:column;gap:10px!important}.share-layout>.share-drop-column{flex:1;min-height:145px}.share-signal{width:48px;height:48px;margin-bottom:14px;box-shadow:0 0 0 6px #6c11ff0a}.share-signal svg{width:25px;height:25px}#portal-drop-zone.share-drop{padding:18px!important;min-height:145px!important}#portal-drop-zone h3{font-size:18px;letter-spacing:-.4px;margin-bottom:6px}#portal-drop-zone .share-drop-content>p{font-size:10px}#portal-drop-zone .share-drop-note{display:none}#active-target-badge{font-size:10px;margin-top:13px!important;padding:5px 10px}.share-sidebar{flex:none;gap:10px;max-height:55%;min-height:0}.share-peers-panel{max-height:150px;padding:12px 15px}.share-transfers-panel{padding:12px 15px;max-height:180px;flex:1}.share-panel-heading{margin-bottom:8px}.share-panel-heading h2,.share-panel-heading h3{font-size:13px}#orbital-peers-container{max-height:90px;display:block}.share-peer{padding:7px 0}.share-avatar{width:26px;height:26px}.share-routing-legend{display:none}.share-transfer+.share-transfer{margin-top:12px;padding-top:10px}.share-transfer-label{margin-bottom:6px}.share-progress{margin-top:9px}.share-file-icon{height:28px}body>footer{font-size:9px;gap:5px 12px;line-height:1.4}#connection-status{font-size:9px;padding:0 12px}.share-header-actions{gap:5px}.share-header-actions #connect-action{padding:8px!important}.share-header-actions #leave-action{padding:8px!important}.share-header-actions button svg{width:14px;height:14px}}
+@media(max-width:370px){.share-brand{font-size:16px;gap:5px}.phantom-symbol{width:25px}.share-header-actions{gap:3px}#session-name{max-width:40px}.share-header-actions #connect-action{padding:7px!important}#portal-drop-zone h3{font-size:16px}}
+/* Replace the old cropped-P wordmark and compact peer cards. */
+.share-header .share-header-inner .share-brand>span{display:inline}
+#orbital-peers-container .share-peer-name h4{font-size:12px!important;max-width:120px!important}
+
+@media(max-width:420px){body>.share-header>.share-header-inner{gap:10px}.share-header-actions{flex-wrap:wrap;justify-content:flex-end;max-width:135px;flex-shrink:0;row-gap:3px}#session-name,#profile-action{order:3;max-width:135px;width:100%;text-align:right}.share-header-actions #profile-action{padding:0}.share-brand{font-size:16px;gap:6px}.phantom-symbol{width:27px}}
+
+/* Keep identity with the brand and make recipient choices explicit. */
+.share-brand{gap:13px}.phantom-symbol{width:58px;height:62px}.share-brand-copy{display:flex;flex-direction:column;align-items:flex-start;min-width:0;gap:3px}.share-wordmark{display:block}
+.share-brand-copy #session-name,.share-brand-copy #profile-action{font-family:"Plus Jakarta Sans",system-ui,sans-serif;font-size:11px;font-weight:400;letter-spacing:0;line-height:1.4;max-width:180px;width:auto;text-align:left;order:initial;padding:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.share-brand-copy #profile-action{cursor:pointer}.share-brand-copy #profile-action:hover{color:#fcfaf7}
+.share-peer{flex-wrap:wrap;gap:8px}.share-peer-info{flex:1 1 100%}.share-peer-actions{flex:1;justify-content:space-between;gap:10px}.share-modes{flex:1;gap:3px}.share-modes button{font-size:11px;line-height:1.4;flex:1;min-height:32px;padding:6px 8px}.share-remove{font-size:10px;min-height:32px;padding:5px}.share-recipient-help{flex:1 1 100%;font-size:10px;line-height:1.5;color:var(--share-muted);margin:0}.share-peers-panel{max-height:55%}
+@media(max-width:620px){.share-brand{gap:9px;font-size:16px}.phantom-symbol{width:45px;height:52px}.share-header-actions{flex-wrap:nowrap;max-width:none;flex-shrink:0}.share-brand-copy #session-name,.share-brand-copy #profile-action{font-size:10px;max-width:130px}.share-peers-panel{max-height:210px}#orbital-peers-container{max-height:158px}.share-modes button{min-height:36px}.share-remove{min-height:36px}}
+@media(max-width:370px){body>.share-header>.share-header-inner{padding:9px!important;gap:7px}.share-brand{font-size:14px;gap:6px}.phantom-symbol{width:38px;height:47px}.share-header-actions{gap:4px}.share-header-actions .connect-button{gap:4px}.share-header-actions #connect-action{padding:7px!important}.share-header-actions #leave-action{padding:7px!important}}
+
+/* Keep list scrolling inside its panel, including on short displays. */
+.share-peers-panel{min-height:0;overflow:hidden}
+#orbital-peers-container{flex:1 1 auto;min-height:0;overscroll-behavior:contain}
+.share-modes{border-color:#2c858b66}
+.share-modes button[aria-pressed="true"],.share-peer.is-excluded .share-modes button[aria-pressed="true"]{background:#00cbd6;color:#06191b;font-weight:650}
+.share-modes button:hover{background:#00cbd626;color:#e5fcfd}
+.share-modes button[aria-pressed="true"]:hover{background:#39e3eb;color:#06191b}
+
+/* Phone landscape: compact chrome, useful drop target, one scrollable sidebar. */
+@media(orientation:landscape) and (max-height:540px){
+ body{padding:6px 0;gap:6px}
+ body>.share-header,body>.share-layout,body>footer{width:calc(100% - 24px)}
+ body>.share-header>.share-header-inner{padding:6px 12px!important;gap:12px}
+ .share-brand{font-size:18px;gap:9px}.phantom-symbol{width:36px;height:40px}.share-brand-copy{gap:0}
+ .share-header-actions{flex-wrap:nowrap;max-width:none}.share-header-actions button{padding:7px 10px}.share-brand-copy #session-name,.share-brand-copy #profile-action{font-size:9px}
+ body>.share-layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(300px,1.1fr);gap:10px!important}
+ .share-layout>.share-drop-column{min-height:0}
+ #portal-drop-zone.share-drop{min-height:0!important;padding:16px!important}
+ #portal-drop-zone:before{inset:8px}.share-signal{display:none}
+ #portal-drop-zone h3{font-size:18px;line-height:1.35;margin-bottom:8px}
+ #portal-drop-zone h3 span{display:block}
+ #portal-drop-zone .share-drop-content>p{font-size:10px;line-height:1.5}
+ #portal-drop-zone .share-drop-note{display:none}
+ #active-target-badge{margin-top:12px!important;padding:5px 8px;font-size:10px}
+ .share-sidebar{max-height:none;min-height:0;overflow-y:auto;overscroll-behavior:contain;gap:10px}
+ .share-peers-panel,.share-transfers-panel{flex:none;max-height:none;overflow:visible;padding:12px 14px}
+ #orbital-peers-container{max-height:none;overflow:visible;flex:none}
+ .share-panel-heading{margin-bottom:7px}.share-panel-heading h2,.share-panel-heading h3{font-size:13px}
+ .share-peer{gap:5px;padding:8px 0}.share-peer-info{flex:1 1 90px}.share-peer-actions{flex:0 1 auto;gap:5px}.share-modes{flex:none}.share-modes button{min-height:32px;padding:5px 8px}
+ .share-recipient-help{font-size:9px}.share-routing-legend{display:none}
+ #connection-status{font-size:9px;min-height:13px;line-height:1.4}
+ body>footer{font-size:9px;gap:5px 12px;line-height:1.4}
+}
+
+/* Recipient mode occupies one compact row instead of a button strip. */
+.share-peer{flex-wrap:nowrap;gap:8px;padding:10px 0}
+.share-peer-info{flex:1 1 0;min-width:0;gap:7px}
+.share-peer-actions{flex:0 0 auto;gap:5px}
+.share-recipient-select{width:132px;max-width:36vw;min-height:36px;padding:6px 4px;border:1px solid #2c858b88;border-radius:7px;background:#102328;color:#bbf7fa;font-family:inherit;font-size:10px;cursor:pointer;color-scheme:dark}
+.share-recipient-select option{background:#121b21;color:#fcfaf7}
+.share-recipient-select:focus-visible{outline:2px solid #00cbd6;outline-offset:2px}
+#orbital-peers-container .share-peer-name h4{max-width:100%!important}
+.share-remove{font-size:9px;padding:3px;min-height:36px}
+@media(max-width:370px){.share-recipient-select{width:120px;font-size:9px}.share-peer{gap:5px}.share-avatar{width:24px;height:24px}.share-peer-info{gap:5px}}
+@media(orientation:landscape) and (max-height:540px){.share-peer-info{flex:1 1 0}.share-peer-actions{flex:0 0 auto}.share-peer{flex-wrap:nowrap}}
+
+/* Shared typography and control treatment on web and native. */
+@font-face{font-family:PhantomSans;src:url(jakarta-400.ttf) format("truetype");font-weight:400;font-display:swap}
+@font-face{font-family:PhantomSans;src:url(jakarta-600.ttf) format("truetype");font-weight:600;font-display:swap}
+@font-face{font-family:PhantomSans;src:url(jakarta-700.ttf) format("truetype");font-weight:700;font-display:swap}
+:root{--share-accent:#00cbd6;--share-muted:#aab1bf;--share-line:#ffffff18}
+body,button,input,textarea,select,.share-brand,.share-brand-copy #session-name,.share-brand-copy #profile-action,#portal-drop-zone h3,.share-panel-heading,#connection-status,body>footer,#peer-count-text,#transfer-count-badge,.share-file-detail,.share-transfer-label,.share-empty{font-family:PhantomSans,system-ui,sans-serif}
+.share-brand,.share-brand em{font-weight:700;letter-spacing:-.6px;color:#fcfaf7}.share-brand em{opacity:.8}
+.share-header-inner,.share-peers-panel,.share-transfers-panel{border-color:var(--share-line)}
+.share-avatar,.share-file-icon{background:#ffffff06;border:1px solid var(--share-line);color:#cad2dd}
+.share-signal{background:#00cbd60d;border-color:#00cbd640;color:var(--share-accent);box-shadow:0 0 0 8px #00cbd604}
+#portal-drop-zone h3 span{color:var(--share-accent)}
+#active-target-badge{background:#00cbd60b;border-color:#00cbd633;color:#c3ebee}
+#portal-drop-zone:before{border-color:#ffffff26}
+.share-header-actions .connect-button,.share-header-actions .connect-button:hover,.native-primary,.share-save,.share-save:hover{background:var(--share-accent)!important;border-color:var(--share-accent);color:#06191b!important;box-shadow:none;font-weight:700}
+.share-header-actions button,.share-recipient-select,.share-save,.native-action,dialog button{border-radius:8px}
+.share-recipient-select{box-sizing:border-box;border-color:#ffffff26;background:#ffffff05;color:#dce6eb;flex-shrink:1;min-width:0}
+.share-recipient-select:focus,.share-recipient-select:focus-visible{outline:none;border-color:var(--share-accent);box-shadow:inset 0 0 0 1px var(--share-accent)}
+.share-peer-actions{min-width:0;max-width:70%}
+.share-file-link,.share-history{color:#d0f6f7;text-decoration-color:#00cbd666}
+.share-progress>span{background:var(--share-accent)}
+#peer-count-text,#transfer-count-badge,.share-file-detail{font-size:10px;letter-spacing:0}
+.share-transfer-label{font-size:9px;letter-spacing:.5px}

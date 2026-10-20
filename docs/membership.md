@@ -70,6 +70,12 @@ security data and protect it against rollback or unauthorized modification.
 - Retrying redemption by the same identity returns the same grant only while
   that original membership is active. This recovers a lost response without
   allowing a second device to claim the invite.
+- `redeem({token, request, reconnectRequest})` may recover an already-active
+  membership through a fresh, unconsumed invitation. The additional proof must
+  independently authenticate `membership.reconnect` for the same full peer key.
+  This consumes the new invitation and returns the existing membership ID and
+  expiry without extending access. Missing/forged proofs, expired invitations,
+  another identity's claims, and retries against revoked grants fail closed.
 - `reconnect({request})` returns the current active membership grant. Persisting
   the peer's private identity is necessary to reconnect as that member.
 - `leave({request})` requires the member's signed request, including its current

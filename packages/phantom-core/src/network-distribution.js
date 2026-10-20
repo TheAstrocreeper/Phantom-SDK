@@ -1,3 +1,4 @@
+import {defaultRTCConfiguration} from './rtc-configuration.js';
 import {waitForDataChannelCapacity} from './data-channel-capacity.js';
 import {createFileDistribution,createMemoryChunkStore} from './files.js';
 import {createAdminAuthorization} from './authorization.js';
@@ -121,7 +122,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
     const asset=assets.get(job.asset);if(!asset||!allowed(asset.id,asset.distributionId))return;
     const peer=job.source===self()?job.receiver:job.source;
     try{
-    const pc=new runtime.RTCPeerConnection(options.rtcConfiguration??{}),link={pc,peer,job,sendController:new AbortController(),started:false,pendingIce:[]};links.set(job.id,link);
+    const pc=new runtime.RTCPeerConnection(options.rtcConfiguration??defaultRTCConfiguration()),link={pc,peer,job,sendController:new AbortController(),started:false,pendingIce:[]};links.set(job.id,link);
     pc.onicecandidate=e=>{if(e.candidate)frame(peer,{type:'signal',jobId:job.id,candidate:e.candidate.toJSON?.()??e.candidate});};
     pc.onconnectionstatechange=()=>{if(['failed','closed'].includes(pc.connectionState)&&links.get(job.id)===link){
       const interrupted=job.receiver===self()&&!link.completed;

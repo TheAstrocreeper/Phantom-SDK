@@ -1,3 +1,5 @@
+import {createRequire} from 'node:module';
+const testPake=createRequire(import.meta.url)('spake2-wasm');
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -113,7 +115,7 @@ function factory(bus, identity) {
     };
   };
 }
-async function fixture() {
+async function fixture({pake,onCodeUsed}={}) {
   const admin = await createAdminIdentity(),
     identity = createNostrIdentity(),
     authority = await createMembershipAuthority({
@@ -134,6 +136,8 @@ async function fixture() {
     invite,
     doorwayFactory: factory(wire, identity),
     canIssueInvite: () => true,
+    onCodeUsed,
+    pake,
   });
   const clients = [];
   async function client(code, identity = createNostrIdentity()) {
@@ -141,6 +145,7 @@ async function fixture() {
       code,
       identity,
       doorwayFactory: factory(wire, identity),
+      pake,
     });
     clients.push(result);
     return { client: result, identity };
@@ -248,8 +253,8 @@ test("code enrollment uses the authority; another identity cannot reuse it; leav
 });
 
 test(
-  "pairing feeds the real SDK admission, owner-authorized member publication, and verified distribution",
-  { timeout: 30000 },
+  "pairing supports verified transfers, abrupt recovery, Remove and repeated Leave/rejoin",
+  { timeout: 60000 },
   async () => {
     const { createBrowserPhantom, createBrowserIdentity } = await import(
       "../packages/phantom-doorways/src/browser-entry.js"
@@ -262,19 +267,25 @@ test(
       "../demos/phantom-share/src/session.js"
     );
     const admin = await createAdminIdentity(),
-      ownerSeed = createBrowserIdentity(),
+      // Lower guest key owns the messaging invite after recovering. This
+      // exposes a stale accepted relationship on the surviving owner.
+      seeds = [createBrowserIdentity(),createBrowserIdentity()].sort((a,b)=>createNostrIdentity(a).publicKey.localeCompare(createNostrIdentity(b).publicKey)),
+      ownerSeed = seeds[1],
       ownerIdentity = createNostrIdentity(ownerSeed),
-      guestSeed = createBrowserIdentity(),
+      guestSeed = seeds[0],
       guestIdentity = createNostrIdentity(guestSeed),
       wire = bus(),
-      RTC = memoryRTC(),
+      RTC = class extends (memoryRTC()) { async setRemoteDescription(value) { await new Promise(r=>setTimeout(r,25)); return super.setRemoteDescription(value); } },
       store = createMemoryMembershipStore();
     const networks = [],
       sessions = [];
     let authority, host, client, pairingOffline=false;
+    const trace=[];
+    const record = side => ({type,payload={}}) => {trace.push({side,type,reason:payload.reason,peer:payload.peer,from:payload.from,state:payload.state});if(trace.length>100)trace.shift();};
+    const previousOffers=new Map();
     const pairingFactory=identity=>()=>{
       const adapter=factory(wire,identity)();
-      return {...adapter,open(context){const session=adapter.open(context);return {...session,sendSignal(packet){if(pairingOffline)throw Error('Fixture pairing relays offline');return session.sendSignal(packet);}};}};
+      return {...adapter,open(context){const session=adapter.open(context);return {...session,sendSignal(packet){if(pairingOffline)throw Error('Fixture pairing relays offline');const sent=session.sendSignal(packet); if(packet.type==='rtc_offer'){const key=packet.from+':'+packet.to,previous=previousOffers.get(key);previousOffers.set(key,structuredClone(packet));setTimeout(()=>{try{session.sendSignal(packet);if(previous)session.sendSignal(previous);}catch{}},5);}return sent;}};}};
     };
     const sign = (identity, networkId, action, fields) => ({
       peerPublicKey: identity.publicKey,
@@ -347,11 +358,12 @@ test(
         if (check()) return;
         await new Promise((r) => setTimeout(r, 10));
       }
+      if(label === "abrupt disconnect recovery") console.error(JSON.stringify({states:networks.map(n=>({state:n.getState(),peers:n.getPeers(),connections:n.getPeerConnections()})),trace}));
       throw Error("Timed out: " + label);
     };
     try {
       const owner = await sdk(ownerSeed, ownerAdmission, admin).create({
-        name: "Owner",
+        name: "Owner", onEvent:record("owner"),
       });
       networks.push(owner);
       host = createMembershipPairingHost({
@@ -367,7 +379,7 @@ test(
         identity: guestIdentity,
         doorwayFactory: pairingFactory(guestIdentity),
       });
-      const guest = await sdk(guestSeed, client.admission).join(client.invite, {
+      let guest = await sdk(guestSeed, client.admission).join(client.invite, {
         name: "Guest",
         timeoutMs: 10000,
       });
@@ -418,11 +430,44 @@ test(
       );
       assert.equal(asset.proof.publicKey, admin.publicKey);
       assert.deepEqual(errors, []);
+      // Abrupt local reset cannot notify the authority. A fresh invite must
+      // recover this identity's active grant over the actual pairing protocol.
+      pairingOffline = false;
+      guest.close(); client.close();
+      const recovery = await host.newInvite();
+      client = await connectMembershipPairing({code:recovery.code,identity:guestIdentity,doorwayFactory:pairingFactory(guestIdentity)});
+      guest = await sdk(guestSeed, client.admission).join(client.invite,{name:"Recovered guest",timeoutMs:10000,onEvent:record("recovered")});
+      networks.push(guest); client.bindNetwork(guest);
+      await wait(()=>[owner,guest].every(n=>n.getPeerConnections().some(p=>p.state==="ready")),"abrupt disconnect recovery");
+      await guest.refreshMembership();
+      const recoveredSession = createShareSession({network:guest,adminPublicKey:admin.publicKey,onError:e=>errors.push(e)});
+      sessions.push(recoveredSession);
+      // Respect the owner's 500 ms publication authorization rate limit.
+      await new Promise(resolve=>setTimeout(resolve,600));
+      const recoveredBytes = new TextEncoder().encode("verified transfer after abrupt recovery");
+      const recoveredAsset = await recoveredSession.publish(new Blob([recoveredBytes]),[owner.getState().peerId]);
+      await wait(()=>ownerSession.assets.get(recoveredAsset.id)?.status==="received","verified transfer after recovery");
+      assert.deepEqual(new Uint8Array(await ownerSession.assets.get(recoveredAsset.id).blob.arrayBuffer()),recoveredBytes);
+      assert.deepEqual(errors,[]);
       await host.removePeer(guest.getState().peerId);
       await wait(
         () => guest.getState().state === "closed",
         "removed paired member closes",
       );
+      pairingOffline = false;
+      client.close();
+      for (let cycle = 0; cycle < 2; cycle++) {
+        const fresh = await host.newInvite();
+        client = await connectMembershipPairing({code:fresh.code,identity:guestIdentity,doorwayFactory:pairingFactory(guestIdentity)});
+        const returned = await sdk(guestSeed, client.admission).join(client.invite,{name:"Guest",timeoutMs:10000});
+        networks.push(returned);
+        client.bindNetwork(returned);
+        await wait(()=>[owner,returned].every(n=>n.getPeerConnections().some(p=>p.state==="ready")),"fresh rejoin ready cycle "+cycle);
+        await returned.leave();
+        await wait(()=>returned.getState().state==="closed","left member closes cycle "+cycle);
+        client.close();
+      }
+
     } finally {
       for (const s of sessions) s.close();
       for (const n of networks) n.close();
@@ -495,4 +540,38 @@ test("an unauthenticated host announcement cannot pin the client away from the r
     rogue?.close();
     f.close();
   }
+});
+
+test('an enrollment abandoned before transport admission releases its grant for a fresh invite',async()=>{
+ const f=await fixture();let checkpoint;
+ try{
+  const first=await f.host.newInvite(),a=await f.client(first.code);
+  checkpoint=createAdmissionCheckpoint({policy:a.client.admission,networkId:room,peerPublicKey:a.identity.publicKey});
+  const grant=await checkpoint.authorize();
+  await a.client.releaseMembership();
+  assert.equal(await f.authority.verify({networkId:room,peerPublicKey:a.identity.publicKey,credential:grant}),false);
+  const fresh=await f.host.newInvite(),returned=await f.client(fresh.code,a.identity);
+  const next=createAdmissionCheckpoint({policy:returned.client.admission,networkId:room,peerPublicKey:a.identity.publicKey});
+  try{assert.notEqual((await next.authorize()).membershipId,grant.membershipId);}finally{next.close();}
+ }finally{checkpoint?.close();f.close();}
+});
+
+test('six-character enrollment and high-entropy link reach the same single-use membership',async()=>{
+ const used=[];const f=await fixture({pake:testPake,onCodeUsed:event=>used.push(event.code)});let checkpoint,secondCheckpoint;
+ try{
+  const invite=await f.host.newInvite();assert.match(invite.code,/^[0-9A-HJKMNP-TV-Z]{6}$/);
+  assert.match(invite.linkCode,/^P1-/);assert.equal(invite.codeExpiresAt,invite.expiresAt);
+  assert.ok(invite.expiresAt-Date.now()<=240000);
+  assert.ok(invite.expiresAt-Date.now()>230000, "code and link remain valid for four minutes");
+  const first=await f.client(invite.code.toLowerCase());
+  assert.deepEqual(used,[invite.code]);
+  checkpoint=createAdmissionCheckpoint({policy:first.client.admission,networkId:room,peerPublicKey:first.identity.publicKey});
+  const grant=await checkpoint.authorize();assert.equal(grant.peerPublicKey,first.identity.publicKey);
+  // QR/link cannot grant a different identity after the short-code enrollment.
+  await assert.rejects(f.client(invite.linkCode),/already used/);
+  await first.client.releaseMembership();
+  const fresh=await f.host.newInvite(),second=await f.client(fresh.linkCode,first.identity);
+  secondCheckpoint=createAdmissionCheckpoint({policy:second.client.admission,networkId:room,peerPublicKey:second.identity.publicKey});
+  assert.notEqual((await secondCheckpoint.authorize()).membershipId,grant.membershipId);
+ }finally{checkpoint?.close();secondCheckpoint?.close();f.close();}
 });

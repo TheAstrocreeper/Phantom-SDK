@@ -83,3 +83,9 @@ test("every static application DOM reference exists in the approved interface", 
   assert.ok(ids.has("invite-qr"));
   assert.ok(ids.has("invite-link"));
 });
+
+test('manual six-character pairing normalizes typing while preserving link payloads',()=>{
+ assert.equal(codeFromInput('7k h9t2'),'7KH9T2');
+ assert.equal(codeFromInput('https://example.com/#pair=7KH9T2'),'7KH9T2');
+ assert.throws(()=>codeFromInput('7K!9T2'),/six-character/);
+});

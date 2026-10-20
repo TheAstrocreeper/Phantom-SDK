@@ -16,6 +16,8 @@ Phantom turns browsers into a peer-powered network, giving developers a foundati
 
 This is the current development base. Its API is still evolving.
 
+See [Share device validation and integration notes](docs/share-device-validation.md) for the reusable lifecycle, pairing and connectivity fixes exercised on Linux and Android, and the remaining limits.
+
 ## Getting started
 
 Use Node.js 22 or later to install the workspace dependencies:

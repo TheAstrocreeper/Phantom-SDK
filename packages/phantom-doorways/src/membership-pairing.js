@@ -1,3 +1,5 @@
+import { createShortCode, parseShortCode } from "./short-pairing-prototype.js";
+import { openShortPairingChannel } from "./short-pairing-channel.js";
 import { openMembershipPeerChannel } from "./membership-peer-channel.js";
 import { createMembershipControlRequest } from "./membership-control-request.js";
 import {
@@ -58,8 +60,10 @@ export function createMembershipPairingHost({
   doorwayFactory,
   canIssueInvite = () => false,
   onClaim = () => {},
+  onCodeUsed = () => {},
   onError = () => {},
   maxChannels = 16,
+  pake,
 } = {}) {
   const context = parseInvite(invite);
   if (
@@ -70,6 +74,7 @@ export function createMembershipPairingHost({
     throw new TypeError(
       "Matching authority, invitation and doorway factory required",
     );
+  const usedLocators = new Set();
   const channels = new Set(),
     credentials = new Map();
   let peerChannel;
@@ -78,7 +83,9 @@ export function createMembershipPairingHost({
   const off = authority.onRevocation((record) => {
     for (const entry of channels)
       if (entry.claimedKey) {
-        try { peerChannel?.notify(entry.claimedKey,{type:'revocation',record}); } catch {}
+        try {
+          peerChannel?.notify(entry.claimedKey, { type: "revocation", record });
+        } catch {}
         void entry.channel
           .notify(entry.claimedKey, { type: "revocation", record })
           .catch(onError);
@@ -88,8 +95,10 @@ export function createMembershipPairingHost({
         ) {
           clearTimeout(entry.timer);
           entry.timer = setTimeout(() => {
+            entry.shortChannel?.close();
             entry.channel.close();
             channels.delete(entry);
+            if (pake) usedLocators.delete(entry.code.slice(0, 2));
           }, 16000);
           entry.timer.unref?.();
         }
@@ -102,13 +111,33 @@ export function createMembershipPairingHost({
         "Too many open pairing channels. Wait for unused invitations to expire.",
       );
     reservations++;
+    let locator,
+      retained = false;
     try {
-      const invitation = await authority.issueInvite(),
-        code = await createPairingCode(),
-        coordinates = await pairingCoordinates(code);
+      const invitation = await authority.issueInvite(
+          pake ? { ttlMs: 240000 } : undefined,
+        ),
+        code = await createPairingCode();
+      let displayCode = code;
+      if (pake) {
+        for (let i = 0; i < 64; i++) {
+          const candidate = createShortCode(),
+            route = candidate.slice(0, 2);
+          if (!usedLocators.has(route)) {
+            displayCode = candidate;
+            locator = route;
+            usedLocators.add(route);
+            break;
+          }
+        }
+        if (!locator)
+          throw Error("Could not allocate a pairing route; try again");
+      }
+      const coordinates = await pairingCoordinates(code);
       const entry = {
-        code,
+        code: displayCode,
         invitation,
+        shortChannel: null,
         channel: null,
         claimedKey: null,
         timer: null,
@@ -131,7 +160,11 @@ export function createMembershipPairingHost({
         role: "host",
         doorway: doorwayFactory(),
         onError,
-        onRequest: entry.handleRequest = async ({ action, data, peerPublicKey }) => {
+        onRequest: (entry.handleRequest = async ({
+          action,
+          data,
+          peerPublicKey,
+        }) => {
           if (closed) throw new Error("Inviter closed");
           if (entry.claimedKey && entry.claimedKey !== peerPublicKey)
             throw new Error("Invitation already used");
@@ -174,7 +207,10 @@ export function createMembershipPairingHost({
             checkPeer(data?.request, peerPublicKey, "membership.redeem", {
               inviteId,
             });
+            if (data.reconnectRequest != null)
+              checkPeer(data.reconnectRequest, peerPublicKey, "membership.reconnect");
             const credential = await authority.redeem({
+              reconnectRequest: data.reconnectRequest,
               token: invitation.token,
               request: data.request,
             });
@@ -182,7 +218,8 @@ export function createMembershipPairingHost({
             entry.membershipId = credential.membershipId;
             credentials.set(peerPublicKey, credential);
             try {
-              onClaim({ code, peerPublicKey, credential });
+              entry.shortChannel?.close();
+              onClaim({ code: displayCode, peerPublicKey, credential });
             } catch (error) {
               onError(error);
             }
@@ -237,37 +274,82 @@ export function createMembershipPairingHost({
             return newInvite();
           }
           throw new Error("Unknown membership request");
-        },
+        }),
       });
+      if (pake && !closed) {
+        try {
+          entry.shortChannel = await openShortPairingChannel({
+            code: displayCode,
+            identity,
+            doorway: doorwayFactory(),
+            pake,
+            role: "host",
+            invitation: code,
+            onError,
+            onConsumed: () => onCodeUsed({ code: displayCode }),
+            ttlMs: Math.max(
+              1,
+              Math.min(240000, invitation.expiresAt - Date.now()),
+            ),
+          });
+        } catch (error) {
+          entry.channel.close();
+          throw error;
+        }
+      }
       if (closed) {
+        entry.shortChannel?.close();
         entry.channel.close();
         throw new Error("Inviter closed");
       }
       channels.add(entry);
+      retained = true;
       entry.timer = setTimeout(
         () => {
           if (!entry.claimedKey) {
+            entry.shortChannel?.close();
             entry.channel.close();
             channels.delete(entry);
+            if (pake) usedLocators.delete(entry.code.slice(0, 2));
           }
         },
         Math.max(1, invitation.expiresAt - Date.now()),
       );
       entry.timer.unref?.();
-      return { code, expiresAt: invitation.expiresAt };
+      return {
+        code: displayCode,
+        ...(pake
+          ? { linkCode: code, codeExpiresAt: invitation.expiresAt }
+          : {}),
+        expiresAt: invitation.expiresAt,
+      };
     } finally {
+      if (!retained && locator) usedLocators.delete(locator);
       reservations--;
     }
   }
   return {
     bindNetwork(network) {
-      if(closed||network.networkId!==context.networkId||network.getState().peerId!==identity.publicKey.slice(0,16))throw Error('Wrong membership network');
+      if (
+        closed ||
+        network.networkId !== context.networkId ||
+        network.getState().peerId !== identity.publicKey.slice(0, 16)
+      )
+        throw Error("Wrong membership network");
       peerChannel?.close();
-      peerChannel=openMembershipPeerChannel({network,onRequest:input=>{
-        const entry=[...channels].find(entry=>entry.claimedKey===input.peerPublicKey&&entry.membershipId===credentials.get(input.peerPublicKey)?.membershipId);
-        if(!entry)throw Error('No enrolled membership');
-        return entry.handleRequest(input);
-      }});
+      peerChannel = openMembershipPeerChannel({
+        network,
+        onRequest: (input) => {
+          const entry = [...channels].find(
+            (entry) =>
+              entry.claimedKey === input.peerPublicKey &&
+              entry.membershipId ===
+                credentials.get(input.peerPublicKey)?.membershipId,
+          );
+          if (!entry) throw Error("No enrolled membership");
+          return entry.handleRequest(input);
+        },
+      });
     },
     newInvite,
     async removePeer(peerId) {
@@ -288,9 +370,11 @@ export function createMembershipPairingHost({
       peerChannel?.close();
       for (const entry of channels) {
         clearTimeout(entry.timer);
+        entry.shortChannel?.close();
         entry.channel.close();
       }
       channels.clear();
+      usedLocators.clear();
     },
   };
 }
@@ -302,7 +386,25 @@ export async function connectMembershipPairing({
   onError = () => {},
   onControlPath = () => {},
   onRefresh = () => {},
+  pake,
 } = {}) {
+  if (typeof code === "string" && code.replace(/[\s-]/g, "").length === 6) {
+    if (!pake) throw Error("Short-code pairing is unavailable");
+    code = parseShortCode(code).code;
+    const bootstrap = await openShortPairingChannel({
+      code,
+      identity,
+      doorway: doorwayFactory(),
+      pake,
+      signal,
+      onError,
+    });
+    try {
+      code = (await bootstrap.result).invitation;
+    } finally {
+      bootstrap.close();
+    }
+  }
   code = (await parsePairingCode(code)).code;
   let policy, credential, context, peerChannel;
   const early = [],
@@ -321,7 +423,11 @@ export async function connectMembershipPairing({
       for (const fn of listeners) fn(event.record);
     },
   });
-  const request = createMembershipControlRequest({getPeer:()=>peerChannel,pairing:channel,onControlPath});
+  const request = createMembershipControlRequest({
+    getPeer: () => peerChannel,
+    pairing: channel,
+    onControlPath,
+  });
   try {
     const firstRequest = {
       request: signed(
@@ -347,7 +453,8 @@ export async function connectMembershipPairing({
       const request = signed(identity, networkId, "membership.redeem", {
         inviteId: await digest(context.token),
       });
-      credential = await channel.request("redeem", { request }, { signal });
+      const reconnectRequest = signed(identity, networkId, "membership.reconnect");
+      credential = await channel.request("redeem", { request, reconnectRequest }, { signal });
       return credential;
     };
     policy = createMembershipAdmission({
@@ -369,17 +476,41 @@ export async function connectMembershipPairing({
         for (const record of early.splice(0)) onRevocation(record);
         return () => listeners.delete(onRevocation);
       },
-      leave: ({ request: proof }) => request("leave", { request: proof }),
+      leave: ({ request: proof, signal }) => request("leave", { request: proof }, {signal}),
     });
     return {
       invite: context.invite,
       bindNetwork(network) {
-        if(network.networkId!==parsed.networkId||network.getState().peerId!==identity.publicKey.slice(0,16)||!/^[0-9a-f]{64}$/.test(context.hostPeerPublicKey))throw Error('Invalid membership host');
-        peerChannel?.close();peerChannel=openMembershipPeerChannel({network,remotePublicKey:context.hostPeerPublicKey,onEvent:event=>{
-          if(event?.type==='revocation')for(const fn of listeners)fn(event.record);
-        }});
+        if (
+          network.networkId !== parsed.networkId ||
+          network.getState().peerId !== identity.publicKey.slice(0, 16) ||
+          !/^[0-9a-f]{64}$/.test(context.hostPeerPublicKey)
+        )
+          throw Error("Invalid membership host");
+        peerChannel?.close();
+        peerChannel = openMembershipPeerChannel({
+          network,
+          remotePublicKey: context.hostPeerPublicKey,
+          onEvent: (event) => {
+            if (event?.type === "revocation")
+              for (const fn of listeners) fn(event.record);
+          },
+        });
       },
       admission: policy,
+      async releaseMembership({signal} = {}) {
+        if (!credential) return;
+        const proof = signed(identity, parsed.networkId, "membership.leave", {
+          membershipId: credential.membershipId,
+        });
+        await policy.leave({
+          signal,
+          networkId: parsed.networkId,
+          peerPublicKey: identity.publicKey,
+          credential,
+          request: proof,
+        });
+      },
       newInvite: () =>
         request("invite", {
           credential,
@@ -387,7 +518,10 @@ export async function connectMembershipPairing({
             membershipId: credential?.membershipId,
           }),
         }),
-      close: () => {peerChannel?.close();channel.close();},
+      close: () => {
+        peerChannel?.close();
+        channel.close();
+      },
     };
   } catch (error) {
     channel.close();

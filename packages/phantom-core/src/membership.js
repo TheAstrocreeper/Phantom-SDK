@@ -62,11 +62,16 @@ export async function createMembershipAuthority({networkId, adminIdentity, store
       });
       return Object.freeze({networkId, token, expiresAt});
     },
-    async redeem({token, request} = {}) {
+    async redeem({token, request, reconnectRequest} = {}) {
       request = clone(request);
       const id = await digest(token);
       // Authenticate the token digest, never broadcast the bearer token in peer proofs.
       const peerPublicKey = await authenticate(request, 'membership.redeem', {inviteId:id});
+      // Explicit, independently signed recovery may reuse an active grant, never
+      // extend it or turn an old/revoked invitation into a new membership.
+      const recovering = reconnectRequest != null;
+      if (recovering && await authenticate(clone(reconnectRequest), 'membership.reconnect', {}) !== peerPublicKey)
+        throw new AdmissionError('Reconnect identity does not match invitation claim');
       return transaction(async state => {
         const invite = state.invites[id];
         if (!invite) throw new AdmissionError('Unknown invitation');
@@ -79,7 +84,12 @@ export async function createMembershipAuthority({networkId, adminIdentity, store
         }
         if (invite.expiresAt <= now()) throw new AdmissionError('Invitation expired');
         const previous = state.members[peerPublicKey];
-        if (previous && !previous.revoked && previous.expiresAt > now()) throw new AdmissionError('Peer already has active membership');
+        if (previous && !previous.revoked && previous.expiresAt > now()) {
+          if (!recovering) throw new AdmissionError('Peer already has active membership');
+          const credential = await grant(peerPublicKey, previous.membershipId, previous.expiresAt);
+          invite.consumedBy = peerPublicKey; invite.membershipId = previous.membershipId;
+          return credential;
+        }
         const member = {membershipId:crypto.randomUUID(), expiresAt:now() + invite.membershipTtlMs, revoked:false};
         const credential = await grant(peerPublicKey, member.membershipId, member.expiresAt);
         invite.consumedBy = peerPublicKey; invite.membershipId = member.membershipId;

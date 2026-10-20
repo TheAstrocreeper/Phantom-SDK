@@ -11,7 +11,21 @@ export function createNostrDoorway({identity,relays,WebSocket=globalThis.WebSock
   let sharedRelays=normalizeRelays(relays,8),expanded=false,refreshing=false;
   function expand(values){if(closed||!bus?.addRelays)return;const next=normalizeRelays([...sharedRelays,...values],8);if(next.length===sharedRelays.length)return;sharedRelays=bus.addRelays(next);signalStatus('relay_set_expanded',{relays:[...sharedRelays]});announce();}
   function prepareAlternatives(){if(!refreshRelays||expanded||refreshing)return;refreshing=true;Promise.resolve().then(()=>refreshRelays()).then(values=>{if(!closed){expanded=true;expand(values);}}).catch(error=>{if(!closed)onError(error);}).finally(()=>{refreshing=false;});}
-  const members=new Map(),routes=new Map(),pendingSignals=[];
+  const members=new Map(),routes=new Map(),pendingSignals=[],incarnations=new Map();
+  function observeIncarnation(key,row,departed) {
+   let known=incarnations.get(key);
+   if(known&&(row.roomJoinedAt<known.joinedAt||known.retired.has(row.bootId)))return false;
+   if(!known){
+    if(incarnations.size>=4096)incarnations.delete(incarnations.keys().next().value);
+    known={joinedAt:row.roomJoinedAt,bootId:row.bootId,retired:new Set()};incarnations.set(key,known);
+   }
+   if(known.bootId!==row.bootId){known.retired.add(known.bootId);known.bootId=row.bootId;}
+   known.joinedAt=Math.max(known.joinedAt,row.roomJoinedAt);
+   if(departed)known.retired.add(row.bootId);
+   // Bound remembered boot IDs for long-running sessions.
+   if(known.retired.size>32)known.retired.delete(known.retired.values().next().value);
+   return true;
+  }
   function signalStatus(type,detail){onStatus({type,...detail});sessionStatus({type,...detail});}
   function pruneSignals(){for(let i=pendingSignals.length-1;i>=0;i--)if(Date.now()-pendingSignals[i].at>=15000){const [item]=pendingSignals.splice(i,1);signalStatus('signal_discarded',{reason:'discovery_wait_expired',from:item.p.control.from,attemptId:item.p.control.sysAttemptId});}}
   function deliver(p){const key=p.s7pPublicKey.slice(0,16),row=members.get(key),route=routes.get(key);
@@ -26,7 +40,7 @@ export function createNostrDoorway({identity,relays,WebSocket=globalThis.WebSock
    const list=[...members.values()].sort((a,b)=>a.roomJoinedAt-b.roomJoinedAt||a.hKey.localeCompare(b.hKey));
    const fingerprint=list.map(p=>`${p.hKey}:${p.bootId}`).join(',');
    if(fingerprint!==topology){topology=fingerprint;epoch++;}
-   onDiscovery({kind:'concierge_route',roomId,epoch,leader:authorityHint?.syscon1??list[0]?.hKey,mirror:authorityHint?.syscon2??list[1]?.hKey??null,peers:list});
+   onDiscovery({kind:'concierge_route',roomId,epoch,leader:authorityHint?.syscon1??list[0]?.hKey,mirror:authorityHint?.syscon2===null?null:authorityHint?.syscon2??list[1]?.hKey??null,peers:list});
   }
   function announce() {if(own&&!closed)bus.announce({row:own,...(refreshRelays?{relays:sharedRelays}:{}),discoveryEpoch:epoch,...(authorityHint?.from===peerId?{authorityHint}: {})});}
   bus=busFactory({roomId,identity,relays,WebSocket,onError,
@@ -37,6 +51,7 @@ export function createNostrDoorway({identity,relays,WebSocket=globalThis.WebSock
     const key=p.s7pPublicKey.slice(0,16),row=p.row;
     if(row.hKey!==key||row.hex!==p.s7pPublicKey||typeof row.bootId!=='string'||!Number.isSafeInteger(row.roomJoinedAt))return;
     if(routes.has(key)&&routes.get(key).s7pPublicKey!==p.s7pPublicKey){onError(new Error('Short peer ID collision'));return;}
+    if(!observeIncarnation(key,row,p.departed===true)){signalStatus('announcement_discarded',{reason:'retired_or_older_incarnation',from:key});return;}
     if(p.departed){if(members.get(key)?.bootId===row.bootId){members.delete(key);routes.delete(key);for(let i=pendingSignals.length-1;i>=0;i--)if(pendingSignals[i].p.control.from===key)pendingSignals.splice(i,1);roster();}return;}
     const hint=p.authorityHint;
     if(hint && hint.room===roomId && hint.from===key && hint.syscon1===key &&
@@ -78,7 +93,7 @@ export function createNostrDoorway({identity,relays,WebSocket=globalThis.WebSock
     if(!target)throw new Error('No verified Nostr route for target peer');
     bus.sendSignal(target,control);
    },
-   close(){if(closed)return;closed=true;pendingSignals.length=0;try{if(own&&!blocked&&bus.depart)bus.depart({row:own});else bus.close();}catch{bus.close();}sessions.delete(session);},
+   close(){if(closed)return;closed=true;pendingSignals.length=0;incarnations.clear();try{if(own&&!blocked&&bus.depart)bus.depart({row:own});else bus.close();}catch{bus.close();}sessions.delete(session);},
    cut(){session.close();onClose({code:1006,reason:'demo_doorway_cut',wasClean:false});}
   };sessions.add(session);return session;
  }});

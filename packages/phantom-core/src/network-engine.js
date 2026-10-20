@@ -1,3 +1,4 @@
+import {createSysOfferOrder} from './sys-offer-order.js';
 import {waitForDataChannelCapacity} from './data-channel-capacity.js';
 import {createSequentialSignaling} from './sequential-signaling.js';
 import {createSysOutageClock} from './sys-outage-clock.js';
@@ -62,6 +63,7 @@ export function createNetworkEngine(host) {
   const phantomRemoteEndpointIds = new Map();
   let phantomSysTransportAttemptSeq = 0;
   const phantomDoorwayAdmittedPeers = new Set();
+  const sysOfferOrder=createSysOfferOrder();
   const sdkDeferredOffers=createDeferredSysOffers({setTimeout,clearTimeout,emit:detail=>post(detail.kind==='successor'?'SYS_SUCCESSOR_OFFER':'SYS_HANDOFF_OFFER',detail)});
   let sdkBootstrapTarget = null;
   const sdkBootstrapUnanswered = new Set();
@@ -560,6 +562,19 @@ export function createNetworkEngine(host) {
       return { changed: false, committed };
     }
 
+    // An authenticated new process cannot know the previous relationship's
+    // cycle ID. Keeping that accepted cycle makes its new invite look like a
+    // competing live chat, leaving both peers admitted but unable to message.
+    if (bootChanged && committed) {
+      const relationship = phantomRelationships.get(key);
+      if (relationship && !relationship.endedAt) {
+        phantomRelationshipEnd(key, "remote_incarnation_changed", now(), false);
+        phantomCancelReconnect(key);
+        setState(key, VEIL.OUTSIDE, true);
+        emitSnapshot("relationship_retired_remote_incarnation");
+      }
+    }
+
     if (bindCurrent) {
       if (currentEnt && incomingBootId) {
         currentEnt.remoteBootId = incomingBootId;
@@ -822,7 +837,10 @@ export function createNetworkEngine(host) {
       concierge.sysAttempt.state = "connecting";
       concierge.sysPipeState = "connecting";
     } else {
-      if (targetPeer && concierge.sysAttempt.state !== "idle") {
+      // A terminal recovery decision belongs to this attempt. Teardown itself
+      // must not downgrade it back to an ordinary recoverable missing pipe.
+      // A real authority/target change above creates a fresh attempt instead.
+      if (targetPeer && !["idle", "terminal"].includes(concierge.sysAttempt.state)) {
         concierge.sysAttempt.state = "faulted";
         concierge.sysAttempt.faultReason = String(reason || "sys_pipe_missing");
       }
@@ -11097,9 +11115,16 @@ export function createNetworkEngine(host) {
       if(!sdkDeferredOffers.hold(key,offer,meta,'handoff'))post('SYS_HANDOFF_OFFER',{action:'rejected',peer:key,reason:'invalid_or_capacity'});
       return;
     }
+    const orderedSys=phantomRtcPipeFromMeta(meta)==='sys';
+    const recipient=phantomShortKey(selfHKey),senderBoot=String(meta.bootId||'');
+    if(orderedSys&&!sysOfferOrder.allows(key,senderBoot,recipient,meta.sysAttemptId)) {
+      post('SYS_OFFER_ORDER',{peer:key,attemptId:meta.sysAttemptId,reason:'older_attempt_ignored'});
+      return;
+    }
     // Replace the old SYS incarnation before any work captures its queue.
     // Following ICE then binds to the same connection as the incoming offer.
     if (!phantomPrepareSysOffer(fromHKey, meta)) return;
+    if(orderedSys)sysOfferOrder.accept(key,senderBoot,recipient,meta.sysAttemptId);
     if(phantomRtcPipeFromMeta(meta)==='sys'){sdkDeferredOffers.drop(key,'accepted_new_offer');}
     return phantomQueueInboundRtc(fromHKey, meta, "offer", () =>
       phantomApplyRtcOffer(fromHKey, offer, meta),
@@ -13323,6 +13348,7 @@ export function createNetworkEngine(host) {
     sdkBootstrapTarget = null;
     sdkBootstrapUnanswered.clear();
     sdkDeferredOffers.clear('room_closed');
+    sysOfferOrder.clear();
     sdkDeferredAdmissions.clear();
     networkFirstSignaling.clear();signalingBridge.clear();signalingPeerKeys.clear();
     phantomPendingTerminalExits.clear();
@@ -14341,10 +14367,12 @@ export function createNetworkEngine(host) {
     snapshot() { return snapshot("sdk_read"); },
     peerConnections() {return phantomPeerConnections();},
     dispose() {
-      networkFirstSignaling.clear();signalingBridge.clear();signalingPeerKeys.clear();
-      phantomSendRoomExitedAndTeardown(true);
-      wsClose("sdk_dispose");
-      rtcTeardownAll("sdk_dispose");
+      let failure;
+      for (const dispose of [()=>networkFirstSignaling.clear(),()=>signalingBridge.clear(),()=>signalingPeerKeys.clear(),
+        ()=>phantomSendRoomExitedAndTeardown(true),()=>wsClose("sdk_dispose"),()=>rtcTeardownAll("sdk_dispose")]) {
+        try { dispose(); } catch(error) { failure??=error; }
+      }
+      if(failure)throw failure;
     }
   };
 }

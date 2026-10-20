@@ -28,11 +28,13 @@ async function fixture(store=createMemoryMembershipStore()) {
 test('one invitation has one winner under concurrent claims; winner retries and reconnects',async()=>{
  const f=await fixture(), second=createNostrIdentity();const invite=await f.authority.issueInvite();
  const outcomes=await Promise.allSettled([f.redeem(invite.token),f.redeem(invite.token,second)]);
- assert.deepEqual(outcomes.map(r=>r.status),['fulfilled','rejected']);
- const grant=outcomes[0].value;
+ assert.equal(outcomes.filter(r=>r.status==='fulfilled').length,1);
+ assert.equal(outcomes.filter(r=>r.status==='rejected').length,1);
+ const winner=outcomes[0].status==='fulfilled'?f.peer:second;
+ const grant=outcomes.find(r=>r.status==='fulfilled').value;
  assert.equal(await f.verify(grant),true);
- assert.deepEqual(await f.redeem(invite.token),grant);
- assert.deepEqual(await f.authority.reconnect({request:f.request(f.peer,'membership.reconnect')}),grant);
+ assert.deepEqual(await f.redeem(invite.token,winner),grant);
+ assert.deepEqual(await f.authority.reconnect({request:f.request(winner,'membership.reconnect')}),grant);
 });
 
 test('remove blocks old grant, invite, and reconnect; fresh invite creates a new generation',async()=>{
@@ -106,4 +108,22 @@ test('separate authority instances share atomic consumption; memory store rolls 
  const request=f.request(second,'membership.redeem',{inviteId:await digest(invite.token)});
  const outcomes=await Promise.allSettled([f.redeem(invite.token),restored.redeem({token:invite.token,request})]);
  assert.equal(outcomes.filter(x=>x.status==='fulfilled').length,1);
+});
+
+test('fresh invitation plus matching reconnect proof recovers the exact active grant once',async()=>{
+ const f=await fixture(), first=await f.authority.issueInvite(), original=await f.redeem(first.token);
+ f.advance(1000);
+ const invite=await f.authority.issueInvite();
+ const request=f.request(f.peer,'membership.redeem',{inviteId:await digest(invite.token)});
+ await assert.rejects(f.authority.redeem({token:invite.token,request}),/already has active/);
+ const rogue=createNostrIdentity();
+ await assert.rejects(f.authority.redeem({token:invite.token,request,reconnectRequest:f.request(rogue,'membership.reconnect')}),/identity/);
+ await assert.rejects(f.authority.redeem({token:invite.token,request,reconnectRequest:{peerPublicKey:f.peer.publicKey}}),/Invalid signed/);
+ const recovered=await f.authority.redeem({token:invite.token,request,reconnectRequest:f.request(f.peer,'membership.reconnect')});
+ assert.deepEqual(recovered,original); // no new generation or expiry extension
+ await assert.rejects(f.redeem(invite.token,rogue),/consumed/);
+ assert.deepEqual(await f.redeem(invite.token),original);
+ await f.authority.remove(f.peer.publicKey,original.membershipId);
+ await assert.rejects(f.authority.redeem({token:invite.token,request,reconnectRequest:f.request(f.peer,'membership.reconnect')}),/consumed/);
+ assert.equal(await f.verify(original),false);
 });
