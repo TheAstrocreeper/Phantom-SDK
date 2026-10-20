@@ -8,7 +8,7 @@ const db=await new Promise((resolve,reject)=>{const r=indexedDB.open('phantom-co
 function stored(table,mode,action){return new Promise((resolve,reject)=>{const tx=db.transaction(table,mode),r=action(tx.objectStore(table));tx.oncomplete=()=>resolve(r.result);tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error??Error('Storage transaction aborted'));});}
 let network,lastState,lastSnapshot,interrupted=false,interrupt=false,turnOnly=false,liveOutage=false;
 const trace=[],messages=[],connections=[],errors=[],native=new Set();
-const log=(type,data)=>{void globalThis.harnessLog({type,data});};
+const log=(type,data)=>globalThis.harnessLog({type,data});
 class RTC extends RTCPeerConnection{
  constructor(config){
   super(config);native.add(this);log('rtc.created',{policy:this.getConfiguration().iceTransportPolicy});
@@ -28,7 +28,7 @@ class RTC extends RTCPeerConnection{
    const stats=await this.getStats();
    for(const transport of stats.values())if(transport.type==='transport'&&transport.selectedCandidatePairId){
     const pair=stats.get(transport.selectedCandidatePairId),local=stats.get(pair?.localCandidateId),remote=stats.get(pair?.remoteCandidateId);
-    if(pair&&local&&remote)log('rtc.selectedPair',{kind:this.kind,state:pair.state,localType:local.candidateType,remoteType:remote.candidateType,localAddress:local.address,remoteAddress:remote.address,localPort:local.port,remotePort:remote.port,protocol:local.protocol,relayProtocol:local.relayProtocol,policy:this.getConfiguration().iceTransportPolicy});
+    if(pair&&local&&remote)await log(pair.state==='succeeded'?'rtc.selectedPair':'rtc.pendingPair',{kind:this.kind,state:pair.state,localType:local.candidateType,remoteType:remote.candidateType,localAddress:local.address,remoteAddress:remote.address,localPort:local.port,remotePort:remote.port,protocol:local.protocol,relayProtocol:local.relayProtocol,policy:this.getConfiguration().iceTransportPolicy});
    }
   }catch(error){log('rtc.statsError',{kind:this.kind,error:error.message});}
  }
@@ -60,6 +60,7 @@ globalThis.contracts={
   network.on('message',data=>messages.push(data));
   return {peerId:network.getState().peerId,invite:network.invite};
  },
+ capturePairs(){return Promise.all([...native].map(pc=>pc.capturePair()));},
  inspect(){return {state:network?.getState()??lastState,snapshot:network?.snapshot()??lastSnapshot,connections:network?.getPeerConnections()??[],connectionEvents:connections,nativeConnections:[...native].map(pc=>({connectionState:pc.connectionState,iceConnectionState:pc.iceConnectionState})),distribution:network?.getDistributionState(),trace,messages,errors,interrupted};},
  send({to,text}){network.send(to,text);},
  breakMessaging(){let closed=0;for(const pc of native)if(pc.chat?.readyState==='open'){pc.chat.close();closed++;}if(!closed)throw Error('No native messaging channel found');return closed;},

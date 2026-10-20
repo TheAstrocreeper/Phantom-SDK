@@ -39,7 +39,7 @@ for(const [name,configuration,distributionConfiguration] of [
   a.invitePeer(b.getState().peerId);await until(()=>events.filter(e=>e.type==='P2P_CHAT_READY').length>=2);
   const messages=[];b.on('message',m=>messages.push(m));a.send(b.getState().peerId,'configuration test');await until(()=>messages.length===1);
   await a.distributeFile(new Blob(['verified payload']));await until(()=>completed.length===1);assert.equal(await completed[0].blob.text(),'verified payload');
-  for(const [label,expected] of [['six7-sys',configuration??defaultCore],['six7',configuration??defaultCore],['phantom-distribution',configuration??distributionConfiguration??{}]]){
+  for(const [label,expected] of [['six7-sys',configuration??defaultCore],['six7',configuration??defaultCore],['phantom-distribution',configuration??distributionConfiguration??defaultCore]]){
    const connections=instances.filter(pc=>pc.channels.some(c=>c.label===label));assert.ok(connections.length>=2,`${label}: both endpoints constructed`);
    for(const pc of connections)assert.deepEqual(pc.configuration,expected,`${label}: constructor receives configuration`);
   }

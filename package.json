@@ -13,5 +13,8 @@
   "scripts": {
     "test": "node --test tests/*.test.js",
     "test:cloudflare:runtime": "node tests/cloudflare-runtime-smoke.mjs"
+  },
+  "devDependencies": {
+    "spake2-wasm": "0.2.0"
   }
 }

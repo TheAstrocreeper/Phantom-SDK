@@ -50,3 +50,10 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
+## spake2-wasm 0.2.0 (optional short-code pairing)
+
+MIT. Package-provided license text: `MIT`.
+Source: https://github.com/okdistribute/spake2-wasm
+An integrating application may redistribute the package WASM and adapted wasm-bindgen ESM glue;
+the package license file is included as SPAKE2-LICENSE.txt. No independent audit
+of this wrapper was established during integration.

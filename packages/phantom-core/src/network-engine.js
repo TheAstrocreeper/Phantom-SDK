@@ -1,3 +1,5 @@
+import {createSysOfferOrder} from './sys-offer-order.js';
+import {waitForDataChannelCapacity} from './data-channel-capacity.js';
 import {createSequentialSignaling} from './sequential-signaling.js';
 import {createSysOutageClock} from './sys-outage-clock.js';
 import {createIceTrace} from './ice-trace.js';
@@ -13,6 +15,7 @@ import {createDeferredSysOffers} from './deferred-sys-offers.js';
 import { acceptsSuccessorHandshake } from './successor-handshake.js';
 /** Peer networking engine: membership, leadership, signaling, and data channels. */
 export function createNetworkEngine(host) {
+  const canUsePeer=peer=>{try{return host.canUsePeer?host.canUsePeer(peer)===true:true;}catch{return false;}};
   const { window, document, localStorage, sessionStorage, location,
     WebSocket, RTCPeerConnection, crypto, setTimeout, clearTimeout,
     setInterval, clearInterval } = host;
@@ -60,6 +63,7 @@ export function createNetworkEngine(host) {
   const phantomRemoteEndpointIds = new Map();
   let phantomSysTransportAttemptSeq = 0;
   const phantomDoorwayAdmittedPeers = new Set();
+  const sysOfferOrder=createSysOfferOrder();
   const sdkDeferredOffers=createDeferredSysOffers({setTimeout,clearTimeout,emit:detail=>post(detail.kind==='successor'?'SYS_SUCCESSOR_OFFER':'SYS_HANDOFF_OFFER',detail)});
   let sdkBootstrapTarget = null;
   const sdkBootstrapUnanswered = new Set();
@@ -558,6 +562,19 @@ export function createNetworkEngine(host) {
       return { changed: false, committed };
     }
 
+    // An authenticated new process cannot know the previous relationship's
+    // cycle ID. Keeping that accepted cycle makes its new invite look like a
+    // competing live chat, leaving both peers admitted but unable to message.
+    if (bootChanged && committed) {
+      const relationship = phantomRelationships.get(key);
+      if (relationship && !relationship.endedAt) {
+        phantomRelationshipEnd(key, "remote_incarnation_changed", now(), false);
+        phantomCancelReconnect(key);
+        setState(key, VEIL.OUTSIDE, true);
+        emitSnapshot("relationship_retired_remote_incarnation");
+      }
+    }
+
     if (bindCurrent) {
       if (currentEnt && incomingBootId) {
         currentEnt.remoteBootId = incomingBootId;
@@ -820,7 +837,10 @@ export function createNetworkEngine(host) {
       concierge.sysAttempt.state = "connecting";
       concierge.sysPipeState = "connecting";
     } else {
-      if (targetPeer && concierge.sysAttempt.state !== "idle") {
+      // A terminal recovery decision belongs to this attempt. Teardown itself
+      // must not downgrade it back to an ordinary recoverable missing pipe.
+      // A real authority/target change above creates a fresh attempt instead.
+      if (targetPeer && !["idle", "terminal"].includes(concierge.sysAttempt.state)) {
         concierge.sysAttempt.state = "faulted";
         concierge.sysAttempt.faultReason = String(reason || "sys_pipe_missing");
       }
@@ -7089,7 +7109,7 @@ export function createNetworkEngine(host) {
 
   function phantomCanUseChat(hKey) {
     const key = phantomShortKey(hKey);
-    if (!key) return false;
+    if (!key || !canUsePeer(key)) return false;
     if (phantomRelationshipRevoked.has(key)) return false;
     return getState(key) === VEIL.INSIDE;
   }
@@ -7635,6 +7655,7 @@ export function createNetworkEngine(host) {
   }
 
   function rtcSendDC(remoteHKey, obj) {
+    if(!canUsePeer(phantomShortKey(remoteHKey)))return false;
     const ent = phantomChatPeers.get(
       String(remoteHKey || "")
         .slice(0, 16)
@@ -7650,22 +7671,8 @@ export function createNetworkEngine(host) {
     }
   }
 
-  function rtcWaitDCDrain(dc) {
-    return new Promise((resolve) => {
-      if (!dc || dc.readyState !== "open") return resolve(false);
-
-      dc.bufferedAmountLowThreshold = 512 * 1024;
-
-      if (dc.bufferedAmount < 2 * 1024 * 1024) return resolve(true);
-
-      const done = () => {
-        dc.removeEventListener("bufferedamountlow", done);
-        resolve(dc.readyState === "open");
-      };
-
-      dc.addEventListener("bufferedamountlow", done, { once: true });
-      setTimeout(done, 5000);
-    });
+  function rtcWaitDCDrain(dc,bytes=0) {
+    return waitForDataChannelCapacity(dc,{bytes,timeoutMs:5000,setTimeout,clearTimeout}).then(()=>true,()=>false);
   }
 
   async function rtcSendRawDC(remoteHKey, buf) {
@@ -7677,7 +7684,7 @@ export function createNetworkEngine(host) {
     const dc = ent?.dc;
     if (!dc || dc.readyState !== "open") return false;
 
-    const ok = await rtcWaitDCDrain(dc);
+    const ok = await rtcWaitDCDrain(dc,buf.byteLength??0);
     if (!ok || dc.readyState !== "open") return false;
 
     try {
@@ -8664,7 +8671,7 @@ export function createNetworkEngine(host) {
     };
 
     dc.onmessage = (ev) => {
-      if(phantomSysPeers.get(key)!==wiredEntry||wiredEntry?.pc!==wiredPc||wiredEntry?.sysdc!==dc)return;
+      if(phantomSysPeers.get(key)!==wiredEntry||wiredEntry?.pc!==wiredPc||wiredEntry?.sysdc!==dc||!canUsePeer(key))return;
       let msg = null;
       try {
         msg = JSON.parse(String(ev?.data || ""));
@@ -9642,6 +9649,7 @@ export function createNetworkEngine(host) {
     };
 
     dc.onmessage = async (ev) => {
+      if(phantomChatPeers.get(phantomShortKey(remoteHKey))?.dc!==dc||!canUsePeer(phantomShortKey(remoteHKey)))return;
       let raw = ev?.data;
 
       if (raw instanceof Blob) {
@@ -9652,6 +9660,7 @@ export function createNetworkEngine(host) {
         }
       }
 
+      if(phantomChatPeers.get(phantomShortKey(remoteHKey))?.dc!==dc||!canUsePeer(phantomShortKey(remoteHKey)))return;
       if (phantomIsArrayBuffer(raw) && !phantomCanUseChat(remoteHKey)) return;
       if (phantomIsArrayBuffer(raw)) {
         const ent = phantomChatPeers.get(
@@ -11106,9 +11115,16 @@ export function createNetworkEngine(host) {
       if(!sdkDeferredOffers.hold(key,offer,meta,'handoff'))post('SYS_HANDOFF_OFFER',{action:'rejected',peer:key,reason:'invalid_or_capacity'});
       return;
     }
+    const orderedSys=phantomRtcPipeFromMeta(meta)==='sys';
+    const recipient=phantomShortKey(selfHKey),senderBoot=String(meta.bootId||'');
+    if(orderedSys&&!sysOfferOrder.allows(key,senderBoot,recipient,meta.sysAttemptId)) {
+      post('SYS_OFFER_ORDER',{peer:key,attemptId:meta.sysAttemptId,reason:'older_attempt_ignored'});
+      return;
+    }
     // Replace the old SYS incarnation before any work captures its queue.
     // Following ICE then binds to the same connection as the incoming offer.
     if (!phantomPrepareSysOffer(fromHKey, meta)) return;
+    if(orderedSys)sysOfferOrder.accept(key,senderBoot,recipient,meta.sysAttemptId);
     if(phantomRtcPipeFromMeta(meta)==='sys'){sdkDeferredOffers.drop(key,'accepted_new_offer');}
     return phantomQueueInboundRtc(fromHKey, meta, "offer", () =>
       phantomApplyRtcOffer(fromHKey, offer, meta),
@@ -13332,6 +13348,7 @@ export function createNetworkEngine(host) {
     sdkBootstrapTarget = null;
     sdkBootstrapUnanswered.clear();
     sdkDeferredOffers.clear('room_closed');
+    sysOfferOrder.clear();
     sdkDeferredAdmissions.clear();
     networkFirstSignaling.clear();signalingBridge.clear();signalingPeerKeys.clear();
     phantomPendingTerminalExits.clear();
@@ -13475,6 +13492,19 @@ export function createNetworkEngine(host) {
       }
 
       phantomSendRoomExitedAndTeardown(true);
+      return;
+    }
+
+    if(d.type==='PHANTOM_ADMISSION_REFRESH') {
+      const self=phantomShortKey(selfHKey);
+      const peers=new Set([...lastRoster,...phantomChatPeers.keys(),...phantomSysPeers.keys()]);
+      for(const key of peers)if(key!==self&&!host.canAdmitPeer(key)) {
+        // Trusted local checkpoint change, not an unverified remote removal request.
+        phantomTerminalExitCommand({member:key,room:videoId,reason:'membership_revoked'},'membership_revoked');
+        phantomRetireRemoteIncarnationTransport(key,'membership_revoked');
+        post('PHANTOM_MEMBERSHIP_REVOKED',{peerId:key});
+      }
+      emitSnapshot('membership_admission_refreshed');
       return;
     }
 
@@ -13791,7 +13821,9 @@ export function createNetworkEngine(host) {
         }
 
         const channel = phantomChatPeers.get(phantomShortKey(to))?.dc;
-        const drained = await rtcWaitDCDrain(channel);
+        const bufferWaitStartedAt=performance.now();
+        const drained = await rtcWaitDCDrain(channel,bytes.byteLength);
+        const bufferWaitMs=performance.now()-bufferWaitStartedAt;
         if (!drained || channel !== phantomChatPeers.get(phantomShortKey(to))?.dc || !phantomCanUseChat(to) || host.canSendFile?.(file) === false) {
           postLocal('FILE_BIN_CHUNK_SENT', {ok:false,to,file,error:'File channel unavailable'});
           return;
@@ -13817,6 +13849,7 @@ export function createNetworkEngine(host) {
 
         postLocal("FILE_BIN_CHUNK_SENT", {
           ok: !!binOk,
+          bufferWaitMs,
           to,
           file: {
             id: file.id,
@@ -13898,7 +13931,7 @@ export function createNetworkEngine(host) {
       if (JSON.stringify(packet).length > 32768) return;
       const requested = d.payload?.to ? phantomShortKey(d.payload.to) : null;
       for (const [key, ent] of phantomSysPeers) {
-        if ((requested && key !== requested) || ent.sysdc?.readyState !== 'open' || phantomTemporarySysTransactions.has(key)) continue;
+        if ((requested && key !== requested) || !canUsePeer(key) || ent.sysdc?.readyState !== 'open' || phantomTemporarySysTransactions.has(key)) continue;
         try { ent.sysdc.send(JSON.stringify(packet)); } catch {}
       }
       return;
@@ -13910,7 +13943,7 @@ export function createNetworkEngine(host) {
       const requested = d.payload?.to ? phantomShortKey(d.payload.to) : null;
       const sent = new Set();
       for (const [key, ent] of phantomSysPeers) {
-        if ((requested && key !== requested) || ent.sysdc?.readyState !== 'open' || phantomTemporarySysTransactions.has(key)) continue;
+        if ((requested && key !== requested) || !canUsePeer(key) || ent.sysdc?.readyState !== 'open' || phantomTemporarySysTransactions.has(key)) continue;
         try { ent.sysdc.send(JSON.stringify(packet)); sent.add(key); } catch {}
       }
       for (const [key, ent] of phantomChatPeers) {
@@ -14334,10 +14367,12 @@ export function createNetworkEngine(host) {
     snapshot() { return snapshot("sdk_read"); },
     peerConnections() {return phantomPeerConnections();},
     dispose() {
-      networkFirstSignaling.clear();signalingBridge.clear();signalingPeerKeys.clear();
-      phantomSendRoomExitedAndTeardown(true);
-      wsClose("sdk_dispose");
-      rtcTeardownAll("sdk_dispose");
+      let failure;
+      for (const dispose of [()=>networkFirstSignaling.clear(),()=>signalingBridge.clear(),()=>signalingPeerKeys.clear(),
+        ()=>phantomSendRoomExitedAndTeardown(true),()=>wsClose("sdk_dispose"),()=>rtcTeardownAll("sdk_dispose")]) {
+        try { dispose(); } catch(error) { failure??=error; }
+      }
+      if(failure)throw failure;
     }
   };
 }
