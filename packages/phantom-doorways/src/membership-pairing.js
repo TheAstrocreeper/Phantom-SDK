@@ -63,8 +63,10 @@ export function createMembershipPairingHost({
   onCodeUsed = () => {},
   onError = () => {},
   maxChannels = 16,
+  inviteTtlMs,
   pake,
 } = {}) {
+  if(inviteTtlMs!==undefined&&(!Number.isSafeInteger(inviteTtlMs)||inviteTtlMs<=0))throw new TypeError('Invalid invitation lifetime');
   const context = parseInvite(invite);
   if (
     context.networkId !== authority?.networkId ||
@@ -115,7 +117,7 @@ export function createMembershipPairingHost({
       retained = false;
     try {
       const invitation = await authority.issueInvite(
-          pake ? { ttlMs: 240000 } : undefined,
+          inviteTtlMs!==undefined ? {ttlMs:inviteTtlMs} : pake ? { ttlMs: 240000 } : undefined,
         ),
         code = await createPairingCode();
       let displayCode = code;

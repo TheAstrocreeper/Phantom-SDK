@@ -191,3 +191,10 @@ Third-party dependencies retain their own licenses; see THIRD_PARTY_NOTICES.md.
 After enrollment, `createMembershipPairingHost(...).bindNetwork(network)` and `connectMembershipPairing(...).bindNetwork(network)` route membership status, invitation requests, Leave and signed revocation notifications over authenticated SDK messaging. Bind the matching room and local identity on both sides. Status replies are matched to a fresh request ID and the pinned inviter peer; host requests still pass the original signed membership checks. Pairing signaling remains the bootstrap and fallback path. This removes the requirement for an available pairing relay while the owner peer channel is ready. Membership still fails closed if no path can confirm the authority within its existing freshness lease; this does not guarantee recovery after loss of the peer transport itself.
 
 Distribution negotiates connection reuse through `reuseProtocol: 1`. Verified batches continue on the same RTC connection, with bounded index lists, per-batch deadlines, generation checks and renewed source readiness. A source change, leader change, failure, completion, removal or revocation tears it down normally. Older peers retain batch teardown; `distribution: {reuseConnections: false}` disables reuse. Connections remain scoped to one asset, source and receiver.
+
+### Local connections
+
+Experimental local doorway transport, authenticated LAN/PIN bootstrap, and browser
+pairing build helpers are available through dedicated package exports. Applications
+own hosting and discovery. See [Local connections](docs/local-connections.md) for
+contracts, examples, and the remaining device validation limits.

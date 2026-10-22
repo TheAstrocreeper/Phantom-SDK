@@ -183,13 +183,13 @@ export async function openPairingChannel({
         t: now(),
       });
   });
-  const retry = setInterval(() => {
+  const retry = doorway.eventDriven ? null : setInterval(() => {
     if (!closed) {
       session.reconcile?.({});
       flush();
     }
   }, 1000);
-  retry.unref?.();
+  retry?.unref?.();
   return {
     request(action, data, { signal } = {}) {
       if (closed || signal?.aborted)

@@ -8,7 +8,9 @@
     "./browser": "./src/browser-entry.js",
     "./pairing": "./src/membership-pairing.js",
     "./pairing-channel": "./src/pairing-channel.js",
-    "./membership-store": "./src/browser-membership-store.js"
+    "./membership-store": "./src/browser-membership-store.js",
+    "./local": "./src/local-doorway.js",
+    "./browser-pake-glue": "./src/browser-pake-glue.js"
   },
   "dependencies": {
     "@noble/curves": "^2.4.0",
