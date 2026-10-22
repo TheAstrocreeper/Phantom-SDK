@@ -16,6 +16,8 @@ Phantom turns browsers into a peer-powered network, giving developers a foundati
 
 This is the current development base. Its API is still evolving.
 
+See [Device validation and integration notes](docs/device-validation.md) for the reusable lifecycle, pairing and connectivity fixes exercised on Linux and Android, and the remaining limits.
+
 ## Getting started
 
 Use Node.js 22 or later to install the workspace dependencies:
@@ -58,7 +60,7 @@ const phantom = createBrowserPhantom({
 
 Supply the configuration locally on each browser instance; it is not carried in invites or signaling packets, or included in SDK diagnostic snapshots. Keep credentials in local configuration rather than doorway descriptors or application logs. The browser validates the RTC configuration when constructing each connection. This option does not provision a TURN service or establish that it is reachable.
 
-When omitted, existing behavior is preserved: system and messaging connections use `stun:stun.l.google.com:19302`; distribution uses its existing `distribution.rtcConfiguration`, or `{}`. An explicit top-level configuration takes precedence for all three connection types, including an explicit `{}` with no configured ICE servers. Existing distribution-only configuration remains supported when the top-level option is omitted. Lower-level `createPhantom` callers can also supply `rtcConfiguration` for system and messaging connections.
+When omitted, system, messaging and distribution connections use `stun:stun.l.google.com:19302` by default. A supplied `distribution.rtcConfiguration` overrides the distribution default. An explicit top-level configuration takes precedence for all three connection types, including an explicit `{}` with no configured ICE servers. Existing distribution-only configuration remains supported when the top-level option is omitted. Lower-level `createPhantom` callers can also supply `rtcConfiguration` for system and messaging connections.
 
 A caller-requested admission deadline rejects with `error.code === "ADMISSION_TIMEOUT"` and the existing `Network admission timed out` message. `error.diagnostics` retains `{state, rtc}` captured before cleanup; `rtc` is the existing bounded native RTC history (or `null` when unavailable). Its connection events include browser ICE error codes, text and server URLs when reported. A timeout alone does not identify a TURN, signaling or authority failure. Diagnostics can contain network addresses; review before sharing. No RTC credentials are added.
 
@@ -96,12 +98,14 @@ const manifest = await network.distributeFile(file, {
 });
 ```
 
+File preparation reads batches of at most 4 MiB and hashes at most eight chunks concurrently. File requests use a bounded per-source window (default 8, configurable 1–8) with timeout retries (default two attempts per source, configurable 1–3). Configure `requestWindow` and `maxAttemptsPerPeer` under `files` for standalone transfers or `distribution` for distributed transfers. Cached pieces remain verified before resume and reconstruction; membership and revocation checks still govern queued work. These changes do not fix background-page session recovery or establish mobile throughput.
+
 The creator retains its original copy even if it is not a selected recipient. The scheduler assigns transfers only to selected peers that are currently in the roster, while any live holder of verified chunks can supply them. The signed recipient policy travels with inventories and mirrored distribution state, including across leader replacement. Both transfer endpoints verify it before opening an assigned job. An explicit `[]` keeps the original without scheduling replicas. Lists are limited to 128 entries, sorted and deduplicated.
 
 Recipient selection is immutable for a file/distribution identity. To publish the same bytes with a different selection, provide a different `distributionId`. Snapshots expose the selection through each asset's `proof.recipients`; absence means all members. When supplying external publication authorization, sign the recipients too:
 
 ```js
-const preparedManifest = await network.publishFile(file);
+const preparedManifest = await network.prepareDistributionFile(file);
 const authorization = await adminIdentity.sign({
   networkId: network.networkId,
   action: 'content.publish',
@@ -109,10 +113,10 @@ const authorization = await adminIdentity.sign({
   operationId: crypto.randomUUID(),
   recipients: [peerA, peerB],
 });
-await network.distributeFile(file, {authorization, recipients: [peerA, peerB]});
+await network.distributeFile(file, {prepared: preparedManifest, authorization, recipients: [peerA, peerB]});
 ```
 
-The prepared manifest must use the same file settings, including `distributionId`. If `recipients` is omitted alongside an external authorization, the signed authorization defines the selection. The signer and selected-recipient options must agree when both are supplied.
+Pass file settings, including `distributionId`, to `prepareDistributionFile`. Reuse its exact returned object and original file in the same network session through `prepared`; do not pass file settings again. Distribution reuses the internally stored manifest without another hashing pass, and still verifies publication authorization and revocation. If `recipients` is omitted alongside an external authorization, the signed authorization defines the selection. The signer and selected-recipient options must agree when both are supplied.
 
 Targeted publication uses version 2 admin proofs, with the recipient list included in the signed statement. Old version 1 publications remain unchanged. Older SDKs cannot verify targeted proofs; targeted sharing requires upgraded participants, with no fallback to all-member replication. Recipient selection controls SDK distribution; it is not encryption or a guarantee that a recipient cannot copy or redistribute downloaded content. For optional persistence and reload restoration, see the following section.
 
@@ -181,3 +185,9 @@ Third-party dependencies retain their own licenses; see THIRD_PARTY_NOTICES.md.
 
 
 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/theastrocreeper)
+
+### Membership over existing peer connections
+
+After enrollment, `createMembershipPairingHost(...).bindNetwork(network)` and `connectMembershipPairing(...).bindNetwork(network)` route membership status, invitation requests, Leave and signed revocation notifications over authenticated SDK messaging. Bind the matching room and local identity on both sides. Status replies are matched to a fresh request ID and the pinned inviter peer; host requests still pass the original signed membership checks. Pairing signaling remains the bootstrap and fallback path. This removes the requirement for an available pairing relay while the owner peer channel is ready. Membership still fails closed if no path can confirm the authority within its existing freshness lease; this does not guarantee recovery after loss of the peer transport itself.
+
+Distribution negotiates connection reuse through `reuseProtocol: 1`. Verified batches continue on the same RTC connection, with bounded index lists, per-batch deadlines, generation checks and renewed source readiness. A source change, leader change, failure, completion, removal or revocation tears it down normally. Older peers retain batch teardown; `distribution: {reuseConnections: false}` disables reuse. Connections remain scoped to one asset, source and receiver.

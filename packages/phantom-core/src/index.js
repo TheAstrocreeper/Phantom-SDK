@@ -1,3 +1,4 @@
+import {defaultRTCConfiguration} from './rtc-configuration.js';
 import { projectNetworkState } from './network-state.js';
 import { resolvePeerIdentity, validatePeerName } from './identity.js';
 export { createPeerIdentity } from './identity.js';
@@ -32,7 +33,7 @@ function eventSurface() {
 /** Public peer-network facade with injectable transport and runtime. */
 export function createPhantom({ doorway, origin = 'https://phantom.local',
     avatar = null, storage = memoryStorage(), sessionStorage = memoryStorage(),
-    runtime = globalThis, messaging = 'manual', rtcConfiguration = {iceServers:[{urls:"stun:stun.l.google.com:19302"}]}, recoverySignaling, canSendFile = () => true, authorizeSyscon1 = () => true, canAdmitPeer = () => true } = {}) {
+    runtime = globalThis, messaging = 'manual', rtcConfiguration = defaultRTCConfiguration(), recoverySignaling, canSendFile = () => true, authorizeSyscon1 = () => true, canAdmitPeer = () => true, canUsePeer = () => true } = {}) {
   if(!['manual','automatic'].includes(messaging))throw new TypeError('messaging must be manual or automatic');
   if(!rtcConfiguration||typeof rtcConfiguration!=='object'||Array.isArray(rtcConfiguration))throw new TypeError('rtcConfiguration must be an object');
   if (['phantom-doorway-v1','phantom-doorway-v2'].includes(doorway?.protocol)) doorway = bridgeDoorway(doorway);
@@ -69,6 +70,7 @@ export function createPhantom({ doorway, origin = 'https://phantom.local',
     doorwayPresence: doorway.presence ?? 'live-sockets',
     WebSocket: doorway.WebSocket, RTCPeerConnection: runtime.RTCPeerConnection,
     crypto: runtime.crypto, rtcConfiguration, messaging, recoverySignaling, canSendFile, authorizeSyscon1,
+    canUsePeer: peer => {try{return canUsePeer(peer)===true;}catch{return false;}},
     canAdmitPeer: peer => { try { return canAdmitPeer(peer) === true; } catch { return false; } },
     emit(type, payload) {
       if (disposed) return;
@@ -102,6 +104,7 @@ export function createPhantom({ doorway, origin = 'https://phantom.local',
       }
     },
     setTimeout(callback, delay, ...args) {
+      if(disposed)return null;
       const id = timers.setTimeout(() => {
         timeouts.delete(id);
         if (!disposed) callback(...args);
@@ -111,6 +114,7 @@ export function createPhantom({ doorway, origin = 'https://phantom.local',
     },
     clearTimeout(id) { timers.clearTimeout(id); timeouts.delete(id); },
     setInterval(callback, delay, ...args) {
+      if(disposed)return null;
       const id = timers.setInterval(() => {
         if (!disposed) callback(...args);
       }, delay);
@@ -197,8 +201,10 @@ export function createPhantom({ doorway, origin = 'https://phantom.local',
     command,
     dispose() {
       if (disposed) return;
-      engine.dispose();
       disposed = true;
+      // Fence callbacks first; facade resources must be released even if engine teardown throws.
+      let disposalError;
+      try { engine.dispose(); } catch (error) { disposalError = error; }
       networkPermissions.dispose();
       cancelJoin?.();
       for (const id of timeouts) timers.clearTimeout(id);
@@ -208,6 +214,7 @@ export function createPhantom({ doorway, origin = 'https://phantom.local',
       for(const listener of stateListeners){try{listener(structuredClone(networkState));}catch{}}
       stateListeners.clear();peerConnections.clear();
       window.clear(); document.clear();
+      if(disposalError)throw disposalError;
     },
   };
 }
@@ -219,3 +226,9 @@ export {createMemoryChunkStore} from './files.js';
 
 export {createAdminController} from './admin-controller.js';
 export {createAdmissionCheckpoint, createAdmissionVerifier, AdmissionError} from './admission.js';
+
+export {createMembershipAuthority, createMemoryMembershipStore} from './membership.js';
+
+export {createMembershipAdmission} from './membership-admission.js';
+export {createMembershipRevocationVerifier} from './membership-proof.js';
+export {createPairingCode,parsePairingCode,pairingCoordinates} from './pairing-code.js';

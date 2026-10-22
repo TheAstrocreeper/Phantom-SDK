@@ -1,0 +1,30 @@
+# Headless NAT tests
+
+From the repository root, run:
+
+```sh
+bash tools/swarm/run-nat-tests.sh
+```
+
+Requires Linux (Debian, Ubuntu or Mint), Node.js 22+ and sudo. Run the command as your normal user. First-run setup installs missing network utilities and Chromium dependencies, downloads Chromium, and extracts Coturn into a local test runtime. Coturn is not installed or enabled as a system service. Later runs reuse the setup.
+
+The suite runs in private Linux mount, network and PID namespaces with no external network. Firewall, routing, forwarding and temporary namespace changes stay inside that isolated environment. Remaining test processes die when it exits. Sudo is required to create these kernel namespaces; your normal host network is not used for test traffic.
+
+The command exits nonzero if any scenario fails, prints the report location, and creates a `.tar.gz` containing `summary.json`, per-scenario summaries, JSONL SDK/browser events, selected ICE candidate pairs, Coturn logs, and gateway firewall counters.
+
+Each browser process has its own private subnet and Linux MASQUERADE gateway. A separate simulated WAN hosts temporary STUN/TURN and a test discovery/signaling relay. Localhost proxies carry HTTP and signaling to preserve browser secure-context behavior. File and messaging payloads use native WebRTC. IPv6 is disabled to prevent an alternate route bypassing the IPv4 topology.
+
+| Scenario | Network policy | Required outcome |
+|---|---|---|
+| direct | Outbound traffic allowed through separate NATs; STUN only | Connected reflexive ICE path, no relay |
+| blocked | Gateway allows only service traffic; STUN only | Admission timeout and disposed RTC connections |
+| turn-udp | Direct peer traffic blocked; TURN available over UDP | Connection contains a relay candidate, UDP allocation evidence |
+| turn-tcp | All forwarded UDP blocked; TCP service access allowed | Connection contains a relay candidate, TCP allocation evidence |
+
+A plain native WebRTC control first verifies each connected topology independently of the SDK, using the same ICE configuration and policy `all`, with immediate trickle delivery. Gateways drop unsolicited inbound packets, and private-address candidate checks are silently discarded on the simulated WAN. A control failure is reported separately and prevents misleading SDK assertions.
+
+Connected scenarios check three-peer messaging, recovery after an intentional native data channel close, selected-recipient file transfer, IndexedDB persistence after interruption, reload/resume without requesting the stored chunk, SHA-256 equality, and recipient exclusion. ICE policy remains `all` to exercise firewall-driven fallback rather than force relay policy.
+
+This models controlled NAT/firewall behavior. It does not certify actual mobile browsers, carrier NAT, every symmetric NAT implementation, TURN/TLS, or recovery from an address change. The persistence test deliberately closes the SDK and reloads. A separate live outage test drops all forwarded traffic at the selected receiver gateway for twelve seconds after a durable first chunk, confirms packet drops and stalled progress, restores traffic, and requires completion with matching SHA-256 plus messaging on the same browser document and peer identity. It does not close the SDK or reload either peer during that outage.
+
+Direct execution of the internal topology scripts is refused unless the namespace isolation checks pass. The test removes its WAN drop rules and private route during cleanup, then discards the outer namespaces.

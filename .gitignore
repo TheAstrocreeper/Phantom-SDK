@@ -12,5 +12,16 @@ demos/*/dist/
 # Swarm harness generated diagnostics
 tools/swarm/reports/
 
+# Local headless NAT runtime
+tools/swarm/.nat-runtime/
+
+# Android local tooling and generated app assets
+apps/*/.gradle/
+apps/*/.idea/
+apps/*/local.properties
+apps/*/build/
+apps/*/app/build/
+apps/*/app/src/main/assets/
 tools/sdk-test/dist/
 tools/sdk-test/reports/
+

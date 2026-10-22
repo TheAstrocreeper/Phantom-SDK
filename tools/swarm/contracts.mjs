@@ -119,6 +119,7 @@ try{
   });
  }
  if(turnTransport)await step('selected native pairs use TURN for system, messaging and distribution',async()=>{
+  await Promise.all(clients.map(c=>c.page.evaluate(()=>contracts.capturePairs())));
   const evidence=events.filter(e=>e.type==='rtc.selectedPair').map(e=>({peer:e.peer,...e.data}));
   for(const kind of ['system','messaging','distribution'])assert.ok(evidence.some(e=>e.kind===kind),'missing selected pair for '+kind);
   for(const e of evidence){assert.equal(e.policy,'relay');assert.equal(e.state,'succeeded');assert.equal(e.localType,'relay');assert.equal(e.remoteType,'relay');assert.equal(e.relayProtocol,turnTransport);}

@@ -37,7 +37,7 @@ export function createBrowserPhantom({identity,admission,authorizationTimeoutMs=
   if(!admission)return null;
   const identity=sdkIdentity??=createNostrIdentity();
   const checkpoint=createAdmissionCheckpoint({policy:admission,networkId:context.networkId,peerPublicKey:identity.publicKey,now:now??Date.now,timeoutMs:authorizationTimeoutMs});
-  const credential=await checkpoint.authorize({operation,signal:options?.signal});
+  let credential;try{credential=await checkpoint.authorize({operation,signal:options?.signal});}catch(error){checkpoint.close();throw error;}
   return {checkpoint,credential};
  }
  async function openContext(context,types,access){
@@ -61,16 +61,23 @@ export function createBrowserPhantom({identity,admission,authorizationTimeoutMs=
    // Keep original invite coordinates while adding discovered alternatives.
    return build({...spec,relays:expanded});
   }}),{onStatus:onDoorwayStatus});
-  return {identity:{version:1,id:identity.publicKey},recoverySignaling:{sign:payload=>identity.signPeerProof({networkId:context.networkId,kind:'sys_recovery_bridge',payload,issuedAt:Date.now(),nonce:crypto.randomUUID()}),verify:(proof,payload,key)=>proof.peerPublicKey===key&&verifyPeerProof(proof,{networkId:context.networkId,kind:'sys_recovery_bridge',payload})},runtime,doorway,canAdmitPeer:access?peer=>access.checkpoint.allows(peer):undefined,adminIdentity,controlStore:context.adminPublicKey?(controlStore??createControlStore(storage)):undefined,files,distribution,rtcConfiguration,messaging,readAdminOrders,retireGraceMs,onNetworkState:state=>doorway.observeNetworkState(state)};
+  const refreshMembership=admission?.refresh?()=>admission.refresh(context.networkId):undefined;
+  const leaveMembership=admission?.leave?()=>admission.leave({
+   networkId:context.networkId,peerPublicKey:identity.publicKey,credential:access.credential,
+   request:{peerPublicKey:identity.publicKey,membershipId:access.credential.membershipId,
+    proof:identity.signPeerProof({networkId:context.networkId,kind:'membership.leave',credential:null,
+     payload:{action:'membership.leave',membershipId:access.credential.membershipId},issuedAt:(now??Date.now)(),nonce:crypto.randomUUID()})}
+  }):undefined;
+  return {canUsePeer:access&&admission?.enforceLiveMembership===true?peer=>access.checkpoint.allows(peer):undefined,refreshMembership,leaveMembership,admissionCheckpoint:access?.checkpoint,identity:{version:1,id:identity.publicKey},recoverySignaling:{sign:payload=>identity.signPeerProof({networkId:context.networkId,kind:'sys_recovery_bridge',payload,issuedAt:Date.now(),nonce:crypto.randomUUID()}),verify:(proof,payload,key)=>proof.peerPublicKey===key&&verifyPeerProof(proof,{networkId:context.networkId,kind:'sys_recovery_bridge',payload})},runtime,doorway,canAdmitPeer:access?peer=>access.checkpoint.allows(peer):undefined,adminIdentity,controlStore:context.adminPublicKey?(controlStore??createControlStore(storage)):undefined,files,distribution,rtcConfiguration,messaging,readAdminOrders,retireGraceMs,onNetworkState:state=>doorway.observeNetworkState(state)};
  }
  return {
-  async join(invite,options){const context=parseInvite(invite);const access=await preflight(context,options,'join');return createPhantomEntry({openContext:context=>openContext(context,options?.doorwayTypes,access),...(coreFactory?{coreFactory}:{})}).join(invite,options);},
+  async join(invite,options){const context=parseInvite(invite);const access=await preflight(context,options,'join');try{return await createPhantomEntry({openContext:context=>openContext(context,options?.doorwayTypes,access),...(coreFactory?{coreFactory}:{})}).join(invite,options);}catch(error){access?.checkpoint.close();throw error;}},
   async create(options){
    const networkId=Array.from(runtime.crypto.getRandomValues(new Uint8Array(32)),b=>b.toString(16).padStart(2,'0')).join('');
    const context={networkId,adminPublicKey};const access=await preflight(context,options,'create');
-   const selected=await resolve(configuration);if(options?.signal?.aborted)throw new Error('Join aborted');
+   try{const selected=await resolve(configuration);if(options?.signal?.aborted)throw new Error('Join aborted');
    const invite=encodeInvite({...context,doorways:selected});
-   return createPhantomEntry({openContext:context=>openContext(context,undefined,access),...(coreFactory?{coreFactory}:{})}).startCreated(invite,options);
+   return await createPhantomEntry({openContext:context=>openContext(context,undefined,access),...(coreFactory?{coreFactory}:{})}).startCreated(invite,options);}catch(error){access?.checkpoint.close();throw error;}
   },
   refreshRelays:()=>{if(admission)throw new AdmissionError('Restricted relay discovery runs only after authorization');return manager.refresh();}
  };
