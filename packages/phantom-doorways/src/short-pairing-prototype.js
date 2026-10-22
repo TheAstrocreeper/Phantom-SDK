@@ -1,4 +1,5 @@
-/** Experimental PAKE bootstrap. Not connected to production pairing.
+import {validateLocalEndpoint} from './local-endpoint.js';
+/** Experimental PAKE bootstrap shared by online and local pairing.
  * `pake` is an injected SPAKE2 implementation, not a home-grown primitive.
  */
 const enc = new TextEncoder(),
@@ -46,9 +47,9 @@ export async function shortCodeRoom(code) {
     ),
   );
 }
-const context = (locator, host, peer, hello, challenge) =>
+const context = (protocol, locator, host, peer, hello, challenge) =>
   JSON.stringify([
-    "phantom-short-pairing-v3",
+    protocol,
     locator,
     host,
     peer,
@@ -94,8 +95,8 @@ async function derive(shared, ctx) {
 function dispose(state) {
   if (state?.ptr) state.free();
 }
-export function createShortPairingHost({
-  code,
+function pairingHost({
+  credentials,
   hostPublicKey,
   invitation,
   pake,
@@ -114,7 +115,7 @@ export function createShortPairingHost({
     maxAttempts > 10
   )
     throw Error("Invalid short pairing configuration");
-  const { locator, secret } = parseShortCode(code),
+  const { protocol, locator, secret } = credentials,
     expiresAt = now() + ttlMs,
     rows = new Map();
   let attempts = 0,
@@ -133,7 +134,7 @@ export function createShortPairingHost({
     if (attempts >= maxAttempts) throw Error("Pairing attempt limit reached");
     attempts++;
     const n = nonce(),
-      ctx = context(locator, hostPublicKey, peer, hello, n),
+      ctx = context(protocol, locator, hostPublicKey, peer, hello, n),
       state = pake.start(ctx, secret),
       challenge = { nonce: n, message: hex(pake.msg(state)) };
     rows.set(id, { state, ctx, challenge });
@@ -203,16 +204,16 @@ export function createShortPairingHost({
     },
   };
 }
-export function createShortPairingClient({
-  code,
+function pairingClient({
+  credentials,
   hostPublicKey,
   peerPublicKey,
   pake,
+  hello = nonce(),
 } = {}) {
-  if (!validKey(hostPublicKey) || !validKey(peerPublicKey))
+  if (!validKey(hostPublicKey) || !validKey(peerPublicKey) || !validNonce(hello))
     throw Error("Invalid pairing identity");
-  const { locator, secret } = parseShortCode(code),
-    hello = nonce();
+  const { protocol, locator, secret } = credentials;
   let ctx,
     keys,
     started = false,
@@ -228,6 +229,7 @@ export function createShortPairingClient({
         throw Error("Invalid pairing challenge");
       started = true;
       ctx = context(
+        protocol,
         locator,
         hostPublicKey,
         peerPublicKey,
@@ -286,3 +288,23 @@ export function createShortPairingClient({
     },
   };
 }
+
+// Keep the online and LAN transcripts separate; neither can downgrade the other.
+const shortCredentials = code => ({protocol:'phantom-short-pairing-v3', ...parseShortCode(code)});
+function lanCredentials(route, password) {
+  validateLocalEndpoint(route);
+  if (typeof route !== 'string' || !/^http:\/\/\d{1,3}(?:\.\d{1,3}){3}:\d{4,5}$/.test(route) ||
+      typeof password !== 'string' || !/^[0-9A-HJKMNP-TV-Z]{5}$/.test(password)) throw Error('Invalid LAN pairing configuration');
+  return {protocol:'phantom-lan-pairing-v1',locator:route,secret:password};
+}
+export const createShortPairingHost = ({code,...options} = {}) => pairingHost({...options,credentials:shortCredentials(code)});
+export const createShortPairingClient = ({code,...options} = {}) => pairingClient({...options,credentials:shortCredentials(code)});
+export const createLanPairingHost = ({route,password,...options} = {}) => pairingHost({...options,credentials:lanCredentials(route,password)});
+export const createLanPairingClient = ({route,password,...options} = {}) => pairingClient({...options,credentials:lanCredentials(route,password)});
+
+function pinCredentials(room,pin) {
+  if(typeof room!=='string'||! /^[a-f0-9]{48}$/.test(room)||typeof pin!=='string'||! /^\d{4}$/.test(pin))throw Error('Invalid local PIN configuration');
+  return {protocol:'phantom-local-pin-v1',locator:room,secret:pin};
+}
+export const createPinPairingHost=({room,pin,...options}={})=>pairingHost({...options,credentials:pinCredentials(room,pin),maxAttempts:3});
+export const createPinPairingClient=({room,pin,...options}={})=>pairingClient({...options,credentials:pinCredentials(room,pin)});
