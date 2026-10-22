@@ -2,12 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createMemoryChunkStore,createFileDistribution} from '../packages/phantom-core/src/files.js';
 const tick=()=>new Promise(r=>setImmediate(r));
-async function fixture({window=8,sourceWindow=window,delay=0,timeout=1000,drop=()=>false,readDelay=0,sourceReadBlockBytes=0,corruptSource=false,receiverStore,receiverAllowed=()=>true,length=32*1024}={}){
+async function fixture({window=8,sourceWindow=window,delay=0,timeout=1000,drop=()=>false,readDelay=0,sourceReadBlockBytes=0,corruptSource=false,receiverStore,receiverAllowed=()=>true,length=32*1024,onProgress=()=>{}}={}){
  const ids=['a'.repeat(16),'b'.repeat(16)],listeners=[new Set(),new Set()],requests=[],events=[],timers=new Set(),sent=[],timings=[];let offered,reading=0,peakReads=0,sourceReadCalls=0,prepared=false;
  const offer=new Promise(r=>offered=r);
  const schedule=fn=>{if(!delay)return queueMicrotask(fn);const t=setTimeout(()=>{timers.delete(t);fn();},delay);timers.add(t);};
  const cores=ids.map((id,i)=>({onEvent(fn){listeners[i].add(fn);return()=>listeners[i].delete(fn);},command(type,p){const j=ids.indexOf(p.to),deliver=e=>{for(const f of listeners[j])f(e);};if(type==='SEND_DM'){if(p.sys==='PHANTOM_FILE_REQUEST')requests.push(p.file.index);schedule(()=>deliver({type:'INCOMING_MSG',payload:{from:id,...p}}));}else{sent.push(p.file.index);if(!drop(p.file.index,requests.filter(x=>x===p.file.index).length))schedule(()=>deliver({type:'FILE_BIN_CHUNK',payload:{from:id,file:p.file,bytes:p.bytes}}));queueMicrotask(()=>{for(const f of listeners[i])f({type:'FILE_BIN_CHUNK_SENT',payload:{to:p.to,file:p.file,ok:true}});});}}}));
- const services=cores.map((core,i)=>createFileDistribution({core,canUsePeer:i===1?receiverAllowed:()=>true,requestWindow:i===0?sourceWindow:window,requestTimeoutMs:timeout,...(i===1&&receiverStore?{chunkStore:receiverStore}:{}),emit:(type,data)=>{if(type==='fileTransferTiming')timings.push({side:i,...data});if(i===1){events.push({type,data});if(type==='fileOffer')offered(data);}}}));
+ const services=cores.map((core,i)=>createFileDistribution({core,canUsePeer:i===1?receiverAllowed:()=>true,requestWindow:i===0?sourceWindow:window,requestTimeoutMs:timeout,...(i===1&&receiverStore?{chunkStore:receiverStore}:{}),emit:(type,data)=>{if(type==='fileTransferTiming')timings.push({side:i,...data});if(i===1){events.push({type,data});if(type==='fileProgress')onProgress(data);if(type==='fileOffer')offered(data);}}}));
  const bytes=new Uint8Array(length);crypto.getRandomValues(bytes);const blob=new Blob([bytes]),source={size:blob.size,slice(...args){const part=blob.slice(...args);return {async arrayBuffer(){if(prepared)sourceReadCalls++;const read=async()=>{const bytes=await part.arrayBuffer();if(prepared&&corruptSource)new Uint8Array(bytes)[0]^=1;return bytes;};if(!prepared||!readDelay)return read();reading++;peakReads=Math.max(peakReads,reading);try{await new Promise(r=>setTimeout(r,readDelay));return await read();}finally{reading--;}}};}};const m=await services[0].publish(source,{chunkSize:1024,sourceReadBlockBytes});prepared=true;await services[0].share(ids[1],m.id);await offer;
  return {requests,events,timings,sent,get sourceReadCalls(){return sourceReadCalls;},get peakReads(){return peakReads;},cancel:()=>services[1].cancel(m.id),m,bytes,download:(options={})=>services[1].request(m.id,{peers:[ids[0]],...options}),close(){services.forEach(s=>s.close());for(const t of timers)clearTimeout(t);}};
 }
@@ -47,7 +47,20 @@ test('persisted progress preserves Breach byte, elapsed, verification and in-fli
   assert.equal(bytes,f.bytes.length);
  }finally{f.close();}
 });
-test('failed transfer resumes from verified cache and requests only the missing chunk',async()=>{let block=true;const f=await fixture({timeout:20,drop:i=>block&&i===5});try{await assert.rejects(f.download(),/remaining chunks/);assert.equal(f.events.filter(e=>e.type==='fileProgress').length,31);const count=f.requests.length;block=false;const blob=await f.download();assert.deepEqual(f.requests.slice(count),[5]);assert.deepEqual(new Uint8Array(await blob.arrayBuffer()),f.bytes);}finally{f.close();}});
+test('failed transfer resumes from verified cache and requests only the missing chunk',{timeout:10000},async t=>{
+ t.mock.timers.enable({apis:['setTimeout']});
+ let block=true,verified;const checkpoint=new Promise(resolve=>verified=resolve);
+ const f=await fixture({timeout:1000,drop:i=>block&&i===5,onProgress:progress=>{if(progress.received===31)verified();}});
+ try{
+  const failed=assert.rejects(f.download(),/remaining chunks/);
+  // Do not race real hashing/writes against a 20 ms machine-load deadline.
+  await checkpoint;assert.equal(f.events.filter(e=>e.type==='fileProgress').length,31);
+  t.mock.timers.tick(1000);await tick();t.mock.timers.tick(1000);await failed;
+  assert.equal(f.requests.filter(index=>index===5).length,2);
+  const count=f.requests.length;block=false;const blob=await f.download();
+  assert.deepEqual(f.requests.slice(count),[5]);assert.deepEqual(new Uint8Array(await blob.arrayBuffer()),f.bytes);
+ }finally{f.close();}
+});
 test('latency fixture benchmark compares verified window 1 and 8 transfers',async t=>{const durations=[];for(const window of [1,8]){const f=await fixture({window,delay:10});try{const start=performance.now();const blob=await f.download();durations.push(performance.now()-start);assert.deepEqual(new Uint8Array(await blob.arrayBuffer()),f.bytes);}finally{f.close();}}t.diagnostic(`Simulated 20 ms request/response latency: window 1 ${durations[0].toFixed(0)} ms; window 8 ${durations[1].toFixed(0)} ms. Not a real-device throughput benchmark.`);assert.ok(durations[1]<durations[0]/2);});
 
 async function waitUntil(check){const end=Date.now()+2000;while(!check()&&Date.now()<end)await new Promise(r=>setTimeout(r,2));assert.ok(check(),'condition did not settle');}
