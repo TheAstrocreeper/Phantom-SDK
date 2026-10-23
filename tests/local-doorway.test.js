@@ -112,3 +112,11 @@ test('a guest joining after PIN expiry receives fresh ordered signaling',{timeou
   assert.equal(signal.data,'fresh');assert.equal(errors.length,0);
  }finally{h.close();g?.close();}
 });
+
+test('local adapter supports private HTTPS without weakening destination validation',()=>{
+  const fetch=()=>{throw Error('must not connect during validation');};
+  const transport=browserLocalTransport({endpoint:'https://192.168.0.214:42087',token:'A'.repeat(32)},{fetch});
+  transport.close();
+  for(const endpoint of ['https://8.8.8.8:42087','https://localhost:42087','https://192.168.0.214:443','https://192.168.0.214:42087/path','https://user@192.168.0.214:42087'])
+    assert.throws(()=>browserLocalTransport({endpoint,token:'A'.repeat(32)},{fetch}));
+});

@@ -293,7 +293,7 @@ function pairingClient({
 const shortCredentials = code => ({protocol:'phantom-short-pairing-v3', ...parseShortCode(code)});
 function lanCredentials(route, password) {
   validateLocalEndpoint(route);
-  if (typeof route !== 'string' || !/^http:\/\/\d{1,3}(?:\.\d{1,3}){3}:\d{4,5}$/.test(route) ||
+  if (typeof route !== 'string' || !/^https?:\/\/\d{1,3}(?:\.\d{1,3}){3}:\d{4,5}$/.test(route) ||
       typeof password !== 'string' || !/^[0-9A-HJKMNP-TV-Z]{5}$/.test(password)) throw Error('Invalid LAN pairing configuration');
   return {protocol:'phantom-lan-pairing-v1',locator:route,secret:password};
 }
