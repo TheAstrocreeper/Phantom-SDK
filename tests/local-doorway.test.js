@@ -56,6 +56,7 @@ test('ciphertext replay closes the local channel instead of processing another s
  const g=await createLocalDoorways({identity:guest,secret,hostKey:host.publicKey,host:false,transport:wire.transports[1],onError:rejectReplay});
  const session=h.doorway().open({roomId:'room',peerId:host.publicKey.slice(0,16),onOpen(){},onDiscovery(){},onSignal(){}});
  session.announce({roomId:'room',peerId:host.publicKey.slice(0,16),bootId:'one',t:Date.now()});
+ g.doorway().open({roomId:'room',peerId:guest.publicKey.slice(0,16),onOpen(){},onDiscovery(){},onSignal(){}});
  const original=await first;
  wire.inject(1,original);
  assert.match((await rejected).message,/authentication/);
@@ -83,4 +84,31 @@ test('host identity mismatch and malformed shared secrets allocate no transport 
   await assert.rejects(createLocalDoorways({identity,secret:'bad',hostKey:identity.publicKey,host:true,transport}));
   await assert.rejects(createLocalDoorways({identity,secret,hostKey:'f'.repeat(64),host:true,transport}));
   assert.equal(calls,0);
+});
+
+test('a guest joining after PIN expiry receives fresh ordered signaling',{timeout:6000},async(t)=>{
+ const realNow=Date.now;let now=realNow();
+ t.mock.method(Date,'now',()=>now);
+ const host=createNostrIdentity(),guest=createNostrIdentity(),wire=pipes(),errors=[];
+ const h=await createLocalDoorways({identity:host,secret,hostKey:host.publicKey,host:true,transport:wire.transports[0],onError:e=>errors.push(e)});
+ let g;
+ const context=identity=>({roomId:'waiting-room',peerId:identity.publicKey.slice(0,16),onOpen(){},onDiscovery(){},onSignal(){}});
+ try{
+  const first=h.doorway().open(context(host));
+  first.announce({roomId:'waiting-room',peerId:host.publicKey.slice(0,16),bootId:'one',t:now});
+  // Allow the original implementation to queue its startup envelopes.
+  await new Promise(resolve=>setTimeout(resolve,30));
+  now+=240001;
+  first.close();
+  const next=h.doorway().open(context(host));
+  next.announce({roomId:'waiting-room',peerId:host.publicKey.slice(0,16),bootId:'two',t:now});
+  g=await createLocalDoorways({identity:guest,secret,hostKey:host.publicKey,host:false,transport:wire.transports[1],onError:e=>errors.push(e)});
+  let received;
+  const joined=new Promise(resolve=>{received=resolve;});
+  const guestChannel=g.doorway().open({...context(guest),onSignal:received});
+  guestChannel.announce({roomId:'waiting-room',peerId:guest.publicKey.slice(0,16),bootId:'guest',t:now});
+  next.sendSignal({from:host.publicKey.slice(0,16),to:guest.publicKey.slice(0,16),videoId:'waiting-room',data:'fresh'});
+  const signal=await Promise.race([joined,new Promise((_,reject)=>setTimeout(()=>reject(Error(errors.map(e=>e.message).join(';')||'No signal')),1000))]);
+  assert.equal(signal.data,'fresh');assert.equal(errors.length,0);
+ }finally{h.close();g?.close();}
 });
