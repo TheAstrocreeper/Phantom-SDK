@@ -6,7 +6,7 @@ import {verifyPeerProof} from './peer-proof.js';
 import {createNostrIdentity} from './nostr-crypto.js';
 import {createNostrDoorway} from './nostr-doorway.js';
 import {createWebSocketDoorway} from './index.js';
-import {adaptWebSocketDoorway,validateDoorway} from './interface.js';
+import {adaptWebSocketDoorway,validateDoorway,DoorwayConfigurationError} from './interface.js';
 import {createCompositeDoorway} from './composite.js';
 import {createAdmissionCheckpoint, AdmissionError} from '../../phantom-core/src/admission.js';
 import {withAdmissionDoorway} from './admission-doorway.js';
@@ -27,10 +27,15 @@ export function createBrowserPhantom({identity,admission,authorizationTimeoutMs=
   if(!spec||typeof spec.type!=='string')throw new TypeError('Doorway type required');
   if(spec.type==='nostr') {if(!Array.isArray(spec.relays)||!spec.relays.length||spec.relays.length>8)throw new TypeError('Nostr doorway requires 1–8 relays');for(const value of spec.relays){const u=new URL(value);if(u.protocol!=='wss:'||u.username||u.password||u.hash)throw new TypeError('Nostr relay must use credential-free wss');}}
   else if(spec.type==='websocket'){const u=new URL(spec.url);if(u.protocol!=='wss:'||u.username||u.password||u.hash)throw new TypeError('WebSocket doorway must use credential-free wss');}
-  else if(typeof adapters[spec.type]!=='function')throw new TypeError('No adapter registered for '+spec.type);
+  else if(typeof adapters[spec.type]!=='function')throw new DoorwayConfigurationError('DOORWAY_ADAPTER_MISSING','adapters','No adapter registered for '+spec.type);
   return spec;
  }
  async function resolve(specs){if(!Array.isArray(specs)||!specs.length||specs.length>8)throw new TypeError('Supply 1–8 doorways');return Promise.all(specs.map(async raw=>{const spec=structuredClone(raw);if(spec.type==='nostr'&&!spec.relays){spec.relays=await manager.get();spec.discover??=true;}return validateSpec(spec);}));}
+ function selectSpecs(context,types){
+  let specs=(context.doorways??[{type:'nostr',relays:context.relays}]).map(validateSpec);
+  if(types!==undefined){if(!Array.isArray(types)||types.some(t=>typeof t!=='string'))throw new TypeError('doorwayTypes must be an array of adapter types');specs=specs.filter(s=>types.includes(s.type));if(!specs.length)throw new TypeError('No invited doorway matches doorwayTypes');}
+  return specs;
+ }
  async function preflight(context,options,operation){
   if(options?.signal?.aborted)throw new AdmissionError('Authorization aborted');
   if(adminPublicKey&&context.adminPublicKey!==adminPublicKey)throw new Error('Invite admin key does not match configured trust anchor');
@@ -42,8 +47,7 @@ export function createBrowserPhantom({identity,admission,authorizationTimeoutMs=
  }
  async function openContext(context,types,access){
   if(adminPublicKey&&context.adminPublicKey!==adminPublicKey)throw new Error('Invite admin key does not match configured trust anchor');
-  let specs=(context.doorways??[{type:'nostr',relays:context.relays}]).map(validateSpec);
-  if(types!==undefined){if(!Array.isArray(types)||types.some(t=>typeof t!=='string'))throw new TypeError('doorwayTypes must be an array of adapter types');specs=specs.filter(s=>types.includes(s.type));if(!specs.length)throw new TypeError('No invited doorway matches doorwayTypes');}
+  const specs=selectSpecs(context,types);
   const identity=sdkIdentity??=createNostrIdentity();
   function build(spec){let adapter;
    if(spec.type==='nostr')adapter=createNostrDoorway({identity,relays:spec.relays,WebSocket,...(access?{canFollowRelayHint:peer=>access.checkpoint.allows(peer)}:{}),...(spec.discover?{refreshRelays:async()=>{if(access&&!access.checkpoint.allows(identity.publicKey.slice(0,16)))throw new AdmissionError('Local admission credential expired');return manager.refresh();}}:{})});
@@ -71,7 +75,7 @@ export function createBrowserPhantom({identity,admission,authorizationTimeoutMs=
   return {canUsePeer:access&&admission?.enforceLiveMembership===true?peer=>access.checkpoint.allows(peer):undefined,refreshMembership,leaveMembership,admissionCheckpoint:access?.checkpoint,identity:{version:1,id:identity.publicKey},recoverySignaling:{sign:payload=>identity.signPeerProof({networkId:context.networkId,kind:'sys_recovery_bridge',payload,issuedAt:Date.now(),nonce:crypto.randomUUID()}),verify:(proof,payload,key)=>proof.peerPublicKey===key&&verifyPeerProof(proof,{networkId:context.networkId,kind:'sys_recovery_bridge',payload})},runtime,doorway,canAdmitPeer:access?peer=>access.checkpoint.allows(peer):undefined,adminIdentity,controlStore:context.adminPublicKey?(controlStore??createControlStore(storage)):undefined,files,distribution,rtcConfiguration,messaging,readAdminOrders,retireGraceMs,onNetworkState:state=>doorway.observeNetworkState(state)};
  }
  return {
-  async join(invite,options){const context=parseInvite(invite);const access=await preflight(context,options,'join');try{return await createPhantomEntry({openContext:context=>openContext(context,options?.doorwayTypes,access),...(coreFactory?{coreFactory}:{})}).join(invite,options);}catch(error){access?.checkpoint.close();throw error;}},
+  async join(invite,options){const context=parseInvite(invite);selectSpecs(context,options?.doorwayTypes);const access=await preflight(context,options,'join');try{return await createPhantomEntry({openContext:context=>openContext(context,options?.doorwayTypes,access),...(coreFactory?{coreFactory}:{})}).join(invite,options);}catch(error){access?.checkpoint.close();throw error;}},
   async create(options){
    const networkId=Array.from(runtime.crypto.getRandomValues(new Uint8Array(32)),b=>b.toString(16).padStart(2,'0')).join('');
    const context={networkId,adminPublicKey};const access=await preflight(context,options,'create');
