@@ -31,7 +31,8 @@ export async function openPairingChannel({
   let session,
     closed = false,
     remote = null,
-    queued = 0;
+    queued = 0,
+    retry;
   const handle = "phantom-pairing-" + role;
   async function send(to, message) {
     if (closed) throw new Error("Pairing channel closed");
@@ -80,6 +81,7 @@ export async function openPairingChannel({
         return;
       remote ??= packet.from;
       pending.delete(message.id);
+      stopIdleRetry();
       clearTimeout(task.timer);
       message.ok
         ? task.resolve(message.data)
@@ -183,13 +185,28 @@ export async function openPairingChannel({
         t: now(),
       });
   });
-  const retry = doorway.eventDriven ? null : setInterval(() => {
-    if (!closed) {
-      session.reconcile?.({});
-      flush();
-    }
-  }, 1000);
-  retry?.unref?.();
+  // Retry only a live RPC. Waiting hosts and retained control channels stay quiet.
+  function stopIdleRetry() {
+    if (pending.size) return;
+    clearTimeout(retry);
+    retry = null;
+  }
+  function armRetry() {
+    if (closed || doorway.eventDriven || retry || !pending.size) return;
+    retry = setTimeout(() => {
+      retry = null;
+      if (closed || !pending.size) return;
+      try {
+        session.reconcile?.({});
+        flush();
+      } catch (error) {
+        onError(error);
+      } finally {
+        armRetry();
+      }
+    }, 1000);
+    retry.unref?.();
+  }
   return {
     request(action, data, { signal } = {}) {
       if (closed || signal?.aborted)
@@ -202,6 +219,7 @@ export async function openPairingChannel({
         let timer;
         const finish = (fn) => (value) => {
           clearTimeout(timer);
+          stopIdleRetry();
           signal?.removeEventListener("abort", abort);
           fn(value);
         };
@@ -226,6 +244,7 @@ export async function openPairingChannel({
         });
         signal?.addEventListener("abort", abort, { once: true });
         flush();
+        armRetry();
       });
     },
     async notify(peerPublicKey, data) {
@@ -236,7 +255,7 @@ export async function openPairingChannel({
     close() {
       if (closed) return;
       closed = true;
-      clearInterval(retry);
+      clearTimeout(retry);
       for (const task of pending.values())
         task.reject(new Error("Pairing channel closed"));
       pending.clear();

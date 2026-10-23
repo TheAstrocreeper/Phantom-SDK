@@ -70,7 +70,7 @@ export async function openShortPairingChannel({
     if (closed) return;
     closed = true;
     clearTimeout(timer);
-    clearInterval(retry);
+    clearTimeout(retry);
     signal?.removeEventListener("abort", abort);
     for (const task of tasks.values()) {
       clearTimeout(task.timer);
@@ -109,18 +109,43 @@ export async function openShortPairingChannel({
         reject,
         timer: setTimeout(() => {
           tasks.delete(id);
+          stopIdleRetry();
           reject(Error("Pairing candidate timed out"));
         }, timeoutMs),
       };
       tasks.set(id, task);
       try {
         send(to, message);
+        armRetry();
       } catch (error) {
         clearTimeout(task.timer);
         tasks.delete(id);
+        stopIdleRetry();
         reject(error);
       }
     });
+  }
+  // Retries belong to an outstanding RPC, never to an idle invitation.
+  function stopIdleRetry() {
+    if (tasks.size) return;
+    clearTimeout(retry);
+    retry = null;
+  }
+  function armRetry() {
+    if (closed || retry || !tasks.size) return;
+    retry = setTimeout(() => {
+      retry = null;
+      if (closed || !tasks.size) return;
+      try {
+        session.reconcile?.({});
+        for (const task of tasks.values()) send(task.to, task.message);
+      } catch (error) {
+        onError(error);
+      } finally {
+        armRetry();
+      }
+    }, 1000);
+    retry.unref?.();
   }
   async function tryCandidate(row) {
     if (closed || attempts >= maxAttempts || candidates.has(row.hex)) return;
@@ -188,6 +213,7 @@ export async function openShortPairingChannel({
       const task = tasks.get(packet.id);
       if (!task || task.to !== packet.from) return;
       tasks.delete(packet.id);
+      stopIdleRetry();
       clearTimeout(task.timer);
       packet.ok
         ? task.resolve(packet.data)
@@ -287,16 +313,6 @@ export async function openShortPairingChannel({
     () => close(Error("Pairing expired or timed out")),
     role === "host" ? ttlMs : timeoutMs,
   );
-  retry = setInterval(() => {
-    if (closed) return;
-    try {
-      session.reconcile?.({});
-      for (const task of tasks.values()) send(task.to, task.message);
-    } catch (error) {
-      onError(error);
-    }
-  }, 1000);
-  retry.unref?.();
   signal?.addEventListener("abort", abort, { once: true });
   if (signal?.aborted) abort();
   return {
