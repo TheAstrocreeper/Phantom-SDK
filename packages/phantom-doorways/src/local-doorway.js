@@ -17,13 +17,16 @@ export async function createLocalDoorways({identity,secret,hostKey,host,transpor
   const scope='phantom-local/2/'+hostKey;
   const sessions=new Map(), remote=new Map();
   let closed=false, remoteKey=host?null:hostKey, outgoing=0, incoming=0, sending=Promise.resolve(), reading=Promise.resolve(), pendingSend=0,pendingRead=0;
+  // Do not timestamp host startup messages until an authenticated guest arrives.
+  let releaseHost;
+  const hostReady = host ? new Promise(resolve => { releaseHost = resolve; }) : Promise.resolve(true);
   function fail(error) { if(closed)return; try {onError(error);} finally {close();} }
   function send(message) {
     if(closed)return;
     if(++pendingSend>64){pendingSend--;fail(Error('Local signaling queue full'));return;}
     const sequence=++outgoing;
     sending=sending.then(async()=>{
-      if(closed)return;
+      if(closed || !await hostReady || closed)return;
       const payload={sequence,host:!!host,message};
       const proof=identity.signPeerProof({networkId:scope,kind:'signal',credential:null,payload,issuedAt:Date.now(),nonce:crypto.randomUUID()});
       const iv=crypto.getRandomValues(new Uint8Array(12));
@@ -66,11 +69,12 @@ export async function createLocalDoorways({identity,secret,hostKey,host,transpor
         entry?.context.onSignal(value);
       }else if(kind==='close'){remote.delete(roomId);if(entry)discovery(entry);}
       else throw Error('Invalid local message');
+      releaseHost?.(true);
     }).catch(fail).finally(()=>pendingRead--);
   }
   let unlisten;
   unlisten=transport.listen(receive,fail);
-  function close(){if(closed)return;closed=true;unlisten?.();transport.close?.();for(const entry of sessions.values())entry.context.onClose?.({reason:'local_closed'});sessions.clear();remote.clear();}
+  function close(){if(closed)return;closed=true;releaseHost?.(false);unlisten?.();transport.close?.();for(const entry of sessions.values())entry.context.onClose?.({reason:'local_closed'});sessions.clear();remote.clear();}
   return {close,doorway(){return {...createDoorway({discovery:true,open(context){
     if(closed||sessions.has(context.roomId)||sessions.size>=16)throw Error('Local channel unavailable');
     const entry={context,own:null};sessions.set(context.roomId,entry);
