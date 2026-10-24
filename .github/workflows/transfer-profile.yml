@@ -1,0 +1,21 @@
+name: Controlled transfer profile
+on:
+  pull_request:
+    paths: ['tools/perf/**', '.github/workflows/transfer-profile.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  profile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: node tools/perf/distribution-window.mjs | tee distribution-window.jsonl
+      - uses: actions/upload-artifact@v4
+        with:
+          name: controlled-distribution-window
+          path: distribution-window.jsonl
