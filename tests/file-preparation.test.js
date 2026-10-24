@@ -32,3 +32,13 @@ test('revocation during concurrent preparation prevents publication',async()=>{
  const service=createFileDistribution({core,allowed:()=>permitted,emit:type=>{if(type==='filePublished')published=true;},crypto:{subtle:{async digest(...args){permitted=false;return crypto.subtle.digest(...args);}}}});
  try{await assert.rejects(service.publish(blob,{chunkSize:1024}),/unavailable/);assert.equal(published,false);}finally{service.close();}
 });
+
+test('preparation accepts files beyond 1 GiB and 65536 pieces while keeping reads bounded',async()=>{
+ // Synthetic hashes keep the boundary test fast; real large-byte verification is a separate browser test.
+ const size=4*1024*1024*1024+17;let largest=0,readBytes=0;
+ const file={size,slice(start,end){const length=Math.min(size,end)-start;largest=Math.max(largest,length);readBytes+=length;return {arrayBuffer:async()=>new ArrayBuffer(length)};}};
+ const service=createFileDistribution({core,crypto:{subtle:{digest:async()=>new Uint8Array(32).buffer}}});
+ try{const m=await service.publish(file,{chunkSize:65536});assert.equal(m.size,size);assert.equal(m.total,65537);assert.equal(readBytes,size);assert.ok(largest<=4*1024*1024);}finally{service.close();}
+ const limited=createFileDistribution({core,maxFileBytes:1024});
+ try{await assert.rejects(limited.publish(file),/maxFileBytes/);}finally{limited.close();}
+});

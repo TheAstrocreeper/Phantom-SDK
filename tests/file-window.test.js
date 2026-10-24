@@ -119,3 +119,21 @@ test('a stalled background write times out without claiming completion',async()=
  try{const rejected=assert.rejects(f.download(),/storage timed out/);await waitUntil(()=>started===4);await rejected;release();await tick();assert.equal(f.events.some(e=>e.type==='fileComplete'),false);
  }finally{release();f.close();}
 });
+
+test('storage-backed completion verifies chunks and delegates assembly without collecting full-file buffers',async()=>{
+ const memory=createMemoryChunkStore();let assemblies=0;
+ const store={...memory,async getFile(id,m){assemblies++;const parts=[];for(let i=0;i<m.total;i++)parts.push(await memory.get(id,i));return new Blob(parts,{type:m.type});}};
+ const f=await fixture({receiverStore:store,length:32785});try{
+  const blob=await f.download();assert.equal(assemblies,1);assert.deepEqual(new Uint8Array(await blob.arrayBuffer()),f.bytes);
+ }finally{f.close();}
+});
+test('storage-backed assembly failure rejects the download rather than leaving it pending',async()=>{
+ const memory=createMemoryChunkStore(),f=await fixture({receiverStore:{...memory,async getFile(){throw Error('storage assembly failed');}}});
+ try{await assert.rejects(f.download(),/storage assembly failed/);}finally{f.close();}
+});
+test('cancelling during storage-backed assembly settles the request and emits no completion',async()=>{
+ const memory=createMemoryChunkStore();let entered,release;
+ const inside=new Promise(r=>entered=r),gate=new Promise(r=>release=r);
+ const f=await fixture({receiverStore:{...memory,async getFile(){entered();await gate;return new Blob([new Uint8Array(32768)]);}}});
+ try{const result=f.download(),rejected=assert.rejects(result,/cancelled/);await inside;f.cancel();release();await rejected;await tick();assert.equal(f.events.some(e=>e.type==='fileComplete'),false);}finally{release();f.close();}
+});

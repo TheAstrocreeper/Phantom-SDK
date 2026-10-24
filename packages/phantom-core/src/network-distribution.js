@@ -141,9 +141,9 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
     }else if(body.candidate){if(link.pc.remoteDescription)await link.pc.addIceCandidate(body.candidate);else if(link.pendingIce.length<64)link.pendingIce.push(body.candidate);}
   }
   async function safeSignal(sender,body){try{return await signal(sender,body);}catch(e){const link=links.get(body.jobId);if(link&&link.peer===sender){closeLink(body.jobId);frame(leader(),{type:'failed',jobId:body.jobId,reason:'rtc_setup_failed'});emit('distributionConnectionFailed',{jobId:body.jobId,peer:sender,reason:'rtc_setup_failed',error:e.message});}error(e);}}
-  async function acceptAsset(body){if(!policy||typeof body.id!=='string'||!/^sha256:[0-9a-f]{64}$/.test(body.id)||!Number.isInteger(body.total)||body.total<0||body.total>65536||typeof body.distributionId!=='string'||body.distributionId.length>256)return null;
+  async function acceptAsset(body){if(!policy||typeof body.id!=='string'||!/^sha256:[0-9a-f]{64}$/.test(body.id)||!Number.isSafeInteger(body.total)||body.total<0||typeof body.distributionId!=='string'||body.distributionId.length>256)return null;
     const proof=await policy.verify(body.proof);if(!proof||proof.action!=='content.publish'||proof.target!==body.id||!allowed(body.id,body.distributionId))return null;
-    let asset=assets.get(body.id);if(!asset){if(assets.size>=32)return null;asset={id:body.id,total:body.total,distributionId:body.distributionId,proof,holders:new Map()};assets.set(body.id,asset);}else if(asset.total!==body.total||asset.distributionId!==body.distributionId||JSON.stringify(asset.proof.recipients)!==JSON.stringify(proof.recipients))return null;return asset;
+    let asset=assets.get(body.id);if(!asset){asset={id:body.id,total:body.total,distributionId:body.distributionId,proof,holders:new Map()};assets.set(body.id,asset);}else if(asset.total!==body.total||asset.distributionId!==body.distributionId||JSON.stringify(asset.proof.recipients)!==JSON.stringify(proof.recipients))return null;return asset;
   }
   async function handle(from,packet){if(!canUsePeer(from)||!canUsePeer(packet?.from)||closed||!self()||packet?.networkId!==networkId||typeof packet.from!=='string'||!packet.body)return;await restore();if(closed||!canUsePeer(from)||!canUsePeer(packet?.from))return;syncLeadership();
     if(packet.to!==self()){
@@ -234,7 +234,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
     restorationState='restoring';
     restoration=(async()=>{
       const records=chunkStore.load?await chunkStore.load(networkId):[];
-      if(!Array.isArray(records)||records.length>32)throw Error('Invalid stored distribution records');
+      if(!Array.isArray(records))throw Error('Invalid stored distribution records');
       for(const record of records){
         if(closed)throw Error('Distribution closed');
         try{
