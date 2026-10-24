@@ -47,8 +47,8 @@ This is a controlled device comparison, not a claimed throughput fix. Keep the
 file, direction and connection the same. The recovered reference-vs-current
 build tool is a separate comparison; this package has one app and one SDK.
 
-Run `npm test --prefix demos/phantom-breach` and
-`npm run test:browser --prefix demos/phantom-breach` for diagnostics and a browser
+Run `npm test --prefix tools/phantom-breach` and
+`npm run test:browser --prefix tools/phantom-breach` for diagnostics and a browser
 fixture that checks fresh IDs, both window settings, one session, busy locking,
 verification and export. The browser fixture is not native throughput evidence.
 
@@ -62,11 +62,11 @@ From the repository root, using Node 22 or newer:
 
 ```sh
 npm install
-npm install --prefix demos/phantom-breach
-npm run build --prefix demos/phantom-breach
+npm install --prefix tools/phantom-breach
+npm run build --prefix tools/phantom-breach
 ```
 
-Host `demos/phantom-breach/dist` over HTTPS. For a Cloudflare Pages direct upload, deploy `index.html`, `style.css`, and `app.js`. Invitations use the current page URL. Keep the canvas and transfer projects separate.
+Host `tools/phantom-breach/dist` over HTTPS. For a Cloudflare Pages direct upload, deploy `index.html`, `style.css`, and `app.js`. Invitations use the current page URL. Keep the canvas and transfer projects separate.
 
 ## Use
 

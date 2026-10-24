@@ -41,7 +41,7 @@ is not a demonstrated device throughput fix.
 
 `network.requestFile(id, {peers, requestWindow: 32})` overrides the configured
 window for that request only, with the same 1–32 validation and receiver bounds.
-The restored `demos/phantom-breach` uses this to compare 8/32 over one existing
+The restored `tools/phantom-breach` uses this to compare 8/32 over one existing
 connection and gives every send a fresh distribution identity to avoid cache
 hits. Its README documents the procedure.
 
@@ -72,7 +72,7 @@ Build the recovered Breach application twice, with identical application source:
 node tools/breach-comparison/build.mjs /tmp/phantom-breach-comparison
 ```
 
-Requires the repository's root dependencies and `demos/phantom-breach` dependencies.
+Requires the repository's root dependencies and `tools/phantom-breach` dependencies.
 The build reads committed Git objects into temporary isolated directories. It does
 not modify Share or replace SDK files. `comparison.json` records both revisions.
 Reference is preserved PR #2 source at `00dfcb1`, not a confirmed copy of the

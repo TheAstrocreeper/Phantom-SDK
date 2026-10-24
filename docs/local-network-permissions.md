@@ -29,7 +29,7 @@ permission while startup is pending; it does not claim a grant restarts failed I
 
 ## Real-device test
 
-Deploy `demos/connection-test/dist` to a public HTTPS origin and use that same
+Deploy `tools/connection-test/dist` to a public HTTPS origin and use that same
 origin on both devices. Keep mDNS flags at Default. Create on the PC and open
 the invitation on the phone, then click Join.
 
