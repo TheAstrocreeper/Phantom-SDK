@@ -5,7 +5,7 @@ const diagnostics=createDiagnostics({build:__PHANTOM_BUILD__,codes:__PHANTOM_DIA
 const startupRecovery=createStartupRecovery(diagnostics);
 import QRCode from 'qrcode';
 import {createBrowserPhantom} from '../../../packages/phantom-doorways/src/browser-entry.js';
-import {shareLink,readLink} from '../../shared-canvas/src/link.js';
+import {shareLink,readLink} from '../../../demos/shared-canvas/src/link.js';
 import {createRelayMonitor} from './relay-monitor.js';
 const $=id=>document.getElementById(id),ready=new Set(),invited=new Map(),pending=[],offers=new Map(),hashes=new Map(),pings=new Map(),logs=[];
 let network,monitor,timer,manifest,currentId,verified=new Set(),remoteVerified=new Set(),busy=false,drawPending=false,downloadUrl,lastChannels=0,transferStart=0,transferBytes=0,averageElapsed=0,ackTimer,ackIndexes=[],wakeWanted=false,wakeSentinel,wakePending=false,startedFileAt=0,connectStarted=0,connectTimer,hadPeer=false,lastLivePeers=new Set(),activityText="Create a link here. Scan it on your other device.",activityBusy=false;

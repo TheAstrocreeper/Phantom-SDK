@@ -6,7 +6,7 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {createRequire} from 'node:module';
 const repo=fileURLToPath(new URL('../../',import.meta.url));
-const require=createRequire(new URL('../../demos/phantom-breach/package.json',import.meta.url));
+const require=createRequire(new URL('../../tools/phantom-breach/package.json',import.meta.url));
 const {build}=require('esbuild');
 const reference='00dfcb1648bedd8b048c93b14a7ce5e2e109fb60';
 const current=execFileSync('git',['rev-parse','HEAD'],{cwd:repo,encoding:'utf8'}).trim();
@@ -35,7 +35,7 @@ try {
   }
   const target=path.join(out,label);await mkdir(target,{recursive:true});
   await build({entryPoints:[path.join(appRoot,'src/app.js')],bundle:true,format:'esm',target:'es2022',minify:true,
-   nodePaths:[path.join(repo,'node_modules'),path.join(repo,'demos/phantom-breach/node_modules')],
+   nodePaths:[path.join(repo,'node_modules'),path.join(repo,'tools/phantom-breach/node_modules')],
    define:{__PHANTOM_BUILD__:JSON.stringify('breach-'+label+'-'+revision.slice(0,7)),__PHANTOM_DIAGNOSTIC_CODES__:JSON.stringify([...new Set(codes)])},
    outfile:path.join(target,'app.js')});
   for(const file of ['index.html','style.css'])await copyFile(path.join(appRoot,'src',file),path.join(target,file));

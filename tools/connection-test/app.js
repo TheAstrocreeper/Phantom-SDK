@@ -1,5 +1,5 @@
 import {createBrowserPhantom} from '../../packages/phantom-doorways/src/browser-entry.js';
-import {shareLink,readLink} from '../shared-canvas/src/link.js';
+import {shareLink,readLink} from '../../demos/shared-canvas/src/link.js';
 import QRCode from 'qrcode';
 import {createNetworkPermissions} from '../../packages/phantom-core/src/network-permissions.js';
 const $=id=>document.getElementById(id),rows=[],ready=new Set(),pending=[],rtcEvidence=new Map(),candidateTrace=[];
