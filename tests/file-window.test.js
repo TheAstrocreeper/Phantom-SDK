@@ -137,3 +137,13 @@ test('cancelling during storage-backed assembly settles the request and emits no
  const f=await fixture({receiverStore:{...memory,async getFile(){entered();await gate;return new Blob([new Uint8Array(32768)]);}}});
  try{const result=f.download(),rejected=assert.rejects(result,/cancelled/);await inside;f.cancel();release();await rejected;await tick();assert.equal(f.events.some(e=>e.type==='fileComplete'),false);}finally{release();f.close();}
 });
+
+test('verified immutable storage skips redundant completion reads and accepts a lazy native file',async()=>{
+ const memory=createMemoryChunkStore(),committed=new Set();let begins=0,reads=0,seals=0;
+ const store={async begin(id,m){begins++;assert.equal(m.hashes.length,m.total);},async put(id,index,bytes){await memory.put(id,index,bytes);committed.add(index);},async get(){reads++;throw Error('Unexpected finalization reread');},getVerifiedIndexes(){return [...committed];},async getFile(id,m){seals++;const parts=[];for(let i=0;i<m.total;i++)parts.push(await memory.get(id,i));const blob=new Blob(parts);return {size:blob.size,type:m.type,slice:(...args)=>blob.slice(...args)};}};
+ const f=await fixture({receiverStore:store});try{const file=await f.download();assert.equal(begins,1);assert.equal(reads,0);assert.equal(seals,1);assert.deepEqual(new Uint8Array(await file.slice().arrayBuffer()),f.bytes);}finally{f.close();}
+});
+test('verified storage rejects invalid committed indexes',async()=>{
+ const f=await fixture({receiverStore:{get:async()=>null,put:async()=>{},getVerifiedIndexes:()=>[-1]}});
+ try{await assert.rejects(f.download(),/Invalid verified storage inventory/);}finally{f.close();}
+});
