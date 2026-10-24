@@ -198,3 +198,9 @@ Experimental local doorway transport, authenticated LAN/PIN bootstrap, and brows
 pairing build helpers are available through dedicated package exports. Applications
 own hosting and discovery. See [Local connections](docs/local-connections.md) for
 contracts, examples, and the remaining device validation limits.
+
+### Large files and storage
+
+There is no built-in 1 GiB file-size or 32-asset session cap. `maxFileBytes` remains an optional application policy (default: JavaScript's maximum safe integer); practical capacity depends on storage, memory, browser and device. This is not an unlimited-size guarantee. Preparation reads at most 4 MiB at a time, and file data uses chunks up to 64 KiB. Hash and inventory metadata still grow with the number of chunks.
+
+The default chunk store is in memory. Applications receiving large files should supply a disk-backed `chunkStore` with `get(id,index)` and `put(id,index,bytes)`. An optional `getFile(id,manifest)` returns a Blob backed by the same verified, immutable stored chunks, avoiding collection of all chunk ArrayBuffers during final assembly. The SDK verifies chunks before invoking it and checks the resulting Blob size. Blob construction must not read the full file into an ArrayBuffer. Partial requests verify their requested chunks without assembling a file. `load` and `save`, when implemented together, opt into persistent session restoration; `getFile` alone does not copy outgoing source files into the store.
