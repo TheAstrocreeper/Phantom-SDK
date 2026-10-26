@@ -5,7 +5,7 @@ import {createReubenTransfer} from './reuben.js';
 export const reubenComparisonVersion='reuben-browser-v1';
 export const reubenComparisonCases=Object.freeze(['current','reuben','reuben','current']);
 const pattern=i=>(i*17+29)%251;
-const scope=address=>!address?'unknown':address.endsWith('.local')?'mdns':/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(address)?'private':'public';
+const scope=address=>!address?'unknown':address.endsWith('.local')?'mdns':address==='::1'||/^127\./.test(address)?'loopback':/^(169\.254\.|fe[89ab])/i.test(address)?'link-local':/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|f[cd])/i.test(address)?'private':'public';
 /** One bounded diagnostic endpoint. Caller authenticates the peer and transports control messages.
  * Uses the actual distribution coordinator for current, the actual adapter for Reuben.
  * Generates test data only. No user files. No default application transfer path changes.
@@ -46,9 +46,9 @@ export function createReubenComparisonEndpoint({engine,role,selfId,peerId,networ
  }
  const timer=setInterval(()=>{void sample().catch(fail);},1000);timer?.unref?.();
  const startClock=()=>{startedAt??=performance.now();};
- const progress=data=>{if(!alive())return;committedBytes=data.verifiedBytes??Math.min(bytes,(data.received??0)*chunkSize);onProgress({engine,bytes:committedBytes,total:bytes});};
+ const progress=data=>{if(!alive())return;committedBytes=engine==='current'?Math.min(bytes,(data.received??0)*chunkSize):(data.verifiedBytes??0);onProgress({engine,bytes:committedBytes,total:bytes});};
  async function complete(blob){
-  if(completed||!alive())return;completed=true;const elapsedMs=performance.now()-startedAt,verificationAt=performance.now();
+  if(completed||!alive())return;completed=true;committedBytes=bytes;const elapsedMs=performance.now()-startedAt,verificationAt=performance.now();
   if(blob.size!==bytes)throw Error('Comparison size mismatch');
   for(let offset=0;offset<bytes;offset+=1024*1024){const block=new Uint8Array(await blob.slice(offset,offset+1024*1024).arrayBuffer());for(let i=0;i<block.length;i++)if(block[i]!==pattern(offset+i))throw Error('Comparison content mismatch');if(!alive())return;}
   const verificationMs=performance.now()-verificationAt;await sample();
@@ -78,7 +78,7 @@ export function createReubenComparisonEndpoint({engine,role,selfId,peerId,networ
  if(engine==='reuben'){
   pc=new ObservedRTC(rtcConfiguration);pc.ondatachannel=e=>{try{attach(e.channel);}catch(error){fail(error);}};
   pc.onicecandidate=e=>{if(e.candidate)transmit({type:'rtc',candidate:e.candidate.toJSON?.()??e.candidate});};
-  pc.onconnectionstatechange=()=>{if(alive()&&['failed','closed','disconnected'].includes(pc.connectionState))fail(Error('Comparison transport closed'));};
+  pc.onconnectionstatechange=()=>{if(alive()&&!completed&&['failed','closed','disconnected'].includes(pc.connectionState))fail(Error('Comparison transport closed'));};
  }
  async function handle(message){
   if(!alive())return;
