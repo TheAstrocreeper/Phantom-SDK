@@ -20,7 +20,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
   let restoration=null,restorationState='pending';const restoreResults=[];
   const crypto=runtime.crypto??globalThis.crypto;
   const policy=adminPublicKey?createAdminAuthorization({networkId,adminPublicKey,crypto}):null;
-  const preparedFiles=new WeakMap(),progressIndexes=new Map();
+  const preparedFiles=new WeakMap(),continuationSelections=new WeakMap(),progressIndexes=new Map();
   const assets=new Map(),jobs=new Map(),links=new Map(),listeners=new Set(),finished=new Set(),blockedUntil=new Map(),setupFailures=new Map(),pendingSignals=new Map(),reported=new Map(),mirrored=new Map(),mirrorJobs=new Map(),closedJobs=new Map();
   let closed=false,sequence=0,leaderToken='',checkedToken='',checking=false,dirty=false,lastReport=0,receivedSequence=-1;
   const state=()=>core.getState(),self=()=>state().peerId,leader=()=>state().leader;
@@ -242,11 +242,18 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
       else {const pair=job.source+':'+job.receiver;let delay=1000;if(body.reason==='rtc_setup_failed'){const failures=(setupFailures.get(pair)??0)+1;setupFailures.set(pair,failures);delay=Math.min(60000,jobTimeoutMs*2**Math.min(failures-1,3));}blockedUntil.set(pair,Date.now()+delay);emit('distributionJobFailed',{jobId:job.id,source:job.source,receiver:job.receiver,reportedBy:sender,reason:body.reason??'transfer_failed',retryAfterMs:delay});}
       if(body.type==='done'&&reuseConnections&&body.reuse===true){
         const asset=assets.get(job.asset),have=asset?.holders.get(job.receiver),source=asset?.holders.get(job.source);
-        const wanted=source?[...source].filter(i=>!have.has(i)).sort((a,b)=>a-b).slice(0,batchSize):[];
+        // A live inventory cursor visits each piece once across reused batches.
+        // Newly acquired pieces remain visible without rescanning the file or reopening RTC.
+        let selection=continuationSelections.get(job);const wanted=[];
+        if(source&&have&&have.size<asset.total){
+          if(!selection||selection.source!==source)selection={source,iterator:source.values()};
+          while(wanted.length<batchSize){const step=selection.iterator.next();if(step.done)break;if(!have.has(step.value))wanted.push(step.value);}
+          wanted.sort((a,b)=>a-b);
+        }
         if(wanted.length&&roster.includes(job.source)&&roster.includes(job.receiver)&&canUsePeer(job.source)&&canUsePeer(job.receiver)&&allowed(asset.id,asset.distributionId)){
           const previousBatch=job.batch??0;
           const next={...job,indexes:wanted,needsManifest:false,batch:previousBatch+1,deadline:Date.now()+jobTimeoutMs,progress:{}};
-          jobs.set(job.id,next);dirty=true;
+          continuationSelections.set(next,selection);jobs.set(job.id,next);dirty=true;
           const continuation={type:'continue',previousBatch,job:next,asset:{id:asset.id,total:asset.total,distributionId:asset.distributionId,proof:asset.proof}};
           frame(next.source,continuation);frame(next.receiver,continuation);emit('distributionConnectionReused',{jobId:next.id,peer:next.source,batch:next.batch});return;
         }
@@ -261,16 +268,21 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
     for(const asset of assets.values()){
       if(!allowed(asset.id,asset.distributionId))continue;
       for(const [peer]of asset.holders)if(!live.has(peer)){asset.holders.delete(peer);dirty=true;}
-      // Count reserved pieces as copies too, so concurrent jobs spread seed pieces.
+      const counts=peer=>[...jobs.values()].filter(j=>j.source===peer||j.receiver===peer).length;
+      const canReceive=receiver=>{
+        if(!live.has(receiver)||(asset.proof.recipients&&!asset.proof.recipients.includes(receiver)))return false;
+        const have=asset.holders.get(receiver)??new Set();
+        return !(have.size===asset.total&&(asset.total>0||asset.holders.has(receiver)))&&![...jobs.values()].some(j=>j.receiver===receiver)&&counts(receiver)<maxJobs;
+      };
+      const receivers=roster.filter(canReceive);
+      if(!receivers.length)continue;
+      // Count reserved pieces only when a receiver can actually accept a new job.
       const copies=new Map();for(const indexes of asset.holders.values())for(const i of indexes)copies.set(i,(copies.get(i)??0)+1);
       for(const job of jobs.values())if(job.asset===asset.id)for(const i of job.indexes)copies.set(i,(copies.get(i)??0)+1);
       const rarity=i=>copies.get(i)??0;
-      for(const receiver of roster){
-        if(!live.has(receiver))continue;
-        if(asset.proof.recipients&&!asset.proof.recipients.includes(receiver))continue;
-        const have=asset.holders.get(receiver)??new Set();if((have.size===asset.total&&(asset.total>0||asset.holders.has(receiver)))||[...jobs.values()].some(j=>j.receiver===receiver))continue;
-        const counts=peer=>[...jobs.values()].filter(j=>j.source===peer||j.receiver===peer).length;
-        if(counts(receiver)>=maxJobs)continue;
+      for(const receiver of receivers){
+        if(!canReceive(receiver))continue;
+        const have=asset.holders.get(receiver)??new Set();
         const candidates=[...asset.holders].filter(([peer,indexes])=>peer!==receiver&&live.has(peer)&&counts(peer)<maxJobs&&(blockedUntil.get(peer+':'+receiver)??0)<=now&&(asset.total===0||[...indexes].some(i=>!have.has(i)))).sort((a,b)=>counts(a[0])-counts(b[0])||a[1].size-b[1].size||a[0].localeCompare(b[0]));
         if(!candidates.length)continue;const [source,indexes]=candidates[0],wanted=[...indexes].filter(i=>!have.has(i)).sort((a,b)=>rarity(a)-rarity(b)||a-b).slice(0,batchSize);
         const job={id:crypto.randomUUID(),asset:asset.id,source,receiver,indexes:wanted,needsManifest:!asset.holders.has(receiver),deadline:now+jobTimeoutMs};jobs.set(job.id,job);for(const i of wanted)copies.set(i,rarity(i)+1);dirty=true;
