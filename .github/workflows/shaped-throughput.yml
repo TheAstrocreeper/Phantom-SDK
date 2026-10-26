@@ -1,0 +1,38 @@
+name: Current engine shaped throughput
+on:
+  pull_request:
+    paths: ['tools/perf/shaped/**', '.github/workflows/shaped-throughput.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  shaped:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        rtt: [0, 80]
+    env:
+      PHANTOM_SHAPED_RTT_MS: ${{ matrix.rtt }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci --prefix tools/swarm
+      - run: sudo apt-get update && sudo apt-get install -y iproute2 socat
+      - name: Use installed Chrome
+        run: |
+          phantom_chrome=$(command -v google-chrome || command -v chromium)
+          test -n "$phantom_chrome"
+          echo "PHANTOM_CHROMIUM_EXECUTABLE=$phantom_chrome" >> "$GITHUB_ENV"
+      - run: node --test tests/shaped-runner-guard.test.js tests/reuben-comparison.test.js
+      - name: Screen nine settings, then confirm against baseline with 128 MiB files
+        run: bash tools/perf/shaped/run.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: shaped-throughput-${{ matrix.rtt }}ms
+          path: tools/perf/shaped/results-*/
+          if-no-files-found: error
