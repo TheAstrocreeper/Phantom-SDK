@@ -198,7 +198,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
     }
     if(body.type==='progress'&&isLeader()){
       const job=jobs.get(body.jobId);if(!job||![job.source,job.receiver].includes(sender)||(body.batch??0)!==(job.batch??0)||!Number.isSafeInteger(body.sequence)||body.sequence<1)return;
-      job.progress??={};if(body.sequence<=(job.progress[sender]??0))return;job.progress[sender]=body.sequence;job.deadline=Date.now()+jobTimeoutMs;
+      job.progress??={};if(body.sequence<=(job.progress[sender]??0))return;job.progress[sender]=body.sequence;job.deadline=Date.now()+jobTimeoutMs;dirty=true;
       for(const peer of [job.source,job.receiver])frame(peer,{type:'progressLease',jobId:job.id,batch:job.batch??0,sequence:body.sequence,reporter:sender});return;
     }
     if(body.type==='progressLease'&&sender===leader()){
