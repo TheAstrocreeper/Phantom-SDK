@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 const require=createRequire(new URL('../swarm/package.json',import.meta.url));
 const {chromium}=process.env.PHANTOM_PLAYWRIGHT_ROOT?require(process.env.PHANTOM_PLAYWRIGHT_ROOT):require('playwright');
 const root=resolve(fileURLToPath(new URL('../../',import.meta.url))),output=process.env.PHANTOM_REUBEN_BROWSER_OUTPUT??resolve(root,'tools/perf/reuben/browser-results.json');
-const bytes=Number(process.env.PHANTOM_REUBEN_BROWSER_BYTES??(32*1024*1024+17));
+const bytes=Number(process.env.PHANTOM_REUBEN_BROWSER_BYTES??(32*1024*1024+17)),chunkSize=Number(process.env.PHANTOM_REUBEN_BROWSER_CHUNK??65536);
 const server=createServer(async(req,res)=>{try{const path=decodeURIComponent(new URL(req.url,'http://localhost').pathname),target=resolve(root,'.'+path);if(!target.startsWith(root+sep)||!/^\/(packages\/|tools\/perf\/reuben\/)/.test(path)||!['.js','.mjs','.html'].includes(extname(target))){res.writeHead(403).end();return;}res.setHeader('Content-Type',extname(target)==='.html'?'text/html':'text/javascript');res.setHeader('Cache-Control','no-store');res.end(await readFile(target));}catch{res.writeHead(404).end();}});
 await new Promise(r=>server.listen(0,'127.0.0.1',r));let browser;
 const rows=[],errors=[];
@@ -21,7 +21,7 @@ try{
    await Promise.all(pages.map(p=>p.goto(`http://127.0.0.1:${server.address().port}/tools/perf/reuben/browser.html`)));
    await Promise.all(pages.map(p=>p.waitForFunction(()=>window.ready)));
    const adminPublicKey=await pages[0].evaluate(()=>window.createAdmin()),ids=['1111111111111111','2222222222222222'];
-   await Promise.all(pages.map((p,i)=>p.evaluate(options=>window.configure(options),{engine,role:i?'receiver':'sender',selfId:ids[i],peerId:ids[1-i],networkId:`browser-reuben-${index}`,adminPublicKey,bytes})));
+   await Promise.all(pages.map((p,i)=>p.evaluate(options=>window.configure(options),{engine,role:i?'receiver':'sender',selfId:ids[i],peerId:ids[1-i],networkId:`browser-reuben-${index}`,adminPublicKey,bytes,chunkSize})));
    await pages[0].evaluate(()=>{void window.endpoint.start().catch(error=>window.failure=error.message);});
    await pages[1].waitForFunction(()=>window.result||window.failure,null,{timeout:120000});
    const result=await pages[1].evaluate(()=>({result:window.result,error:window.failure}));assert.equal(result.error,undefined);
@@ -32,6 +32,6 @@ try{
  assert.deepEqual(errors,[]);
  const mean=engine=>{const matches=rows.filter(r=>r.engine===engine);return matches.reduce((n,r)=>n+r.receiver.elapsedMs,0)/matches.length;};
  const currentMs=mean('current'),reubenMs=mean('reuben');
- await mkdir(resolve(output,'..'),{recursive:true});await writeFile(output,JSON.stringify({schema:1,scope:'Real Chrome, separate browser contexts, native WebRTC over loopback, memory storage. No imposed RTT, bandwidth or loss; not a 5G result.',browser:browser.version(),bytes,summary:{currentMs,reubenMs,elapsedReductionPercent:(1-reubenMs/currentMs)*100},rows},null,2)+'\n');
+ await mkdir(resolve(output,'..'),{recursive:true});await writeFile(output,JSON.stringify({schema:1,scope:'Real Chrome, separate browser contexts, native WebRTC over loopback, memory storage. No imposed RTT, bandwidth or loss; not a 5G result.',browser:browser.version(),bytes,chunkSize,summary:{currentMs,reubenMs,elapsedReductionPercent:(1-reubenMs/currentMs)*100},rows},null,2)+'\n');
  console.log(JSON.stringify({output,currentMs,reubenMs}));
 }catch(error){await mkdir(resolve(output,'..'),{recursive:true});await writeFile(output,JSON.stringify({failed:true,error:error.message,rows,errors},null,2));throw error;}finally{await browser?.close();await new Promise(r=>server.close(r));}
