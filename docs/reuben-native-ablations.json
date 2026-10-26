@@ -1,0 +1,216 @@
+{
+  "schema": 1,
+  "commit": "89b80be32a0ed7ba7863eec6db3fb6be4080823a",
+  "workflow": "https://github.com/TheAstrocreeper/Phantom-SDK/actions/runs/40271184501",
+  "scope": "Native Chrome loopback, separate fresh contexts per case, memory storage, two passes in reverse order. Not an internet or 5G result.",
+  "runs": [
+    {
+      "chunkSize": 65536,
+      "browser": "155.0.8059.39",
+      "bytes": 33554449,
+      "meansMs": {
+        "current": 2111.550000000003,
+        "reuben": 5155.050000000003,
+        "reuben-split": 6834.94999999999,
+        "reuben-batches": 1819.6000000000058,
+        "reuben-trusted": 7104.5
+      },
+      "rows": [
+        {
+          "engine": "current",
+          "index": 0,
+          "elapsedMs": 2381.100000000006,
+          "verified": true,
+          "lastWriteToCompleteMs": 77.69999999999709,
+          "maxRequestToReceiveMs": null,
+          "requestBoundaryCount": 0
+        },
+        {
+          "engine": "reuben",
+          "index": 1,
+          "elapsedMs": 3174.7000000000116,
+          "verified": true,
+          "lastWriteToCompleteMs": 52,
+          "maxRequestToReceiveMs": 1836.300000000003,
+          "requestBoundaryCount": 0
+        },
+        {
+          "engine": "reuben-split",
+          "index": 2,
+          "elapsedMs": 6520.699999999997,
+          "verified": true,
+          "lastWriteToCompleteMs": 50.80000000000291,
+          "maxRequestToReceiveMs": 5255,
+          "requestBoundaryCount": 0
+        },
+        {
+          "engine": "reuben-batches",
+          "index": 3,
+          "elapsedMs": 1720,
+          "verified": true,
+          "lastWriteToCompleteMs": 75.90000000000873,
+          "maxRequestToReceiveMs": 173.6999999999971,
+          "requestBoundaryCount": 17
+        },
+        {
+          "engine": "reuben-trusted",
+          "index": 4,
+          "elapsedMs": 6745.700000000012,
+          "verified": true,
+          "lastWriteToCompleteMs": 21.10000000000582,
+          "maxRequestToReceiveMs": 5250,
+          "requestBoundaryCount": 0
+        },
+        {
+          "engine": "reuben-trusted",
+          "index": 5,
+          "elapsedMs": 7463.299999999988,
+          "verified": true,
+          "lastWriteToCompleteMs": 21.29999999998836,
+          "maxRequestToReceiveMs": 6003.5,
+          "requestBoundaryCount": 0
+        },
+        {
+          "engine": "reuben-batches",
+          "index": 6,
+          "elapsedMs": 1919.2000000000116,
+          "verified": true,
+          "lastWriteToCompleteMs": 76.10000000000582,
+          "maxRequestToReceiveMs": 307.3999999999942,
+          "requestBoundaryCount": 17
+        },
+        {
+          "engine": "reuben-split",
+          "index": 7,
+          "elapsedMs": 7149.1999999999825,
+          "verified": true,
+          "lastWriteToCompleteMs": 51.60000000000582,
+          "maxRequestToReceiveMs": 5623.900000000023,
+          "requestBoundaryCount": 0
+        },
+        {
+          "engine": "reuben",
+          "index": 8,
+          "elapsedMs": 7135.399999999994,
+          "verified": true,
+          "lastWriteToCompleteMs": 51.09999999997672,
+          "maxRequestToReceiveMs": 5639.600000000006,
+          "requestBoundaryCount": 0
+        },
+        {
+          "engine": "current",
+          "index": 9,
+          "elapsedMs": 1842,
+          "verified": true,
+          "lastWriteToCompleteMs": 77.30000000001746,
+          "maxRequestToReceiveMs": null,
+          "requestBoundaryCount": 0
+        }
+      ]
+    },
+    {
+      "chunkSize": 65492,
+      "browser": "155.0.8059.39",
+      "bytes": 33554449,
+      "meansMs": {
+        "current": 1874.4999999999854,
+        "reuben": 7315.25,
+        "reuben-split": 7309.949999999997,
+        "reuben-batches": 1921.75,
+        "reuben-trusted": 7294.25
+      },
+      "rows": [
+        {
+          "engine": "current",
+          "index": 0,
+          "elapsedMs": 1907.0999999999767,
+          "verified": true,
+          "lastWriteToCompleteMs": 75.89999999999418,
+          "maxRequestToReceiveMs": null,
+          "requestBoundaryCount": 0
+        },
+        {
+          "engine": "reuben",
+          "index": 1,
+          "elapsedMs": 6667.399999999994,
+          "verified": true,
+          "lastWriteToCompleteMs": 49,
+          "maxRequestToReceiveMs": 5171.6999999999825,
+          "requestBoundaryCount": 0
+        },
+        {
+          "engine": "reuben-split",
+          "index": 2,
+          "elapsedMs": 7120.600000000006,
+          "verified": true,
+          "lastWriteToCompleteMs": 50.10000000000582,
+          "maxRequestToReceiveMs": 5596.600000000006,
+          "requestBoundaryCount": 0
+        },
+        {
+          "engine": "reuben-batches",
+          "index": 3,
+          "elapsedMs": 1727,
+          "verified": true,
+          "lastWriteToCompleteMs": 75.20000000001164,
+          "maxRequestToReceiveMs": 188.39999999999418,
+          "requestBoundaryCount": 17
+        },
+        {
+          "engine": "reuben-trusted",
+          "index": 4,
+          "elapsedMs": 7077.100000000006,
+          "verified": true,
+          "lastWriteToCompleteMs": 20.5,
+          "maxRequestToReceiveMs": 5633.899999999994,
+          "requestBoundaryCount": 0
+        },
+        {
+          "engine": "reuben-trusted",
+          "index": 5,
+          "elapsedMs": 7511.399999999994,
+          "verified": true,
+          "lastWriteToCompleteMs": 20.89999999999418,
+          "maxRequestToReceiveMs": 6071.399999999994,
+          "requestBoundaryCount": 0
+        },
+        {
+          "engine": "reuben-batches",
+          "index": 6,
+          "elapsedMs": 2116.5,
+          "verified": true,
+          "lastWriteToCompleteMs": 76,
+          "maxRequestToReceiveMs": 610.1000000000058,
+          "requestBoundaryCount": 17
+        },
+        {
+          "engine": "reuben-split",
+          "index": 7,
+          "elapsedMs": 7499.299999999988,
+          "verified": true,
+          "lastWriteToCompleteMs": 51.5,
+          "maxRequestToReceiveMs": 5999.5,
+          "requestBoundaryCount": 0
+        },
+        {
+          "engine": "reuben",
+          "index": 8,
+          "elapsedMs": 7963.100000000006,
+          "verified": true,
+          "lastWriteToCompleteMs": 50.10000000000582,
+          "maxRequestToReceiveMs": 6485.100000000006,
+          "requestBoundaryCount": 0
+        },
+        {
+          "engine": "current",
+          "index": 9,
+          "elapsedMs": 1841.8999999999942,
+          "verified": true,
+          "lastWriteToCompleteMs": 76.60000000000582,
+          "maxRequestToReceiveMs": null,
+          "requestBoundaryCount": 0
+        }
+      ]
+    }
+  ]
+}

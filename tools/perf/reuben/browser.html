@@ -1,0 +1,8 @@
+<!doctype html><meta charset="utf-8"><title>Reuben automated WebRTC comparison</title>
+<script type="module">
+import {createReubenComparisonEndpoint} from '../../../packages/phantom-core/experimental/reuben-comparison.js';
+import {createAdminIdentity} from '../../../packages/phantom-core/src/authorization.js';
+window.createAdmin=async()=>{window.admin=await createAdminIdentity();return window.admin.publicKey;};
+window.configure=options=>{window.endpoint=createReubenComparisonEndpoint({...options,admin:options.role==='sender'?window.admin:undefined,send:message=>{void window.bridge(message);},onError:error=>{window.failure=error.message;},onComplete:result=>{window.result=result;}});};
+window.ready=true;
+</script>

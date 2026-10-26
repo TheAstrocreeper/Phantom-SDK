@@ -1,0 +1,172 @@
+{
+  "model": "Reliable ordered application-message emulator with serialization, propagation, and optional one-RTT recovery stall every eighth binary message. Not SCTP congestion control, real packet loss, NAT, Chrome, or device performance.",
+  "bytes": 33554449,
+  "repeats": 2,
+  "results": [
+    {
+      "scenario": "80ms-rtt",
+      "repeat": 0,
+      "name": "80ms-rtt",
+      "oneWayMs": 40,
+      "mbps": 20,
+      "writeMs": 8,
+      "recoverEvery": 0,
+      "engine": "current",
+      "setupMs": 188,
+      "totalMs": 17843,
+      "transport": [
+        {
+          "label": "phantom-distribution",
+          "binaryMessages": 513,
+          "peakBufferedBytes": 2107537,
+          "emptyBufferMs": 1415,
+          "recoveryStalls": 0
+        }
+      ],
+      "requestWindow": 32,
+      "sourceWindow": 8,
+      "batchSize": 32,
+      "bytes": 33554449,
+      "elapsedMs": 17654,
+      "batchWorkMs": 15051,
+      "interBatchGapMs": 2592,
+      "batches": 17,
+      "peakWrites": 1,
+      "verified": true,
+      "metrics": {
+        "requestToReceiveMs": {
+          "meanMs": 516.893,
+          "maxMs": 929.087,
+          "count": 513
+        },
+        "hashMs": {
+          "meanMs": 0.262,
+          "maxMs": 2.223,
+          "count": 513
+        },
+        "writeQueueMs": {
+          "meanMs": 0.022,
+          "maxMs": 0.292,
+          "count": 513
+        },
+        "writeMs": {
+          "meanMs": 8.158,
+          "maxMs": 8.895,
+          "count": 513
+        }
+      }
+    },
+    {
+      "scenario": "80ms-rtt",
+      "repeat": 0,
+      "name": "80ms-rtt",
+      "oneWayMs": 40,
+      "mbps": 20,
+      "writeMs": 8,
+      "recoverEvery": 0,
+      "engine": "reuben",
+      "setupMs": 56,
+      "totalMs": 13670,
+      "bytes": 33554449,
+      "elapsedMs": 13577,
+      "peakWrites": 2,
+      "verified": true,
+      "transport": [
+        {
+          "label": "reuben",
+          "binaryMessages": 513,
+          "peakBufferedBytes": 2098560,
+          "emptyBufferMs": 141,
+          "recoveryStalls": 0
+        }
+      ]
+    },
+    {
+      "scenario": "80ms-rtt",
+      "repeat": 1,
+      "name": "80ms-rtt",
+      "oneWayMs": 40,
+      "mbps": 20,
+      "writeMs": 8,
+      "recoverEvery": 0,
+      "engine": "reuben",
+      "setupMs": 56,
+      "totalMs": 13684,
+      "bytes": 33554449,
+      "elapsedMs": 13585,
+      "peakWrites": 2,
+      "verified": true,
+      "transport": [
+        {
+          "label": "reuben",
+          "binaryMessages": 513,
+          "peakBufferedBytes": 2098560,
+          "emptyBufferMs": 156,
+          "recoveryStalls": 0
+        }
+      ]
+    },
+    {
+      "scenario": "80ms-rtt",
+      "repeat": 1,
+      "name": "80ms-rtt",
+      "oneWayMs": 40,
+      "mbps": 20,
+      "writeMs": 8,
+      "recoverEvery": 0,
+      "engine": "current",
+      "setupMs": 190,
+      "totalMs": 17828,
+      "transport": [
+        {
+          "label": "phantom-distribution",
+          "binaryMessages": 513,
+          "peakBufferedBytes": 2107537,
+          "emptyBufferMs": 1393,
+          "recoveryStalls": 0
+        }
+      ],
+      "requestWindow": 32,
+      "sourceWindow": 8,
+      "batchSize": 32,
+      "bytes": 33554449,
+      "elapsedMs": 17638,
+      "batchWorkMs": 15033,
+      "interBatchGapMs": 2599,
+      "batches": 17,
+      "peakWrites": 1,
+      "verified": true,
+      "metrics": {
+        "requestToReceiveMs": {
+          "meanMs": 516.011,
+          "maxMs": 926.606,
+          "count": 513
+        },
+        "hashMs": {
+          "meanMs": 0.239,
+          "maxMs": 1.243,
+          "count": 513
+        },
+        "writeQueueMs": {
+          "meanMs": 0.018,
+          "maxMs": 0.169,
+          "count": 513
+        },
+        "writeMs": {
+          "meanMs": 8.15,
+          "maxMs": 8.801,
+          "count": 513
+        }
+      }
+    }
+  ],
+  "summary": [
+    {
+      "scenario": "80ms-rtt",
+      "currentMs": 17646,
+      "reubenMs": 13581,
+      "elapsedReductionPercent": 23.04,
+      "speedup": 1.299
+    }
+  ]
+}

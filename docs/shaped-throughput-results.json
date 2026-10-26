@@ -1,0 +1,954 @@
+{
+  "schema": 1,
+  "headCommit": "85200bd11a62299fcfa5f35f0aa5e3ce9e2afd90",
+  "workflow": "https://github.com/TheAstrocreeper/Phantom-SDK/actions/runs/40272345001",
+  "scope": "Native current SDK coordinator, kernel-shaped UDP, unshaped TCP test/signaling bridge, separate Chrome processes and network namespaces, memory storage. No NAT, radio, imposed loss, Android storage or 1.2 GiB single-file test.",
+  "profiles": [
+    {
+      "profile": {
+        "addedRttMs": 0,
+        "rateKbitPerSecondEachDirection": 15600,
+        "queueLimitPackets": 10000
+      },
+      "browser": "155.0.8059.39",
+      "revision": "57d4d76cd2df6212b26c215caf730132d259a55a",
+      "calibrationMedianRttMs": 0.6999999999970896,
+      "screenMeans": [
+        {
+          "settings": {
+            "batchSize": 64,
+            "requestWindow": 8
+          },
+          "meanMs": 4761.449999999997
+        },
+        {
+          "settings": {
+            "batchSize": 64,
+            "requestWindow": 16
+          },
+          "meanMs": 4763.949999999997
+        },
+        {
+          "settings": {
+            "batchSize": 32,
+            "requestWindow": 8
+          },
+          "meanMs": 4769.75
+        },
+        {
+          "settings": {
+            "batchSize": 32,
+            "requestWindow": 16
+          },
+          "meanMs": 4781.799999999996
+        },
+        {
+          "settings": {
+            "batchSize": 32,
+            "requestWindow": 32
+          },
+          "meanMs": 4783.700000000012
+        },
+        {
+          "settings": {
+            "batchSize": 64,
+            "requestWindow": 32
+          },
+          "meanMs": 4785.25
+        },
+        {
+          "settings": {
+            "batchSize": 8,
+            "requestWindow": 32
+          },
+          "meanMs": 4858.150000000009
+        },
+        {
+          "settings": {
+            "batchSize": 8,
+            "requestWindow": 16
+          },
+          "meanMs": 4858.94999999999
+        },
+        {
+          "settings": {
+            "batchSize": 8,
+            "requestWindow": 8
+          },
+          "meanMs": 4862.94999999999
+        }
+      ],
+      "confirmation": {
+        "baseline": {
+          "batchSize": 32,
+          "requestWindow": 32
+        },
+        "candidate": {
+          "batchSize": 64,
+          "requestWindow": 8
+        },
+        "baselineMs": 76084.49999999999,
+        "candidateMs": 75835,
+        "elapsedReductionPercent": 0.3279248730030271
+      },
+      "qdiscEvidence": [
+        {
+          "kind": "netem",
+          "handle": "30:",
+          "parent": "1:3",
+          "options": {
+            "limit": 10000,
+            "rate": {
+              "rate": 1950000,
+              "packetoverhead": 0,
+              "cellsize": 0,
+              "celloverhead": 0
+            },
+            "ecn": false,
+            "gap": 0
+          },
+          "bytes": 749084113,
+          "packets": 614258,
+          "drops": 0,
+          "overlimits": 0,
+          "requeues": 0,
+          "backlog": 0,
+          "qlen": 0
+        },
+        {
+          "kind": "netem",
+          "handle": "30:",
+          "parent": "1:3",
+          "options": {
+            "limit": 10000,
+            "rate": {
+              "rate": 1950000,
+              "packetoverhead": 0,
+              "cellsize": 0,
+              "celloverhead": 0
+            },
+            "ecn": false,
+            "gap": 0
+          },
+          "bytes": 30850544,
+          "packets": 316382,
+          "drops": 0,
+          "overlimits": 0,
+          "requeues": 0,
+          "backlog": 0,
+          "qlen": 0
+        }
+      ],
+      "rows": [
+        {
+          "stage": "screen",
+          "passIndex": 0,
+          "settings": {
+            "batchSize": 8,
+            "requestWindow": 8
+          },
+          "bytes": 8388625,
+          "elapsedMs": 4875.199999999997,
+          "payloadMbps": 13.765383984246808,
+          "verified": true,
+          "peakWrites": 1,
+          "peakBufferedAmount": 526952,
+          "maxObservedRttMs": 144
+        },
+        {
+          "stage": "screen",
+          "passIndex": 0,
+          "settings": {
+            "batchSize": 8,
+            "requestWindow": 16
+          },
+          "bytes": 8388625,
+          "elapsedMs": 4863.199999999997,
+          "payloadMbps": 13.799350222076008,
+          "verified": true,
+          "peakWrites": 1,
+          "peakBufferedAmount": 526952,
+          "maxObservedRttMs": 124
+        },
+        {
+          "stage": "screen",
+          "passIndex": 0,
+          "settings": {
+            "batchSize": 8,
+            "requestWindow": 32
+          },
+          "bytes": 8388625,
+          "elapsedMs": 4857.399999999994,
+          "payloadMbps": 13.815827397373097,
+          "verified": true,
+          "peakWrites": 1,
+          "peakBufferedAmount": 526952,
+          "maxObservedRttMs": 130
+        },
+        {
+          "stage": "screen",
+          "passIndex": 0,
+          "settings": {
+            "batchSize": 32,
+            "requestWindow": 8
+          },
+          "bytes": 8388625,
+          "elapsedMs": 4771.799999999988,
+          "payloadMbps": 14.063665702669887,
+          "verified": true,
+          "peakWrites": 1,
+          "peakBufferedAmount": 526952,
+          "maxObservedRttMs": 77
+        },
+        {
+          "stage": "screen",
+          "passIndex": 0,
+          "settings": {
+            "batchSize": 32,
+            "requestWindow": 16
+          },
+          "bytes": 8388625,
+          "elapsedMs": 4782.300000000003,
+          "payloadMbps": 14.03278757083411,
+          "verified": true,
+          "peakWrites": 1,
+          "peakBufferedAmount": 1119431,
+          "maxObservedRttMs": 104
+        },
+        {
+          "stage": "screen",
+          "passIndex": 0,
+          "settings": {
+            "batchSize": 32,
+            "requestWindow": 32
+          },
+          "bytes": 8388625,
+          "elapsedMs": 4783.600000000006,
+          "payloadMbps": 14.028973994481126,
+          "verified": true,
+          "peakWrites": 1,
+          "peakBufferedAmount": 2107808,
+          "maxObservedRttMs": 178
+        },
+        {
+          "stage": "screen",
+          "passIndex": 0,
+          "settings": {
+            "batchSize": 64,
+            "requestWindow": 8
+          },
+          "bytes": 8388625,
+          "elapsedMs": 4773.199999999997,
+          "payloadMbps": 14.05954076929524,
+          "verified": true,
+          "peakWrites": 1,
+          "peakBufferedAmount": 526952,
+          "maxObservedRttMs": 70
+        },
+        {
+          "stage": "screen",
+          "passIndex": 0,
+          "settings": {
+            "batchSize": 64,
+            "requestWindow": 16
+          },
+          "bytes": 8388625,
+          "elapsedMs": 4764.199999999997,
+          "payloadMbps": 14.08610049955922,
+          "verified": true,
+          "peakWrites": 1,
+          "peakBufferedAmount": 1119431,
+          "maxObservedRttMs": 85
+        },
+        {
+          "stage": "screen",
+          "passIndex": 0,
+          "settings": {
+            "batchSize": 64,
+            "requestWindow": 32
+          },
+          "bytes": 8388625,
+          "elapsedMs": 4783.600000000006,
+          "payloadMbps": 14.028973994481126,
+          "verified": true,
+          "peakWrites": 1,
+          "peakBufferedAmount": 2173335,
+          "maxObservedRttMs": 97
+        },
+        {
+          "stage": "screen",
+          "passIndex": 1,
+          "settings": {
+            "batchSize": 64,
+            "requestWindow": 32
+          },
+          "bytes": 8388625,
+          "elapsedMs": 4786.899999999994,
+          "payloadMbps": 14.019302680231482,
+          "verified": true,
+          "peakWrites": 1,
+          "peakBufferedAmount": 2173335,
+          "maxObservedRttMs": 89
+        },
+        {
+          "stage": "screen",
+          "passIndex": 1,
+          "settings": {
+            "batchSize": 64,
+            "requestWindow": 16
+          },
+          "bytes": 8388625,
+          "elapsedMs": 4763.699999999997,
+          "payloadMbps": 14.087578982723523,
+          "verified": true,
+          "peakWrites": 1,
+          "peakBufferedAmount": 1119431,
+          "maxObservedRttMs": 88
+        },
+        {
+          "stage": "screen",
+          "passIndex": 1,
+          "settings": {
+            "batchSize": 64,
+            "requestWindow": 8
+          },
+          "bytes": 8388625,
+          "elapsedMs": 4749.699999999997,
+          "payloadMbps": 14.129102890708895,
+          "verified": true,
+          "peakWrites": 1,
+          "peakBufferedAmount": 526952,
+          "maxObservedRttMs": 65
+        },
+        {
+          "stage": "screen",
+          "passIndex": 1,
+          "settings": {
+            "batchSize": 32,
+            "requestWindow": 32
+          },
+          "bytes": 8388625,
+          "elapsedMs": 4783.8000000000175,
+          "payloadMbps": 14.02838747439269,
+          "verified": true,
+          "peakWrites": 1,
+          "peakBufferedAmount": 2107808,
+          "maxObservedRttMs": 175
+        },
+        {
+          "stage": "screen",
+          "passIndex": 1,
+          "settings": {
+            "batchSize": 32,
+            "requestWindow": 16
+          },
+          "bytes": 8388625,
+          "elapsedMs": 4781.299999999988,
+          "payloadMbps": 14.035722502248376,
+          "verified": true,
+          "peakWrites": 1,
+          "peakBufferedAmount": 1119431,
+          "maxObservedRttMs": 97
+        },
+        {
+          "stage": "screen",
+          "passIndex": 1,
+          "settings": {
+            "batchSize": 32,
+            "requestWindow": 8
+          },
+          "bytes": 8388625,
+          "elapsedMs": 4767.700000000012,
+          "payloadMbps": 14.075759800322972,
+          "verified": true,
+          "peakWrites": 1,
+          "peakBufferedAmount": 526952,
+          "maxObservedRttMs": 82
+        },
+        {
+          "stage": "screen",
+          "passIndex": 1,
+          "settings": {
+            "batchSize": 8,
+            "requestWindow": 32
+          },
+          "bytes": 8388625,
+          "elapsedMs": 4858.900000000023,
+          "payloadMbps": 13.811562287760538,
+          "verified": true,
+          "peakWrites": 1,
+          "peakBufferedAmount": 526952,
+          "maxObservedRttMs": 130
+        },
+        {
+          "stage": "screen",
+          "passIndex": 1,
+          "settings": {
+            "batchSize": 8,
+            "requestWindow": 16
+          },
+          "bytes": 8388625,
+          "elapsedMs": 4854.6999999999825,
+          "payloadMbps": 13.823511236533717,
+          "verified": true,
+          "peakWrites": 1,
+          "peakBufferedAmount": 526952,
+          "maxObservedRttMs": 122
+        },
+        {
+          "stage": "screen",
+          "passIndex": 1,
+          "settings": {
+            "batchSize": 8,
+            "requestWindow": 8
+          },
+          "bytes": 8388625,
+          "elapsedMs": 4850.6999999999825,
+          "payloadMbps": 13.83491042529949,
+          "verified": true,
+          "peakWrites": 1,
+          "peakBufferedAmount": 526952,
+          "maxObservedRttMs": 124
+        },
+        {
+          "stage": "confirmation",
+          "passIndex": 0,
+          "settings": {
+            "batchSize": 32,
+            "requestWindow": 32
+          },
+          "bytes": 134217745,
+          "elapsedMs": 76095.1,
+          "payloadMbps": 14.110526959028899,
+          "verified": true,
+          "peakWrites": 1,
+          "peakBufferedAmount": 2107968,
+          "maxObservedRttMs": 658
+        },
+        {
+          "stage": "confirmation",
+          "passIndex": 0,
+          "settings": {
+            "batchSize": 64,
+            "requestWindow": 8
+          },
+          "bytes": 134217745,
+          "elapsedMs": 75836.79999999999,
+          "payloadMbps": 14.15858738765349,
+          "verified": true,
+          "peakWrites": 1,
+          "peakBufferedAmount": 592504,
+          "maxObservedRttMs": 273
+        },
+        {
+          "stage": "confirmation",
+          "passIndex": 1,
+          "settings": {
+            "batchSize": 64,
+            "requestWindow": 8
+          },
+          "bytes": 134217745,
+          "elapsedMs": 75833.20000000001,
+          "payloadMbps": 14.159259532764011,
+          "verified": true,
+          "peakWrites": 1,
+          "peakBufferedAmount": 592504,
+          "maxObservedRttMs": 274
+        },
+        {
+          "stage": "confirmation",
+          "passIndex": 1,
+          "settings": {
+            "batchSize": 32,
+            "requestWindow": 32
+          },
+          "bytes": 134217745,
+          "elapsedMs": 76073.89999999997,
+          "payloadMbps": 14.114459229775264,
+          "verified": true,
+          "peakWrites": 1,
+          "peakBufferedAmount": 2107968,
+          "maxObservedRttMs": 637
+        }
+      ]
+    },
+    {
+      "profile": {
+        "addedRttMs": 80,
+        "rateKbitPerSecondEachDirection": 15600,
+        "queueLimitPackets": 10000
+      },
+      "browser": "155.0.8059.39",
+      "revision": "57d4d76cd2df6212b26c215caf730132d259a55a",
+      "calibrationMedianRttMs": 80.89999999999418,
+      "screenMeans": [
+        {
+          "settings": {
+            "batchSize": 64,
+            "requestWindow": 16
+          },
+          "meanMs": 5486.149999999994
+        },
+        {
+          "settings": {
+            "batchSize": 64,
+            "requestWindow": 32
+          },
+          "meanMs": 5506.600000000006
+        },
+        {
+          "settings": {
+            "batchSize": 64,
+            "requestWindow": 8
+          },
+          "meanMs": 5516
+        },
+        {
+          "settings": {
+            "batchSize": 32,
+            "requestWindow": 16
+          },
+          "meanMs": 5821.849999999991
+        },
+        {
+          "settings": {
+            "batchSize": 32,
+            "requestWindow": 32
+          },
+          "meanMs": 5828.899999999994
+        },
+        {
+          "settings": {
+            "batchSize": 32,
+            "requestWindow": 8
+          },
+          "meanMs": 5938
+        },
+        {
+          "settings": {
+            "batchSize": 8,
+            "requestWindow": 32
+          },
+          "meanMs": 8465.350000000006
+        },
+        {
+          "settings": {
+            "batchSize": 8,
+            "requestWindow": 16
+          },
+          "meanMs": 8466.649999999994
+        },
+        {
+          "settings": {
+            "batchSize": 8,
+            "requestWindow": 8
+          },
+          "meanMs": 8471.650000000009
+        }
+      ],
+      "confirmation": {
+        "baseline": {
+          "batchSize": 32,
+          "requestWindow": 32
+        },
+        "candidate": {
+          "batchSize": 64,
+          "requestWindow": 16
+        },
+        "baselineMs": 86302.75,
+        "candidateMs": 81014.1,
+        "elapsedReductionPercent": 6.1280202542792654
+      },
+      "qdiscEvidence": [
+        {
+          "kind": "netem",
+          "handle": "30:",
+          "parent": "1:3",
+          "options": {
+            "limit": 10000,
+            "delay": {
+              "delay": 0.04,
+              "jitter": 0,
+              "correlation": 0
+            },
+            "rate": {
+              "rate": 1950000,
+              "packetoverhead": 0,
+              "cellsize": 0,
+              "celloverhead": 0
+            },
+            "ecn": false,
+            "gap": 0
+          },
+          "bytes": 749090566,
+          "packets": 614023,
+          "drops": 0,
+          "overlimits": 0,
+          "requeues": 0,
+          "backlog": 0,
+          "qlen": 0
+        },
+        {
+          "kind": "netem",
+          "handle": "30:",
+          "parent": "1:3",
+          "options": {
+            "limit": 10000,
+            "delay": {
+              "delay": 0.04,
+              "jitter": 0,
+              "correlation": 0
+            },
+            "rate": {
+              "rate": 1950000,
+              "packetoverhead": 0,
+              "cellsize": 0,
+              "celloverhead": 0
+            },
+            "ecn": false,
+            "gap": 0
+          },
+          "bytes": 30772524,
+          "packets": 315657,
+          "drops": 0,
+          "overlimits": 0,
+          "requeues": 0,
+          "backlog": 0,
+          "qlen": 0
+        }
+      ],
+      "rows": [
+        {
+          "stage": "screen",
+          "passIndex": 0,
+          "settings": {
+            "batchSize": 8,
+            "requestWindow": 8
+          },
+          "bytes": 8388625,
+          "elapsedMs": 8478.600000000006,
+          "payloadMbps": 7.91510390866416,
+          "verified": true,
+          "peakWrites": 1,
+          "peakBufferedAmount": 526952,
+          "maxObservedRttMs": 127
+        },
+        {
+          "stage": "screen",
+          "passIndex": 0,
+          "settings": {
+            "batchSize": 8,
+            "requestWindow": 16
+          },
+          "bytes": 8388625,
+          "elapsedMs": 8467.899999999994,
+          "payloadMbps": 7.925105398032575,
+          "verified": true,
+          "peakWrites": 1,
+          "peakBufferedAmount": 526952,
+          "maxObservedRttMs": 131
+        },
+        {
+          "stage": "screen",
+          "passIndex": 0,
+          "settings": {
+            "batchSize": 8,
+            "requestWindow": 32
+          },
+          "bytes": 8388625,
+          "elapsedMs": 8463.5,
+          "payloadMbps": 7.929225497725527,
+          "verified": true,
+          "peakWrites": 1,
+          "peakBufferedAmount": 526952,
+          "maxObservedRttMs": 137
+        },
+        {
+          "stage": "screen",
+          "passIndex": 0,
+          "settings": {
+            "batchSize": 32,
+            "requestWindow": 8
+          },
+          "bytes": 8388625,
+          "elapsedMs": 5935.899999999994,
+          "payloadMbps": 11.305614986775396,
+          "verified": true,
+          "peakWrites": 1,
+          "peakBufferedAmount": 526952,
+          "maxObservedRttMs": 142
+        },
+        {
+          "stage": "screen",
+          "passIndex": 0,
+          "settings": {
+            "batchSize": 32,
+            "requestWindow": 16
+          },
+          "bytes": 8388625,
+          "elapsedMs": 5822.1999999999825,
+          "payloadMbps": 11.52639895572124,
+          "verified": true,
+          "peakWrites": 1,
+          "peakBufferedAmount": 1053904,
+          "maxObservedRttMs": 260
+        },
+        {
+          "stage": "screen",
+          "passIndex": 0,
+          "settings": {
+            "batchSize": 32,
+            "requestWindow": 32
+          },
+          "bytes": 8388625,
+          "elapsedMs": 5835.799999999988,
+          "payloadMbps": 11.499537338496888,
+          "verified": true,
+          "peakWrites": 1,
+          "peakBufferedAmount": 2107808,
+          "maxObservedRttMs": 269
+        },
+        {
+          "stage": "screen",
+          "passIndex": 0,
+          "settings": {
+            "batchSize": 64,
+            "requestWindow": 8
+          },
+          "bytes": 8388625,
+          "elapsedMs": 5516,
+          "payloadMbps": 12.166243654822336,
+          "verified": true,
+          "peakWrites": 1,
+          "peakBufferedAmount": 526952,
+          "maxObservedRttMs": 262
+        },
+        {
+          "stage": "screen",
+          "passIndex": 0,
+          "settings": {
+            "batchSize": 64,
+            "requestWindow": 16
+          },
+          "bytes": 8388625,
+          "elapsedMs": 5486,
+          "payloadMbps": 12.23277433467007,
+          "verified": true,
+          "peakWrites": 1,
+          "peakBufferedAmount": 1053904,
+          "maxObservedRttMs": 553
+        },
+        {
+          "stage": "screen",
+          "passIndex": 0,
+          "settings": {
+            "batchSize": 64,
+            "requestWindow": 32
+          },
+          "bytes": 8388625,
+          "elapsedMs": 5506.5,
+          "payloadMbps": 12.187233269772086,
+          "verified": true,
+          "peakWrites": 1,
+          "peakBufferedAmount": 2107808,
+          "maxObservedRttMs": 893
+        },
+        {
+          "stage": "screen",
+          "passIndex": 1,
+          "settings": {
+            "batchSize": 64,
+            "requestWindow": 32
+          },
+          "bytes": 8388625,
+          "elapsedMs": 5506.700000000012,
+          "payloadMbps": 12.186790636860525,
+          "verified": true,
+          "peakWrites": 1,
+          "peakBufferedAmount": 2107808,
+          "maxObservedRttMs": 902
+        },
+        {
+          "stage": "screen",
+          "passIndex": 1,
+          "settings": {
+            "batchSize": 64,
+            "requestWindow": 16
+          },
+          "bytes": 8388625,
+          "elapsedMs": 5486.299999999988,
+          "payloadMbps": 12.232105426243578,
+          "verified": true,
+          "peakWrites": 1,
+          "peakBufferedAmount": 1053904,
+          "maxObservedRttMs": 554
+        },
+        {
+          "stage": "screen",
+          "passIndex": 1,
+          "settings": {
+            "batchSize": 64,
+            "requestWindow": 8
+          },
+          "bytes": 8388625,
+          "elapsedMs": 5516,
+          "payloadMbps": 12.166243654822336,
+          "verified": true,
+          "peakWrites": 1,
+          "peakBufferedAmount": 526952,
+          "maxObservedRttMs": 268
+        },
+        {
+          "stage": "screen",
+          "passIndex": 1,
+          "settings": {
+            "batchSize": 32,
+            "requestWindow": 32
+          },
+          "bytes": 8388625,
+          "elapsedMs": 5822,
+          "payloadMbps": 11.526794915836483,
+          "verified": true,
+          "peakWrites": 1,
+          "peakBufferedAmount": 2107808,
+          "maxObservedRttMs": 283
+        },
+        {
+          "stage": "screen",
+          "passIndex": 1,
+          "settings": {
+            "batchSize": 32,
+            "requestWindow": 16
+          },
+          "bytes": 8388625,
+          "elapsedMs": 5821.5,
+          "payloadMbps": 11.52778493515417,
+          "verified": true,
+          "peakWrites": 1,
+          "peakBufferedAmount": 1053904,
+          "maxObservedRttMs": 255
+        },
+        {
+          "stage": "screen",
+          "passIndex": 1,
+          "settings": {
+            "batchSize": 32,
+            "requestWindow": 8
+          },
+          "bytes": 8388625,
+          "elapsedMs": 5940.100000000006,
+          "payloadMbps": 11.297621252167461,
+          "verified": true,
+          "peakWrites": 1,
+          "peakBufferedAmount": 526952,
+          "maxObservedRttMs": 138
+        },
+        {
+          "stage": "screen",
+          "passIndex": 1,
+          "settings": {
+            "batchSize": 8,
+            "requestWindow": 32
+          },
+          "bytes": 8388625,
+          "elapsedMs": 8467.200000000012,
+          "payloadMbps": 7.925760582010571,
+          "verified": true,
+          "peakWrites": 1,
+          "peakBufferedAmount": 526952,
+          "maxObservedRttMs": 131
+        },
+        {
+          "stage": "screen",
+          "passIndex": 1,
+          "settings": {
+            "batchSize": 8,
+            "requestWindow": 16
+          },
+          "bytes": 8388625,
+          "elapsedMs": 8465.399999999994,
+          "payloadMbps": 7.9274458383537745,
+          "verified": true,
+          "peakWrites": 1,
+          "peakBufferedAmount": 526952,
+          "maxObservedRttMs": 136
+        },
+        {
+          "stage": "screen",
+          "passIndex": 1,
+          "settings": {
+            "batchSize": 8,
+            "requestWindow": 8
+          },
+          "bytes": 8388625,
+          "elapsedMs": 8464.700000000012,
+          "payloadMbps": 7.928101409382483,
+          "verified": true,
+          "peakWrites": 1,
+          "peakBufferedAmount": 526952,
+          "maxObservedRttMs": 128
+        },
+        {
+          "stage": "confirmation",
+          "passIndex": 0,
+          "settings": {
+            "batchSize": 32,
+            "requestWindow": 32
+          },
+          "bytes": 134217745,
+          "elapsedMs": 86299.29999999999,
+          "payloadMbps": 12.442070329655051,
+          "verified": true,
+          "peakWrites": 1,
+          "peakBufferedAmount": 2107968,
+          "maxObservedRttMs": 604
+        },
+        {
+          "stage": "confirmation",
+          "passIndex": 0,
+          "settings": {
+            "batchSize": 64,
+            "requestWindow": 16
+          },
+          "bytes": 134217745,
+          "elapsedMs": 81014.80000000005,
+          "payloadMbps": 13.253651925327217,
+          "verified": true,
+          "peakWrites": 1,
+          "peakBufferedAmount": 1053984,
+          "maxObservedRttMs": 566
+        },
+        {
+          "stage": "confirmation",
+          "passIndex": 1,
+          "settings": {
+            "batchSize": 64,
+            "requestWindow": 16
+          },
+          "bytes": 134217745,
+          "elapsedMs": 81013.39999999997,
+          "payloadMbps": 13.25388096290244,
+          "verified": true,
+          "peakWrites": 1,
+          "peakBufferedAmount": 1119479,
+          "maxObservedRttMs": 566
+        },
+        {
+          "stage": "confirmation",
+          "passIndex": 1,
+          "settings": {
+            "batchSize": 32,
+            "requestWindow": 32
+          },
+          "bytes": 134217745,
+          "elapsedMs": 86306.20000000001,
+          "payloadMbps": 12.441075612180816,
+          "verified": true,
+          "peakWrites": 1,
+          "peakBufferedAmount": 2107968,
+          "maxObservedRttMs": 619
+        }
+      ]
+    }
+  ]
+}

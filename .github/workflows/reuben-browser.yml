@@ -1,0 +1,37 @@
+name: Reuben native browser comparison
+on:
+  pull_request:
+    paths: ['packages/phantom-core/experimental/**', 'tools/perf/reuben*', 'tools/perf/reuben/**', 'tests/reuben*', '.github/workflows/reuben-browser.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        chunk: [65536, 65492]
+    env:
+      PHANTOM_REUBEN_ABLATION: '1'
+      PHANTOM_REUBEN_BROWSER_CHUNK: ${{ matrix.chunk }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci --prefix tools/swarm
+      - name: Use installed Chrome
+        run: |
+          phantom_chrome=$(command -v google-chrome || command -v chromium)
+          test -n "$phantom_chrome"
+          echo "PHANTOM_CHROMIUM_EXECUTABLE=$phantom_chrome" >> "$GITHUB_ENV"
+      - run: node --test tests/reuben.test.js tests/reuben-comparison.test.js
+      - run: node tools/perf/reuben-browser.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: reuben-native-browser-results-${{ matrix.chunk }}
+          path: tools/perf/reuben/browser-results.json
+          if-no-files-found: error
