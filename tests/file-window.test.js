@@ -48,7 +48,7 @@ test('persisted progress preserves Breach byte, elapsed, verification and in-fli
  }finally{f.close();}
 });
 test('failed transfer resumes from verified cache and requests only the missing chunk',{timeout:10000},async t=>{
- t.mock.timers.enable({apis:['setTimeout']});
+ t.mock.timers.enable({apis:['setTimeout','Date']});
  let block=true,verified;const checkpoint=new Promise(resolve=>verified=resolve);
  const f=await fixture({timeout:1000,drop:i=>block&&i===5,onProgress:progress=>{if(progress.received===31)verified();}});
  try{
