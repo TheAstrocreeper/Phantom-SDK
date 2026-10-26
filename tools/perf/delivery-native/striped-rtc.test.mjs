@@ -10,6 +10,7 @@ function pair(options){const RTC=createStripedRTC(FakeRTC,options),a=new RTC(),b
 test('out-of-order associations preserve text/binary ordering and exact bytes',()=>{
  const {a,b,sender,receiver}=pair(),events=[];receiver.onmessage=e=>events.push(e.data);
  sender.send('metadata');sender.send(new Uint8Array([7,19,255]).buffer);sender.send('next');
+ assert.equal(a.pcs[0].dc.phantomStripe.count,3);assert.equal(a.pcs[2].dc.phantomStripe.index,2);assert.equal(a.pcs[0].dc.phantomStripe.group,a.pcs[2].dc.phantomStripe.group);
  const frames=a.pcs.flatMap(p=>p.sent).sort((x,y)=>Number(new DataView(x).getBigUint64(0)-new DataView(y).getBigUint64(0)));
  b.receive(frames[2]);assert.deepEqual(events,[]);b.receive(frames[0]);assert.deepEqual(events,['metadata']);b.receive(frames[1]);assert.equal(events[2],'next');assert.deepEqual([...new Uint8Array(events[1])],[7,19,255]);assert.equal(b.pendingBytes,0);
 });
