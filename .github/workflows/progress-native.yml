@@ -1,0 +1,32 @@
+name: Native slow-progress regression
+on:
+  pull_request:
+    paths: ['packages/phantom-core/src/files.js', 'packages/phantom-core/src/network-distribution.js', 'tests/distribution-progress.test.js', 'tools/perf/progress-native/**', '.github/workflows/progress-native.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  progress:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PHANTOM_SHAPED_RTT_MS: '80'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci --prefix tools/swarm
+      - run: sudo apt-get update && sudo apt-get install -y iproute2 socat
+      - name: Use installed Chrome
+        run: echo "PHANTOM_CHROMIUM_EXECUTABLE=$(command -v google-chrome)" >> "$GITHUB_ENV"
+      - run: node --test tests/distribution-progress.test.js tests/file-window.test.js
+      - run: bash tools/perf/progress-native/run.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-slow-progress-evidence
+          path: tools/perf/progress-native/results-*/
+          if-no-files-found: error

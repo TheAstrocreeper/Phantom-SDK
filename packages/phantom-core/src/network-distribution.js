@@ -48,21 +48,37 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
       if(type==='SEND_FILE_BIN_CHUNK')fire('FILE_BIN_CHUNK_SENT',{...payload,ok:false,error:'Distribution job retired before chunk send'});
       return;
     }
-    if(type==='SEND_DM'){link.dc.send(JSON.stringify({kind:'message',sys:payload.sys,file:payload.file}));return;}
+    if(type==='SEND_DM'){const data=JSON.stringify({kind:'message',sys:payload.sys,file:payload.file});if(['FILE_OFFER','PHANTOM_FILE_MANIFEST'].includes(payload.sys))payloadSend(link,data);else link.dc.send(data);return;}
     if(type==='SEND_FILE_BIN_CHUNK')void sendBinary(link,payload).catch(error);
   }};
   const files=createFileDistribution({core:transport,canUsePeer,crypto,allowed,emit:(type,payload)=>{
     if(type==='fileOffer'){const asset=assets.get(payload.manifest.id);if(!asset||asset.total!==payload.manifest.total||asset.distributionId!==payload.manifest.distributionId){error(Error('Authorized manifest metadata mismatch'));return;}const link=[...links.values()].find(l=>l.job.asset===payload.manifest.id&&l.job.receiver===self()&&l.peer===payload.from);if(link)startReceiver(link);}
     if(type==='fileTransferTiming'){emit('distributionTransferTiming',payload);return;}
-    if(type==='fileProgress'){const asset=assets.get(payload.id);if(asset){let indexes=progressIndexes.get(payload.id);if(!indexes){indexes=new Set(asset.holders.get(self())??[]);progressIndexes.set(payload.id,indexes);}indexes.add(payload.index);payload={...payload,received:indexes.size};}}
+    if(type==='fileProgress'){for(const link of links.values())if(link.job.asset===payload.id&&link.job.receiver===self()&&link.peer===payload.from)progress(link);const asset=assets.get(payload.id);if(asset){let indexes=progressIndexes.get(payload.id);if(!indexes){indexes=new Set(asset.holders.get(self())??[]);progressIndexes.set(payload.id,indexes);}indexes.add(payload.index);payload={...payload,received:indexes.size};}}
     emit(type==='fileProgress'?'distributionProgress':type==='fileError'?'distributionError':'distributionFileEvent',{fileEvent:type,...payload});
   },chunkStore,...Object.fromEntries(Object.entries(options).filter(([key])=>['chunkStore','requestTimeoutMs','requestWindow','maxAttemptsPerPeer','maxFileBytes'].includes(key)))});
   async function sendBinary(link,payload){let ok=false,reason='Distribution connection unavailable',bufferWaitMs=0;const waitAt=performance.now();try{
     await waitForDataChannelCapacity(link.dc,{bytes:payload.bytes.byteLength,timeoutMs:jobTimeoutMs,signal:link.sendController.signal});
     bufferWaitMs=performance.now()-waitAt;
     if(closed||links.get(link.job.id)!==link||!canUsePeer(link.peer)||!allowed(payload.file.id,payload.file.distributionId)||link.dc.readyState!=='open')throw Error('Distribution revoked or disconnected');
-    link.dc.send(JSON.stringify({kind:'binary',file:payload.file}));link.dc.send(payload.bytes);ok=true;
+    payloadSend(link,JSON.stringify({kind:'binary',file:payload.file}));payloadSend(link,payload.bytes);ok=true;
   }catch(e){reason=e.message;}fire('FILE_BIN_CHUNK_SENT',{...payload,ok,bufferWaitMs,error:ok?undefined:reason});}
+  // Job timeout is an idle budget. Control keepalives alone cannot renew it.
+  function progress(link){
+    if(links.get(link.job.id)!==link)return;
+    link.activity=(link.activity??0)+1;link.job.deadline=Date.now()+jobTimeoutMs;
+    if(isLeader()){const job=jobs.get(link.job.id);if(job)job.deadline=link.job.deadline;}
+  }
+  function observeDrain(link){
+    if(!link.dc)return;
+    const drained=Math.min(link.payloadEnd??0,Math.max(0,(link.submittedBytes??0)-link.dc.bufferedAmount));
+    if(drained>(link.drainedBytes??0)){link.drainedBytes=drained;progress(link);}
+    if((link.activity??0)!==(link.announcedActivity??0)&&Date.now()-(link.lastAnnouncement??0)>=Math.min(1000,jobTimeoutMs/3)){
+      link.lastAnnouncement=Date.now();link.announcedActivity=link.activity;
+      frame(leader(),{type:'progress',jobId:link.job.id,batch:link.job.batch??0,sequence:link.activity});
+    }
+  }
+  function payloadSend(link,data){link.dc.send(data);link.payloadEnd=link.submittedBytes;}
   function closeLink(id){pendingSignals.delete(id);closedJobs.set(id,Date.now());const link=links.get(id);if(!link)return;links.delete(id);link.sendController.abort();files.flushTimings(link.peer,link.job.asset);if(link.readyTimer)clearTimeout(link.readyTimer);link.readyTimer=null;link.pc.onicecandidate=null;link.pc.onconnectionstatechange=null;link.pc.ondatachannel=null;if(link.dc){link.dc.onopen=null;link.dc.onmessage=null;link.dc.onclose=null;try{link.dc.close();}catch{}}try{link.pc.close();}catch{}link.pendingIce.length=0;link.binary=null;emit('distributionConnectionClosed',{jobId:id,peer:link.peer});}
   async function receive(link){const job=link.job,startedAt=performance.now();let succeeded=false;
     emit('distributionBatchStarted',{jobId:job.id,batch:job.batch??0,total:job.indexes.length,peer:link.peer});try{
@@ -87,10 +103,12 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
   function probeSource(link){
     if(links.get(link.job.id)!==link||link.sourceReady||link.dc?.readyState!=='open'||Date.now()>link.job.deadline)return;
     traceChunk({direction:'send',kind:'ready_probe',jobId:link.job.id,peer:link.peer});
-    link.dc.send(JSON.stringify({kind:'ready_probe',jobId:link.job.id,batch:link.job.batch??0,file:{id:link.job.asset}}));
+    let hasManifest=false;try{files.getManifest(link.job.asset);hasManifest=true;}catch{}
+    link.dc.send(JSON.stringify({kind:'ready_probe',hasManifest,jobId:link.job.id,batch:link.job.batch??0,file:{id:link.job.asset}}));
     link.readyTimer=setTimeout(()=>{link.readyTimer=null;probeSource(link);},100);
   }
-  function bind(link,dc){if(dc.label!=='phantom-distribution'){dc.close();return;}link.dc=dc;dc.binaryType='arraybuffer';
+  function bind(link,dc){if(dc.label!=='phantom-distribution'){dc.close();return;}link.dc=dc;dc.binaryType='arraybuffer';link.submittedBytes=0;link.payloadEnd=0;link.drainedBytes=0;link.manifestOffsets=new Set();link.requestedIndexes=new Set();
+    const nativeSend=dc.send.bind(dc);dc.send=data=>{const result=nativeSend(data);link.submittedBytes+=typeof data==='string'?new TextEncoder().encode(data).byteLength:data.byteLength;return result;};
     dc.onopen=()=>{if(links.get(link.job.id)!==link||link.opened)return;link.opened=true;emit('distributionConnectionOpened',{jobId:link.job.id,peer:link.peer});
       if(link.job.source===self()&&!link.requireReady&&link.job.needsManifest)void files.share(link.peer,link.job.asset).catch(error);
       if(link.job.receiver===self()){if(link.requireReady)probeSource(link);startReceiver(link);}
@@ -100,13 +118,15 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
       let m;try{m=JSON.parse(event.data);}catch{return;}
       if(m.file?.id!==link.job.asset)return;
       if(m.kind==='ready_probe'&&m.jobId===link.job.id&&(m.batch??0)===(link.job.batch??0)&&link.job.source===self()){
-        if(link.job.needsManifest&&!link.manifestShared){link.manifestShared=true;void files.share(link.peer,link.job.asset).catch(error);}
+        if(link.job.needsManifest&&!link.manifestShared){link.manifestShared=true;if(m.hasManifest!==true)void files.share(link.peer,link.job.asset).catch(error);}
         dc.send(JSON.stringify({kind:'ready',jobId:link.job.id,batch:link.job.batch??0,file:{id:link.job.asset}}));return;
       }
       if(m.kind==='ready'&&m.jobId===link.job.id&&(m.batch??0)===(link.job.batch??0)&&link.job.receiver===self()){
         traceChunk({direction:'receive',kind:'ready',jobId:link.job.id,peer:link.peer});
         link.sourceReady=true;if(link.readyTimer)clearTimeout(link.readyTimer);link.readyTimer=null;startReceiver(link);return;
       }
+      if(m.kind==='message'&&m.sys==='PHANTOM_FILE_MANIFEST'&&Number.isInteger(m.file.offset)&&m.file.offset>=0&&Array.isArray(m.file.hashes)&&m.file.hashes.length>0&&m.file.hashes.length<=64&&m.file.offset+m.file.hashes.length<=assets.get(link.job.asset).total&&m.file.hashes.every(h=>/^[0-9a-f]{64}$/.test(h))&&!link.manifestOffsets.has(m.file.offset)){link.manifestOffsets.add(m.file.offset);progress(link);}
+      if(m.kind==='message'&&m.sys==='PHANTOM_FILE_REQUEST'&&link.job.indexes.includes(m.file.index)&&!link.requestedIndexes.has(m.file.index)){link.requestedIndexes.add(m.file.index);progress(link);}
       if(m.kind==='binary')link.binary=m.file;
       else if(m.kind==='message'){if(['PHANTOM_FILE_REQUEST','PHANTOM_FILE_MISSING'].includes(m.sys))traceChunk({direction:'receive',kind:m.sys,jobId:link.job.id,peer:link.peer,index:m.file.index});fire('INCOMING_MSG',{from:link.peer,sys:m.sys,file:m.file});}
     };
@@ -170,11 +190,20 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
         const link=links.get(job.id);
         if(!link?.reuse||link.dc?.readyState!=='open'||job.asset!==link.job.asset||job.source!==link.job.source||job.receiver!==link.job.receiver||body.previousBatch!==(link.job.batch??0)||job.batch!==body.previousBatch+1)return;
         if(job.receiver===self()&&!link.completed)return;
-        link.job=job;link.started=false;link.completed=false;link.sourceReady=false;link.binary=null;
+        link.job=job;link.started=false;link.completed=false;link.sourceReady=false;link.binary=null;link.requestedIndexes.clear();link.activity=0;link.announcedActivity=0;link.leases={};
         if(job.receiver===self())probeSource(link);
         return;
       }
       await open(job);const pending=pendingSignals.get(job.id)??[];pendingSignals.delete(job.id);for(const message of pending)await safeSignal(message.from,message.body);return;
+    }
+    if(body.type==='progress'&&isLeader()){
+      const job=jobs.get(body.jobId);if(!job||![job.source,job.receiver].includes(sender)||(body.batch??0)!==(job.batch??0)||!Number.isSafeInteger(body.sequence)||body.sequence<1)return;
+      job.progress??={};if(body.sequence<=(job.progress[sender]??0))return;job.progress[sender]=body.sequence;job.deadline=Date.now()+jobTimeoutMs;dirty=true;
+      for(const peer of [job.source,job.receiver])frame(peer,{type:'progressLease',jobId:job.id,batch:job.batch??0,sequence:body.sequence,reporter:sender});return;
+    }
+    if(body.type==='progressLease'&&sender===leader()){
+      const link=links.get(body.jobId);if(!link||(body.batch??0)!==(link.job.batch??0)||![link.job.source,link.job.receiver].includes(body.reporter)||!Number.isSafeInteger(body.sequence)||body.sequence<1)return;
+      link.leases??={};if(body.sequence<=(link.leases[body.reporter]??0))return;link.leases[body.reporter]=body.sequence;link.job.deadline=Date.now()+jobTimeoutMs;return;
     }
     if(body.type==='signal')return safeSignal(sender,body);
     if(body.type==='close'){const link=links.get(body.jobId);if((link&&(link.peer===sender||sender===leader()))||(!link&&sender===leader()&&typeof body.jobId==='string'&&body.jobId.length<=128))closeLink(body.jobId);return;}
@@ -189,7 +218,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
         const wanted=source?[...source].filter(i=>!have.has(i)).sort((a,b)=>a-b).slice(0,batchSize):[];
         if(wanted.length&&roster.includes(job.source)&&roster.includes(job.receiver)&&canUsePeer(job.source)&&canUsePeer(job.receiver)&&allowed(asset.id,asset.distributionId)){
           const previousBatch=job.batch??0;
-          const next={...job,indexes:wanted,needsManifest:false,batch:previousBatch+1,deadline:Date.now()+jobTimeoutMs};
+          const next={...job,indexes:wanted,needsManifest:false,batch:previousBatch+1,deadline:Date.now()+jobTimeoutMs,progress:{}};
           jobs.set(job.id,next);dirty=true;
           const continuation={type:'continue',previousBatch,job:next,asset:{id:asset.id,total:asset.total,distributionId:asset.distributionId,proof:asset.proof}};
           frame(next.source,continuation);frame(next.receiver,continuation);emit('distributionConnectionReused',{jobId:next.id,peer:next.source,batch:next.batch});return;
@@ -259,6 +288,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
   async function tick(){if(closed||!self()||restorationState==='failed')return;await restore();if(closed)return;for(const [id,at]of closedJobs)if(Date.now()-at>jobTimeoutMs*2)closedJobs.delete(id);for(const [id,pending]of pendingSignals)if(Date.now()-pending.createdAt>jobTimeoutMs)pendingSignals.delete(id);const token=leader()+':'+state().mirror;
     syncLeadership();
     if(isLeader()&&state().state==='admitted'&&checkedToken!==token&&!checking){checking=true;try{let approved=true;if(checkAdmin)approved=await checkAdmin();else{const orders=await readAdminOrders({networkId,peerId:self()});if(!Array.isArray(orders))throw Error('Admin orders must be an array');for(const record of orders){if(!await lifecycle?.apply(record))throw Error('Invalid admin order');}}if(approved&&!closed&&leaderToken===token){checkedToken=token;emit('distributionAdminChecked',{peerId:self()});}}catch(e){error(e);}finally{checking=false;}}
+    for(const link of links.values())observeDrain(link);
     if(Date.now()-lastReport>1000){if(state().role==='peer'&&state().state!=='admitted')core.command('PHANTOM_DIST_RECOVER_SYS',{});report();}schedule();mirror();
     for(const [id,link]of links)if(Date.now()>link.job.deadline){if(link.job.receiver===self()&&!link.completed)files.cancel(link.job.asset);closeLink(id);frame(leader(),{type:'failed',jobId:id});}
   }
