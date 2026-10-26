@@ -131,3 +131,22 @@ The dedicated Reuben native browser comparison workflow runs this in CI and uplo
 memory storage, not proof of internet or cellular performance. Both engines create
 their own data connection to the same admitted peer; reports expose their actual
 selected routes rather than assuming they matched.
+
+### Native result: prototype is not faster on loopback
+
+The real-Chrome CI comparison contradicted the scheduling model's apparent win.
+On 32 MiB + 17-byte transfers, the matched 65536-byte payload case averaged
+1892 ms for current and 7477 ms for Reuben. The matched 65492-byte payload case
+(so Reuben's complete frame fits 65536 bytes) averaged 1225 ms for current and
+6595 ms for Reuben. Both cases ran current/Reuben/Reuben/current, and all bytes
+verified. These jobs can experience different CI load; compare engines within a
+case, not the absolute times of separate jobs. Sender buffered-byte peaks remained
+around 2.1–2.2 MB; optional page-heap values varied with allocation and collection
+and do not establish an isolated memory advantage.
+
+Evidence: https://github.com/TheAstrocreeper/Phantom-SDK/actions/runs/40269332926
+Artifacts: reuben-native-browser-results-65536 and reuben-native-browser-results-65492.
+This is evidence against promoting this prototype as a universal speed improvement.
+The regression's cause is not established. Keep normal production transfers on the
+current engine. The opt-in Share comparison exists to measure both engines on an
+actual peer path, not to presume that Reuben wins there.
