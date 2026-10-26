@@ -1,46 +1,73 @@
-# Sustained native delivery comparison
+# Sustained native delivery experiments
 
-This experiment starts from the v0.1.32 SDK snapshot (`1cccb2d`). It does not
-change production file framing, retry behavior, integrity checks, or pacing.
+## Experimental SDK option
 
-The phone capture showed 83 MiB arriving over about 119 seconds, using one
-connection. Only 2.9 seconds were spent between the 41 completed batches.
-The remaining slowdown cannot be explained by those batch gaps alone.
+`createNetworkDistribution({..., options: {transferLanes: 3}})` carries one
+ordinary file-distribution job over three independent reliable ordered native
+WebRTC associations. The default remains `transferLanes: 1`. Both endpoints
+must explicitly opt in. This prototype uses a bundled signaling description;
+it does not negotiate or fall back with an unmodified peer.
 
-Run `PHANTOM_SHAPED_RTT_MS=80 PHANTOM_SHAPED_LOSS=0.1
-PHANTOM_CHROMIUM_EXECUTABLE=/path/to/google-chrome bash
-tools/perf/delivery-native/run.sh` on a Linux host supporting private mount,
-network, and PID namespaces. The GitHub workflow runs loss values 0, 0.1, and
-1 percent separately. Existing host interfaces and qdiscs are untouched.
+`maxConnections` remains the physical connection budget: with the default
+budget of three, a striped endpoint can run one distribution job at a time.
+No extra pacing timer, hash bypass, extra chunk request window, or extra batch
+is introduced. Nine-byte envelopes restore message order across associations;
+receive reordering is bounded to 4 MiB and a 4096-message sequence horizon.
+Failure of any component closes all components and returns control to the
+existing SDK recovery path. Extra associations consume additional connection
+and congestion-control resources; an aggregate gain under artificial loss is
+not an increase in physical link capacity.
 
-Each profile transfers a complete 32 MiB payload through two actual Chrome
-processes. Compare the actual SDK (64 KiB chunks, 32-chunk batches/window)
-with plain reliable ordered data channels using 64 KiB and 16 KiB messages.
-Raw channels retain a bounded 2 MiB send queue. Each case runs twice, reversing
-case order for the second repeat. The receiver verifies all bytes. SDK chunks
-are additionally checked through the SDK's normal SHA-256 verification and
-independently read from the chunk store after completion.
+## Reproduction
 
-UDP in both directions receives 40 ms egress delay and a 15.6 Mbit/s rate limit.
-Independent random packet loss is injected by the kernel. TCP page loading and
-signaling remain unshaped. This is a controlled comparison, **not** an estimate
-of cellular capacity or a claim that the user's path has that loss rate.
+Use Linux with private mount/network/PID namespaces and native Chrome:
 
-The report includes received payload timing, 2 MiB progress marks, native
-transport counters/ICE RTT, sender queue sizes, retry/manifest/close counters,
-completion status, and kernel qdisc statistics. The primary reported payload
-rate excludes the first 2 MiB. A 90-second receive deadline records an explicitly
-incomplete case; partial progress is not presented as complete throughput.
-The job completing successfully only means the experiment ran without a
-harness/integrity error. Inspect completion and results for every case.
+```sh
+PHANTOM_SHAPED_RTT_MS=80 PHANTOM_SHAPED_LOSS=0.1 \
+PHANTOM_CHROMIUM_EXECUTABLE=/path/to/google-chrome \
+bash tools/perf/delivery-native/run.sh
+```
 
-Interpretation:
+The current workflow runs the full SDK unit suite and two native profiles:
+zero loss and 0.1% independent random loss. Both directions receive 40 ms delay
+and a 15.6 Mbit/s UDP rate limit. Page/signaling TCP remains unshaped. Host
+interfaces/qdiscs are untouched. Loss conditions are controlled experiments,
+not a measured model of the phone path.
 
-- SDK slower than raw 64 KiB: investigate application framing, feedback and
-  receiver behavior before blaming the transport.
-- Raw 16 KiB consistently faster than raw 64 KiB: smaller wire messages merit
-  an SDK implementation experiment, retaining hashes and reliable delivery.
-- SDK and raw degrade together: this harness has isolated sensitivity shared
-  by reliable WebRTC delivery. It has not identified the phone's network cause.
-- All cases remain fast: the actual slowdown has not been reproduced; do not
-  promote an unrelated scheduling change as the fix.
+The final experiment prepares the actual SDK manifest for a virtual 1200 MiB
+zero-filled file using bounded slice allocation, then receives and independently
+checks the first 32 MiB through normal SDK hashing and storage. It does not
+claim full 1200 MiB completion. Rates exclude the first 2 MiB. Each case runs
+twice, reversing case order. A 90-second receive deadline is recorded as an
+incomplete case, never as a completed transfer. Inspect individual results;
+a successful job means the harness/integrity checks ran, not that every case
+completed. Native transport queues/ICE RTT/counters and kernel qdisc counters
+are retained in artifacts. Manifest offer counters observe native JSON only
+and are not comparable when the striped envelope is enabled.
+
+## Evidence before the final large-manifest check
+
+- [SDK versus plain channel, run 40295525316](https://github.com/TheAstrocreeper/Phantom-SDK/actions/runs/40295525316):
+  at 0.1% loss SDK 4.55/5.41 Mbps, plain 64 KiB 3.57/4.96 Mbps, plain
+  16 KiB 5.14/5.15 Mbps. At 1% loss all were around 1.3–1.4 Mbps and none
+  completed 32 MiB before the deadline. Shrinking messages did not remove
+  the severe-loss slowdown.
+- [Association/stream control, run 40302539464](https://github.com/TheAstrocreeper/Phantom-SDK/actions/runs/40302539464):
+  at 0.1% loss one association/one stream 4.63/5.09 Mbps; one association/
+  three streams 4.84/4.47 Mbps; three independent associations 12.05/11.62 Mbps.
+  Aggregate application send buffering was held at 2 MiB.
+- [SDK envelope prototype, run 40303522000](https://github.com/TheAstrocreeper/Phantom-SDK/actions/runs/40303522000):
+  complete 32 MiB files passed independent byte verification. At 0.1% loss,
+  default SDK 4.074/4.075 Mbps; striped SDK 9.29/8.56 Mbps. Zero-loss SDK
+  remained 12.48–12.51 Mbps for both. This precedes the actual SDK option and
+  larger manifest check; the final workflow tests those separately.
+
+The original raw-channel comparison is retained in `comparison.mjs` with its
+own unchanged fixture; the parallel and SDK experiments are reproducible at
+the exact commits in their action runs. The adapter unit tests check actual
+cross-association reordering, incomplete setup, malformed/duplicate frames,
+receive bounds, and complete teardown after a native component failure.
+
+These results establish a candidate worth testing through the app. They do
+not establish the cause of the user's cellular slowdown or promise the same
+improvement on that path. No Phantom Share deployment is changed by this PR.

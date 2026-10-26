@@ -1,3 +1,4 @@
+import {createStripedRTC} from './striped-distribution-rtc.js';
 import {defaultRTCConfiguration} from './rtc-configuration.js';
 import {waitForDataChannelCapacity} from './data-channel-capacity.js';
 import {createFileDistribution,createMemoryChunkStore} from './files.js';
@@ -8,6 +9,10 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
   emit=()=>{}, allowed=()=>true, canUsePeer=()=>true, readAdminOrders=async()=>[], checkAdmin, options={}}) {
   const reuseConnections=options.reuseConnections!==false;
   const maxConnections=options.maxConnections??3, batchSize=options.batchSize??8;
+  const transferLanes=options.transferLanes??1;
+  if(![1,3].includes(transferLanes)||maxConnections<transferLanes)throw new TypeError('Invalid distribution transfer lanes');
+  const maxJobs=Math.floor(maxConnections/transferLanes);
+  const DistributionRTC=transferLanes===1?runtime.RTCPeerConnection:createStripedRTC(runtime.RTCPeerConnection,{lanes:transferLanes});
   const jobTimeoutMs=options.jobTimeoutMs??15000, intervalMs=options.intervalMs??250;
   if(!Number.isInteger(maxConnections)||maxConnections<1||maxConnections>16||!Number.isInteger(batchSize)||batchSize<1||batchSize>64||!Number.isFinite(jobTimeoutMs)||jobTimeoutMs<100||!Number.isFinite(intervalMs)||intervalMs<10)throw new TypeError('Invalid distribution limits');
   const chunkStore=options.chunkStore??createMemoryChunkStore();
@@ -138,11 +143,11 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
       if(interrupted)frame(leader(),{type:'failed',jobId:link.job.id,reason:'channel_closed'});
     }};
   }
-  async function open(job){if(links.has(job.id)||closedJobs.has(job.id))return;if(links.size>=maxConnections){frame(leader(),{type:'failed',jobId:job.id});return;}
+  async function open(job){if(links.has(job.id)||closedJobs.has(job.id))return;if(links.size>=maxJobs){frame(leader(),{type:'failed',jobId:job.id});return;}
     const asset=assets.get(job.asset);if(!asset||!allowed(asset.id,asset.distributionId))return;
     const peer=job.source===self()?job.receiver:job.source;
     try{
-    const pc=new runtime.RTCPeerConnection(options.rtcConfiguration??defaultRTCConfiguration()),link={pc,peer,job,sendController:new AbortController(),started:false,pendingIce:[]};links.set(job.id,link);
+    const pc=new DistributionRTC(options.rtcConfiguration??defaultRTCConfiguration()),link={pc,peer,job,sendController:new AbortController(),started:false,pendingIce:[]};links.set(job.id,link);
     pc.onicecandidate=e=>{if(e.candidate)frame(peer,{type:'signal',jobId:job.id,candidate:e.candidate.toJSON?.()??e.candidate});};
     pc.onconnectionstatechange=()=>{if(['failed','closed'].includes(pc.connectionState)&&links.get(job.id)===link){
       const interrupted=job.receiver===self()&&!link.completed;
@@ -155,7 +160,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
     }
     }catch(e){closeLink(job.id);frame(leader(),{type:'failed',jobId:job.id,reason:'rtc_setup_failed'});emit('distributionConnectionFailed',{jobId:job.id,peer,reason:'rtc_setup_failed',error:e.message});error(e);}
   }
-  async function signal(from,body){if(closedJobs.has(body.jobId))return;const link=links.get(body.jobId);if(!link){if(pendingSignals.size<maxConnections*2){const pending=pendingSignals.get(body.jobId)??[];pending.createdAt??=Date.now();if(pending.length<64)pending.push({from,body});pendingSignals.set(body.jobId,pending);}return;}if(link.peer!==from)return;
+  async function signal(from,body){if(closedJobs.has(body.jobId))return;const link=links.get(body.jobId);if(!link){if(pendingSignals.size<maxJobs*2){const pending=pendingSignals.get(body.jobId)??[];pending.createdAt??=Date.now();if(pending.length<64)pending.push({from,body});pendingSignals.set(body.jobId,pending);}return;}if(link.peer!==from)return;
     if(body.description){link.requireReady=body.readyProtocol===1;link.reuse=reuseConnections&&body.reuseProtocol===1;await link.pc.setRemoteDescription(body.description);for(const candidate of link.pendingIce.splice(0))await link.pc.addIceCandidate(candidate);
       if(body.description.type==='offer'){await link.pc.setLocalDescription(await link.pc.createAnswer());frame(from,{type:'signal',jobId:body.jobId,readyProtocol:1,reuseProtocol:reuseConnections?1:0,description:{type:link.pc.localDescription.type,sdp:link.pc.localDescription.sdp}});}
     }else if(body.candidate){if(link.pc.remoteDescription)await link.pc.addIceCandidate(body.candidate);else if(link.pendingIce.length<64)link.pendingIce.push(body.candidate);}
@@ -243,8 +248,8 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
         if(asset.proof.recipients&&!asset.proof.recipients.includes(receiver))continue;
         const have=asset.holders.get(receiver)??new Set();if((have.size===asset.total&&(asset.total>0||asset.holders.has(receiver)))||[...jobs.values()].some(j=>j.receiver===receiver))continue;
         const counts=peer=>[...jobs.values()].filter(j=>j.source===peer||j.receiver===peer).length;
-        if(counts(receiver)>=maxConnections)continue;
-        const candidates=[...asset.holders].filter(([peer,indexes])=>peer!==receiver&&live.has(peer)&&counts(peer)<maxConnections&&(blockedUntil.get(peer+':'+receiver)??0)<=now&&(asset.total===0||[...indexes].some(i=>!have.has(i)))).sort((a,b)=>counts(a[0])-counts(b[0])||a[1].size-b[1].size||a[0].localeCompare(b[0]));
+        if(counts(receiver)>=maxJobs)continue;
+        const candidates=[...asset.holders].filter(([peer,indexes])=>peer!==receiver&&live.has(peer)&&counts(peer)<maxJobs&&(blockedUntil.get(peer+':'+receiver)??0)<=now&&(asset.total===0||[...indexes].some(i=>!have.has(i)))).sort((a,b)=>counts(a[0])-counts(b[0])||a[1].size-b[1].size||a[0].localeCompare(b[0]));
         if(!candidates.length)continue;const [source,indexes]=candidates[0],wanted=[...indexes].filter(i=>!have.has(i)).sort((a,b)=>rarity(a)-rarity(b)||a-b).slice(0,batchSize);
         const job={id:crypto.randomUUID(),asset:asset.id,source,receiver,indexes:wanted,needsManifest:!asset.holders.has(receiver),deadline:now+jobTimeoutMs};jobs.set(job.id,job);for(const i of wanted)copies.set(i,rarity(i)+1);dirty=true;
         const body={type:'job',job,asset:{id:asset.id,total:asset.total,distributionId:asset.distributionId,proof:asset.proof}};
