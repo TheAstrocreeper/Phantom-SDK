@@ -6,6 +6,7 @@ export function impairedRTC({oneWayMs=0,mbps=100,recoverEvery=0}={}){
  const timers=new Set(),upgraded=new WeakSet(),state=new WeakMap(),all=[];
  function upgrade(ch){
   if(upgraded.has(ch))return ch;upgraded.add(ch);const events=new EventTarget();
+  let onopen;Object.defineProperty(ch,'onopen',{configurable:true,get:()=>()=>{events.dispatchEvent(new Event('open'));onopen?.();},set:value=>{onopen=value;}});
   ch.ordered=true;ch.addEventListener=events.addEventListener.bind(events);ch.removeEventListener=events.removeEventListener.bind(events);ch.dispatchEvent=events.dispatchEvent.bind(events);
   const close=ch.close.bind(ch);ch.close=()=>{if(ch.readyState==='closed')return;close();events.dispatchEvent(new Event('close'));};
   return ch;
