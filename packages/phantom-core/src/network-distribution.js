@@ -9,10 +9,11 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
   emit=()=>{}, allowed=()=>true, canUsePeer=()=>true, readAdminOrders=async()=>[], checkAdmin, options={}}) {
   const reuseConnections=options.reuseConnections!==false;
   const maxConnections=options.maxConnections??3, batchSize=options.batchSize??8;
-  const transferLanes=options.transferLanes??1;
+  const transferLanes=options.transferLanes??1,stripeDelivery=options.stripeDelivery??'ordered';
+  if(!['ordered','chunks'].includes(stripeDelivery)||stripeDelivery==='chunks'&&transferLanes!==3)throw new TypeError('Invalid stripe delivery mode');
   if(![1,3].includes(transferLanes)||maxConnections<transferLanes)throw new TypeError('Invalid distribution transfer lanes');
   const maxJobs=Math.floor(maxConnections/transferLanes);
-  const DistributionRTC=transferLanes===1?runtime.RTCPeerConnection:createStripedRTC(runtime.RTCPeerConnection,{lanes:transferLanes});
+  const DistributionRTC=transferLanes===1?runtime.RTCPeerConnection:createStripedRTC(runtime.RTCPeerConnection,{lanes:transferLanes,delivery:stripeDelivery});
   const jobTimeoutMs=options.jobTimeoutMs??15000, intervalMs=options.intervalMs??250;
   if(!Number.isInteger(maxConnections)||maxConnections<1||maxConnections>16||!Number.isInteger(batchSize)||batchSize<1||batchSize>64||!Number.isFinite(jobTimeoutMs)||jobTimeoutMs<100||!Number.isFinite(intervalMs)||intervalMs<10)throw new TypeError('Invalid distribution limits');
   const chunkStore=options.chunkStore??createMemoryChunkStore();
