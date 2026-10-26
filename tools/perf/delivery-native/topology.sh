@@ -25,7 +25,7 @@ for n in 1 2; do
  ip netns exec "shaped$n" sysctl -qw net.ipv6.conf.all.disable_ipv6=1
  # TCP (page load and signaling) stays outside the impaired UDP band.
  ip netns exec "shaped$n" tc qdisc add dev eth0 root handle 1: prio bands 3 priomap 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
- ip netns exec "shaped$n" tc qdisc add dev eth0 parent 1:3 handle 30: netem delay "$((PHANTOM_SHAPED_RTT_MS/2))ms" rate 15600kbit loss "${PHANTOM_SHAPED_LOSS:?loss required}%" seed "$((7300+n))" limit 10000
+ ip netns exec "shaped$n" tc qdisc add dev eth0 parent 1:3 handle 30: netem delay "$((PHANTOM_SHAPED_RTT_MS/2))ms" rate 15600kbit loss "${PHANTOM_SHAPED_LOSS:?loss required}%" limit 10000
  ip netns exec "shaped$n" tc filter add dev eth0 protocol ip parent 1: prio 1 u32 match ip protocol 17 0xff flowid 1:3
  ip netns exec "shaped$n" socat TCP-LISTEN:8080,bind=127.0.0.1,reuseaddr,fork TCP:10.211.0.1:8080 > "$report/proxy-$n.log" 2>&1 &
 done
