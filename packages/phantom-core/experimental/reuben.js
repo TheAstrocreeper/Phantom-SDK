@@ -22,10 +22,11 @@ export function decodeReubenFrame(frame){
  * Whole-file request uses its rolling request window, without coordinator batches.
  * Caller owns admission, publication authorization and the channel lifecycle.
  */
-export function createReubenTransfer({channel,peerId,crypto=globalThis.crypto,chunkStore,allowed=()=>true,canUsePeer=()=>true,emit=()=>{},requestWindow=32,highWaterMark=16*1024*1024,lowWaterMark=4*1024*1024,requestTimeoutMs=15000,maxFileBytes,maxMessageSize=65536,signal}){
+export function createReubenTransfer({channel,peerId,crypto=globalThis.crypto,chunkStore,allowed=()=>true,canUsePeer=()=>true,emit=()=>{},requestWindow=32,highWaterMark=16*1024*1024,lowWaterMark=4*1024*1024,requestTimeoutMs=15000,maxFileBytes,maxMessageSize=65536,signal,wireFormat='reuben'}){
  if(!channel?.addEventListener||!channel?.send||! /^[0-9a-f]{16}$/.test(peerId)||channel.ordered===false||channel.maxRetransmits!=null||channel.maxPacketLifeTime!=null)throw new TypeError('Supply an admitted reliable ordered channel and peer');
  if(!Number.isSafeInteger(maxMessageSize)||maxMessageSize<HEADER+1024||!Number.isSafeInteger(highWaterMark)||highWaterMark<Math.min(MAX_PAYLOAD+HEADER,maxMessageSize)||!Number.isSafeInteger(lowWaterMark)||lowWaterMark<0||lowWaterMark>=highWaterMark)throw new TypeError('Invalid Reuben frame or buffer limits');
- let closed=false,service;const listeners=new Set(),controller=new AbortController();
+ if(!['reuben','split'].includes(wireFormat))throw new TypeError('Invalid experimental wire format');
+ let closed=false,service,pendingBinary;const listeners=new Set(),controller=new AbortController();
  const fire=(type,payload)=>{for(const fn of listeners)fn({type,payload});};
  const usable=()=>!closed&&channel.readyState==='open'&&canUsePeer(peerId);
  const core={onEvent(fn){listeners.add(fn);return()=>listeners.delete(fn);},command(type,payload){
@@ -37,11 +38,12 @@ export function createReubenTransfer({channel,peerId,crypto=globalThis.crypto,ch
   void (async()=>{let ok=false,error,bufferWaitMs=0;
    try{
     if(!usable()||!allowed(payload.file.id,payload.file.distributionId))throw Error('Reuben unavailable');
-    const frame=encodeReubenFrame(payload.file,payload.bytes),at=performance.now();
+    const frame=wireFormat==='split'?payload.bytes:encodeReubenFrame(payload.file,payload.bytes),at=performance.now();
     if(frame.byteLength>maxMessageSize)throw Error('Reuben frame exceeds negotiated message limit');
     await waitForDataChannelCapacity(channel,{bytes:frame.byteLength,highWaterMark,lowWaterMark,timeoutMs:requestTimeoutMs,signal:controller.signal});
     bufferWaitMs=performance.now()-at;
     if(!usable()||!allowed(payload.file.id,payload.file.distributionId))throw Error('Reuben unavailable');
+    if(wireFormat==='split')channel.send(JSON.stringify({kind:'binary',file:payload.file}));
     channel.send(frame);ok=true;
    }catch(e){error=e.message;}
    fire('FILE_BIN_CHUNK_SENT',{...payload,ok,error,bufferWaitMs});
@@ -57,9 +59,10 @@ export function createReubenTransfer({channel,peerId,crypto=globalThis.crypto,ch
  const receive=event=>{
   if(!usable())return;
   try{
-   if(event.data instanceof ArrayBuffer){if(event.data.byteLength>maxMessageSize)throw Error('Reuben frame exceeds negotiated message limit');const chunk=decodeReubenFrame(event.data);fire('FILE_BIN_CHUNK',{from:peerId,...chunk});return;}
+   if(event.data instanceof ArrayBuffer){if(event.data.byteLength>maxMessageSize)throw Error('Reuben frame exceeds negotiated message limit');const chunk=wireFormat==='split'?{file:pendingBinary,bytes:event.data}:decodeReubenFrame(event.data);pendingBinary=null;if(!chunk.file)throw Error('Missing binary metadata');fire('FILE_BIN_CHUNK',{from:peerId,...chunk});return;}
    if(typeof event.data!=='string'||event.data.length>65536)throw Error('Invalid Reuben control frame');
    const m=JSON.parse(event.data);
+   if(wireFormat==='split'&&m.kind==='binary'){if(pendingBinary||!/^sha256:[0-9a-f]{64}$/.test(m.file?.id)||!Number.isInteger(m.file.index)||m.file.index<0)throw Error('Invalid binary metadata');pendingBinary=m.file;return;}
    if(m.reuben===1&&m.sys==='REUBEN_RECEIPT'){
     const manifest=service.getManifest(m.file?.id);
     if(m.file.hashRoot!==manifest.hashRoot||m.file.total!==manifest.total||m.file.bytes!==manifest.size||!allowed(manifest.id,manifest.distributionId))throw Error('Invalid Reuben receipt');

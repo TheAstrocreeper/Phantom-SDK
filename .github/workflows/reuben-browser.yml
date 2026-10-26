@@ -14,6 +14,7 @@ jobs:
       matrix:
         chunk: [65536, 65492]
     env:
+      PHANTOM_REUBEN_ABLATION: '1'
       PHANTOM_REUBEN_BROWSER_CHUNK: ${{ matrix.chunk }}
     steps:
       - uses: actions/checkout@v4

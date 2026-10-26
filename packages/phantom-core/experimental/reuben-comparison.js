@@ -4,6 +4,7 @@ import {createReubenTransfer} from './reuben.js';
 
 export const reubenComparisonVersion='reuben-browser-v1';
 export const reubenComparisonCases=Object.freeze(['current','reuben','reuben','current']);
+export const reubenAblationEngines=Object.freeze(['current','reuben','reuben-split','reuben-batches','reuben-trusted']);
 const pattern=i=>(i*17+29)%251;
 const scope=address=>!address?'unknown':address.endsWith('.local')?'mdns':address==='::1'||/^127\./.test(address)?'loopback':/^(169\.254\.|fe[89ab])/i.test(address)?'link-local':/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|f[cd])/i.test(address)?'private':'public';
 /** One bounded diagnostic endpoint. Caller authenticates the peer and transports control messages.
@@ -11,7 +12,14 @@ const scope=address=>!address?'unknown':address.endsWith('.local')?'mdns':addres
  * Generates test data only. No user files. No default application transfer path changes.
  */
 export function createReubenComparisonEndpoint({engine,role,selfId,peerId,networkId,adminPublicKey,admin,send,store=createMemoryChunkStore(),runtime=globalThis,rtcConfiguration={iceServers:[]},bytes=32*1024*1024+17,chunkSize=65536,onComplete=()=>{},onError=()=>{},onProgress=()=>{},isAllowed=()=>true}){
- if(!['current','reuben'].includes(engine)||!['sender','receiver'].includes(role)||![selfId,peerId].every(id=>/^[a-f0-9]{16}$/.test(id))||selfId===peerId||!Number.isSafeInteger(bytes)||bytes<1||bytes>64*1024*1024||!Number.isInteger(chunkSize)||chunkSize<1024||chunkSize>65536)throw Error('Invalid comparison settings');
+ if(!reubenAblationEngines.includes(engine)||!['sender','receiver'].includes(role)||![selfId,peerId].every(id=>/^[a-f0-9]{16}$/.test(id))||selfId===peerId||!Number.isSafeInteger(bytes)||bytes<1||bytes>64*1024*1024||!Number.isInteger(chunkSize)||chunkSize<1024||chunkSize>65536)throw Error('Invalid comparison settings');
+ const timings=[];let requestBoundaryCount=0,lastWriteAt=null,assemblyMs=0,completedAt=null;
+ const suppliedStore=store;
+ if(engine==='reuben-trusted'){
+  // Same copies and input hashing; expose committed indexes so completion avoids rereading/rehashing.
+  const inventory=new Map();
+  store={async get(id,index){return suppliedStore.get(id,index);},async put(id,index,data){await suppliedStore.put(id,index,data);if(!inventory.has(id))inventory.set(id,new Set());inventory.get(id).add(index);},async getVerifiedIndexes(id){return [...(inventory.get(id)??[])];},async getFile(id,m){const at=performance.now(),parts=[];for(let i=0;i<m.total;i++)parts.push(await suppliedStore.get(id,i));const blob=new Blob(parts,{type:m.type});assemblyMs+=performance.now()-at;return blob;}};
+ }
  const sender=role==='sender',sourceId=sender?selfId:peerId,receiverId=sender?peerId:selfId;
  let closed=false,startedAt=null,completed=false,pc,dc,adapter,distribution,coreHandler,payload,preparationMs=0,activeWrites=0,peakWrites=0,writeMs=0,committedBytes=0,sequence=0;
  const connections=new Set(),channels=new Map(),pendingIce=[],samples=[];let sampleBusy=false;
@@ -19,7 +27,7 @@ export function createReubenComparisonEndpoint({engine,role,selfId,peerId,networ
  const alive=()=>!closed&&isAllowed();
  const fail=error=>{if(closed)return;onError(error instanceof Error?error:Error(String(error)));close();};
  const transmit=message=>{if(alive())send(message);};
- const measuredStore=new Proxy(store,{get(target,key){if(key==='put')return async(...args)=>{activeWrites++;peakWrites=Math.max(peakWrites,activeWrites);const at=performance.now();try{await target.put(...args);}finally{writeMs+=performance.now()-at;activeWrites--;}};const value=Reflect.get(target,key);return typeof value==='function'?value.bind(target):value;}});
+ const measuredStore=new Proxy(store,{get(target,key){if(key==='put')return async(...args)=>{activeWrites++;peakWrites=Math.max(peakWrites,activeWrites);const at=performance.now();try{await target.put(...args);}finally{writeMs+=performance.now()-at;lastWriteAt=performance.now();activeWrites--;}};const value=Reflect.get(target,key);return typeof value==='function'?value.bind(target):value;}});
  function observe(channel,connection){
   channel.binaryType='arraybuffer';const id=++sequence,row={id,connection,sentBytes:0,receivedBytes:0,sentCount:0,receivedCount:0,peakBufferedAmount:0};channels.set(channel,row);
   const original=channel.send.bind(channel);channel.send=data=>{const result=original(data);if(data instanceof ArrayBuffer||ArrayBuffer.isView(data)){row.sentBytes+=data.byteLength;row.sentCount++;row.peakBufferedAmount=Math.max(row.peakBufferedAmount,channel.bufferedAmount);}return result;};
@@ -48,13 +56,13 @@ export function createReubenComparisonEndpoint({engine,role,selfId,peerId,networ
  const startClock=()=>{startedAt??=performance.now();};
  const progress=data=>{if(!alive())return;committedBytes=engine==='current'?Math.min(bytes,(data.received??0)*chunkSize):(data.verifiedBytes??0);onProgress({engine,bytes:committedBytes,total:bytes});};
  async function complete(blob){
-  if(completed||!alive())return;completed=true;committedBytes=bytes;const elapsedMs=performance.now()-startedAt,verificationAt=performance.now();
+  if(completed||!alive())return;completed=true;completedAt=performance.now();committedBytes=bytes;const elapsedMs=performance.now()-startedAt,verificationAt=performance.now();
   if(blob.size!==bytes)throw Error('Comparison size mismatch');
   for(let offset=0;offset<bytes;offset+=1024*1024){const block=new Uint8Array(await blob.slice(offset,offset+1024*1024).arrayBuffer());for(let i=0;i<block.length;i++)if(block[i]!==pattern(offset+i))throw Error('Comparison content mismatch');if(!alive())return;}
   const verificationMs=performance.now()-verificationAt;await sample();
   if(alive())onComplete({...report(),elapsedMs,verificationMs,verified:true});
  }
- function report(){return {schema:1,version:reubenComparisonVersion,engine,role,bytes,chunkSize,requestWindow:32,storage:'caller-provided',committedBytes,preparationMs,elapsedMs:startedAt===null?null:performance.now()-startedAt,peakWrites,writeMs,samples:structuredClone(samples),channels:[...channels.values()].map(({id,sentBytes,receivedBytes,sentCount,receivedCount,peakBufferedAmount})=>({id,sentBytes,receivedBytes,sentCount,receivedCount,peakBufferedAmount})),memoryScope:'heapBytes is optional whole-page heap; buffered bytes and writes are queue measurements, not total process memory',sctpCounters:'unavailable'};}
+ function report(){return {schema:1,version:reubenComparisonVersion,engine,role,bytes,chunkSize,requestWindow:32,wireFormat:engine==='current'?'sdk-split':engine==='reuben-split'?'split':'reuben',requestMode:engine==='current'?'coordinator-batches-of-32':engine==='reuben-batches'?'batches-of-32':'rolling',storage:engine==='reuben-trusted'?'verified-inventory-memory':'caller-provided',requestBoundaryCount,lastWriteToCompleteMs:completedAt!==null&&lastWriteAt!==null?completedAt-lastWriteAt:null,assemblyMs,timings:structuredClone(timings),committedBytes,preparationMs,elapsedMs:startedAt===null?null:performance.now()-startedAt,peakWrites,writeMs,samples:structuredClone(samples),channels:[...channels.values()].map(({id,sentBytes,receivedBytes,sentCount,receivedCount,peakBufferedAmount})=>({id,sentBytes,receivedBytes,sentCount,receivedCount,peakBufferedAmount})),memoryScope:'heapBytes is optional whole-page heap; buffered bytes and writes are queue measurements, not total process memory',sctpCounters:'unavailable'};}
  if(engine==='current'){
   distribution=createNetworkDistribution({networkId,adminPublicKey,runtime:{crypto:runtime.crypto??crypto,RTCPeerConnection:ObservedRTC},canUsePeer:id=>alive()&&[selfId,peerId].includes(id),allowed:()=>alive(),
    core:{getState:()=>({peerId:selfId,leader:sourceId,mirror:receiverId,role:sender?'syscon1':'syscon2',state:'admitted',admitted:true}),onEvent(fn){coreHandler=fn;return()=>{coreHandler=null;};},command(type,{frame}){if(type!=='PHANTOM_DIST_SEND')return;if(frame.to===selfId)queueMicrotask(()=>coreHandler?.({type:'PHANTOM_DIST',payload:{from:selfId,frame}}));else transmit({type:'distribution',frame});}},
@@ -69,13 +77,13 @@ export function createReubenComparisonEndpoint({engine,role,selfId,peerId,networ
   if(channel.label!=='phantom-reuben-comparison')throw Error('Unexpected comparison channel');
   const ready=()=>{
    if(!alive()||adapter)return;
-   adapter=createReubenTransfer({channel,peerId,crypto:runtime.crypto??crypto,chunkStore:measuredStore,maxMessageSize:pc.sctp?.maxMessageSize||65536,canUsePeer:id=>id===peerId&&alive(),allowed:()=>alive(),signal:controller.signal,requestTimeoutMs:30000,maxFileBytes:bytes,
-    emit:(type,data)=>{if(type==='fileOffer'&&!sender){startClock();void adapter.request(data.manifest.id,{peers:[peerId]}).then(complete).catch(fail);}if(type==='fileProgress'&&!sender)progress(data);if(['fileError','reubenProtocolError'].includes(type))fail(Error(data.error||type));}
+   adapter=createReubenTransfer({channel,peerId,crypto:runtime.crypto??crypto,chunkStore:measuredStore,maxMessageSize:pc.sctp?.maxMessageSize||65536,wireFormat:engine==='reuben-split'?'split':'reuben',canUsePeer:id=>id===peerId&&alive(),allowed:()=>alive(),signal:controller.signal,requestTimeoutMs:30000,maxFileBytes:bytes,
+    emit:(type,data)=>{if(type==='fileTransferTiming')timings.push(data);if(type==='fileOffer'&&!sender){startClock();void (async()=>{if(engine==='reuben-batches'){for(let offset=0;offset<data.manifest.total;offset+=32){requestBoundaryCount++;await adapter.request(data.manifest.id,{peers:[peerId],indexes:Array.from({length:Math.min(32,data.manifest.total-offset)},(_,i)=>offset+i)});}}await complete(await adapter.request(data.manifest.id,{peers:[peerId]}));})().catch(fail);}if(type==='fileProgress'&&!sender)progress(data);if(['fileError','reubenProtocolError'].includes(type))fail(Error(data.error||type));}
    });
   };
   channel.addEventListener('open',ready,{once:true});if(channel.readyState==='open')ready();
  }
- if(engine==='reuben'){
+ if(engine!=='current'){
   pc=new ObservedRTC(rtcConfiguration);pc.ondatachannel=e=>{try{attach(e.channel);}catch(error){fail(error);}};
   pc.onicecandidate=e=>{if(e.candidate)transmit({type:'rtc',candidate:e.candidate.toJSON?.()??e.candidate});};
   pc.onconnectionstatechange=()=>{if(alive()&&!completed&&['failed','closed','disconnected'].includes(pc.connectionState))fail(Error('Comparison transport closed'));};
@@ -99,7 +107,7 @@ export function createReubenComparisonEndpoint({engine,role,selfId,peerId,networ
   if(!alive())throw Error('Comparison aborted');
   await new Promise((resolve,reject)=>{const check=()=>{if(adapter)resolve();};const abort=()=>reject(Error('Comparison aborted'));controller.signal.addEventListener('abort',abort,{once:true});dc.addEventListener('open',()=>{controller.signal.removeEventListener('abort',abort);check();},{once:true});check();});
   if(!alive())return;
-  if((pc.sctp?.maxMessageSize||65536)<chunkSize+44)throw Error('Negotiated message size cannot fit matched chunk settings');
+  if((pc.sctp?.maxMessageSize||65536)<chunkSize+(engine==='reuben-split'?0:44))throw Error('Negotiated message size cannot fit matched chunk settings');
   const manifest=await adapter.publish(payload,{chunkSize,sourceReadBlockBytes:4*1024*1024});preparationMs=performance.now()-at;if(alive())await adapter.share(peerId,manifest.id);
  }
  function close(){if(closed)return;closed=true;clearInterval(timer);controller.abort();distribution?.close();adapter?.close();for(const connection of connections)connection.close();payload=null;pendingIce.length=0;}
