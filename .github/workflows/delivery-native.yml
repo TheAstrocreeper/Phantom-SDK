@@ -1,4 +1,4 @@
-name: Native sustained delivery comparison
+name: Native parallel delivery comparison
 on:
   push:
     branches: ['codex/sustained-delivery']
@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        loss: ['0', '0.1', '1']
+        loss: ['0', '0.1']
     env:
       PHANTOM_SHAPED_RTT_MS: '80'
       PHANTOM_SHAPED_LOSS: '${{ matrix.loss }}'
@@ -29,6 +29,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: native-delivery-loss-${{ matrix.loss }}
+          name: native-parallel-loss-${{ matrix.loss }}
           path: tools/perf/delivery-native/results-*/
           if-no-files-found: error
