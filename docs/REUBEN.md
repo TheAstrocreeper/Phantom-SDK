@@ -160,3 +160,19 @@ Set `PHANTOM_REUBEN_ABLATION=1` for the native-browser harness. It runs current,
 - `reuben-trusted`: retain the same copied memory writes and input hashes, but expose verified indexes and blob assembly through the existing trusted-store API. This isolates completion rereads and hashes. No data is skipped during final independent verification.
 
 Reports retain per-file-service timing summaries, request-boundary count, write-to-completion delay and trusted blob assembly time. Native loopback results identify local regressions; they do not establish an internet or cellular throughput improvement. The variants remain diagnostic-only, outside normal Share sending.
+
+### Native variant results
+
+[Run 40271184501](https://github.com/TheAstrocreeper/Phantom-SDK/actions/runs/40271184501) passed all 20 transfers, each 32 MiB + 17 bytes with independent content verification. Mean receiver time over two passes:
+
+| Variant | 65,536-byte payload | 65,492-byte payload |
+| --- | ---: | ---: |
+| Current coordinator | 2.112 s | 1.874 s |
+| Reuben rolling | 5.155 s | 7.315 s |
+| Reuben split envelope | 6.835 s | 7.310 s |
+| Reuben 32-chunk boundaries | 1.820 s | 1.922 s |
+| Reuben trusted storage | 7.104 s | 7.294 s |
+
+Only adding request boundaries removed the large local regression in these runs. It reached roughly current-engine performance; this small sample does not establish an advantage over current. Split framing and trusted completion did not remove the regression. Slow rolling cases contain individual request-to-receive delays of several seconds; final write-to-completion takes about 20–52 ms, so completion work does not account for those seconds. Request timings overlap and must not be summed as wall time.
+
+This identifies a sensitivity to the prototype's request pattern, not its underlying Chrome/SCTP mechanism and not the cause of slow internet transfers. Current already uses 32-chunk coordinator batches. Keep normal sending unchanged; further envelope work has no demonstrated throughput benefit. Selected per-pass evidence is retained in [reuben-native-ablations.json](reuben-native-ablations.json); full endpoint reports are workflow artifacts. The related capacity, preparation, pipeline, request-window and prototype suite passed all 46 tests locally.
