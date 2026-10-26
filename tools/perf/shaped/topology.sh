@@ -20,6 +20,7 @@ for n in 1 2; do
  ip -n "shaped$n" address add "10.211.0.$((n+1))/24" dev eth0
  ip -n "shaped$n" link set eth0 up
  ip -n "shaped$n" link set lo up
+ ip -n "shaped$n" route add default via 10.211.0.1
  ip netns exec "shaped$n" sysctl -qw net.ipv6.conf.all.disable_ipv6=1
  # TCP (page load and signaling) stays outside the impaired UDP band.
  ip netns exec "shaped$n" tc qdisc add dev eth0 root handle 1: prio bands 3 priomap 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0

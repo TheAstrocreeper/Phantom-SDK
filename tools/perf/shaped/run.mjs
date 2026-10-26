@@ -28,13 +28,15 @@ async function calibrate(){
   const answer=await pages[1].evaluate(async offer=>{await probe.pc.setRemoteDescription(offer);await probe.pc.setLocalDescription(await probe.pc.createAnswer());return probe.pc.localDescription.toJSON();},offer);
   await pages[0].evaluate(answer=>probe.pc.setRemoteDescription(answer),answer);
   for(const p of pages)await p.waitForFunction(()=>probe.pc.iceGatheringState==='complete');
+  report.calibration={candidates:await Promise.all(pages.map(p=>p.evaluate(()=>probe.candidates))),qdiscs:qdiscs()};await save();
+  for(const candidates of report.calibration.candidates)assert.ok(candidates.some(c=>/10\.211\.0\.[23]/.test(c.candidate)),'Expected interface candidates missing');
   for(let i=0;i<2;i++){const candidates=await pages[i].evaluate(()=>probe.candidates);await pages[1-i].evaluate(async candidates=>{for(const c of candidates)await probe.pc.addIceCandidate(c);},candidates);}
   await pages[0].waitForFunction(()=>probe.dc.readyState==='open');
   const result=await pages[0].evaluate(async()=>{const samples=[];for(let i=0;i<7;i++){const at=performance.now();await new Promise(resolve=>{probe.dc.onmessage=resolve;probe.dc.send('ping');});samples.push(performance.now()-at);}const stats=await probe.pc.getStats();let selected;stats.forEach(s=>{if(s.type==='transport'&&s.selectedCandidatePairId){const pair=stats.get(s.selectedCandidatePairId);selected={local:stats.get(pair.localCandidateId),remote:stats.get(pair.remoteCandidateId)};}});return {samples,selected};});
   for(const candidate of [result.selected.local,result.selected.remote]){assert.equal(candidate.protocol,'udp');assert.match(candidate.address,/^10\.211\.0\.[23]$/);}
   const median=[...result.samples].sort((a,b)=>a-b)[3];assert.ok(median>=rttMs*0.8,`UDP echo did not experience configured RTT: ${median}`);
   report.calibration={...result,medianRttMs:median,qdiscs:qdiscs()};await save();console.log('CALIBRATION',JSON.stringify({rttMs,measuredMs:median}));
- }finally{await Promise.all(contexts.map(c=>c.close()));}
+ }catch(error){report.calibrationFailure=await Promise.all(pages.map(p=>p.evaluate(async()=>({state:probe.pc.connectionState,iceState:probe.pc.iceConnectionState,candidates:probe.candidates,stats:[...await probe.pc.getStats()].map(([,v])=>v)})).catch(e=>({error:e.message}))));report.failureQdiscs=qdiscs();await save();throw error;}finally{await Promise.all(contexts.map(c=>c.close()));}
 }
 async function runCase(settings,bytes,stage,pass){
  const {contexts,pages}=await contextsFor(),errors=[];
