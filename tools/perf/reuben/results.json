@@ -1,0 +1,661 @@
+{
+  "model": "Reliable ordered application-message emulator with serialization, propagation, and optional one-RTT recovery stall every eighth binary message. Not SCTP congestion control, real packet loss, NAT, Chrome, or device performance.",
+  "bytes": 8388625,
+  "repeats": 2,
+  "results": [
+    {
+      "scenario": "low-latency",
+      "repeat": 0,
+      "name": "low-latency",
+      "oneWayMs": 1,
+      "mbps": 100,
+      "writeMs": 8,
+      "recoverEvery": 0,
+      "engine": "current",
+      "setupMs": 12,
+      "totalMs": 779,
+      "transport": [
+        {
+          "label": "phantom-distribution",
+          "binaryMessages": 129,
+          "peakBufferedBytes": 2107503,
+          "emptyBufferMs": 41,
+          "recoveryStalls": 0
+        }
+      ],
+      "requestWindow": 32,
+      "sourceWindow": 8,
+      "batchSize": 32,
+      "bytes": 8388625,
+      "elapsedMs": 766,
+      "batchWorkMs": 743,
+      "interBatchGapMs": 21,
+      "batches": 5,
+      "peakWrites": 2,
+      "verified": true,
+      "metrics": {
+        "requestToReceiveMs": {
+          "meanMs": 91.61,
+          "maxMs": 176.561,
+          "count": 129
+        },
+        "hashMs": {
+          "meanMs": 0.202,
+          "maxMs": 2.356,
+          "count": 129
+        },
+        "writeQueueMs": {
+          "meanMs": 0.014,
+          "maxMs": 0.156,
+          "count": 129
+        },
+        "writeMs": {
+          "meanMs": 8.137,
+          "maxMs": 9.061,
+          "count": 129
+        }
+      }
+    },
+    {
+      "scenario": "low-latency",
+      "repeat": 0,
+      "name": "low-latency",
+      "oneWayMs": 1,
+      "mbps": 100,
+      "writeMs": 8,
+      "recoverEvery": 0,
+      "engine": "reuben",
+      "setupMs": 3,
+      "totalMs": 712,
+      "bytes": 8388625,
+      "elapsedMs": 699,
+      "peakWrites": 3,
+      "verified": true,
+      "transport": [
+        {
+          "label": "reuben",
+          "binaryMessages": 129,
+          "peakBufferedBytes": 2032980,
+          "emptyBufferMs": 33,
+          "recoveryStalls": 0
+        }
+      ]
+    },
+    {
+      "scenario": "low-latency",
+      "repeat": 1,
+      "name": "low-latency",
+      "oneWayMs": 1,
+      "mbps": 100,
+      "writeMs": 8,
+      "recoverEvery": 0,
+      "engine": "reuben",
+      "setupMs": 3,
+      "totalMs": 706,
+      "bytes": 8388625,
+      "elapsedMs": 696,
+      "peakWrites": 3,
+      "verified": true,
+      "transport": [
+        {
+          "label": "reuben",
+          "binaryMessages": 129,
+          "peakBufferedBytes": 2098560,
+          "emptyBufferMs": 28,
+          "recoveryStalls": 0
+        }
+      ]
+    },
+    {
+      "scenario": "low-latency",
+      "repeat": 1,
+      "name": "low-latency",
+      "oneWayMs": 1,
+      "mbps": 100,
+      "writeMs": 8,
+      "recoverEvery": 0,
+      "engine": "current",
+      "setupMs": 14,
+      "totalMs": 768,
+      "transport": [
+        {
+          "label": "phantom-distribution",
+          "binaryMessages": 129,
+          "peakBufferedBytes": 2107503,
+          "emptyBufferMs": 26,
+          "recoveryStalls": 0
+        }
+      ],
+      "requestWindow": 32,
+      "sourceWindow": 8,
+      "batchSize": 32,
+      "bytes": 8388625,
+      "elapsedMs": 754,
+      "batchWorkMs": 733,
+      "interBatchGapMs": 20,
+      "batches": 5,
+      "peakWrites": 2,
+      "verified": true,
+      "metrics": {
+        "requestToReceiveMs": {
+          "meanMs": 90.065,
+          "maxMs": 173.044,
+          "count": 129
+        },
+        "hashMs": {
+          "meanMs": 0.172,
+          "maxMs": 0.396,
+          "count": 129
+        },
+        "writeQueueMs": {
+          "meanMs": 0.018,
+          "maxMs": 0.128,
+          "count": 129
+        },
+        "writeMs": {
+          "meanMs": 8.129,
+          "maxMs": 9.026,
+          "count": 129
+        }
+      }
+    },
+    {
+      "scenario": "80ms-rtt",
+      "repeat": 0,
+      "name": "80ms-rtt",
+      "oneWayMs": 40,
+      "mbps": 20,
+      "writeMs": 8,
+      "recoverEvery": 0,
+      "engine": "current",
+      "setupMs": 175,
+      "totalMs": 4657,
+      "transport": [
+        {
+          "label": "phantom-distribution",
+          "binaryMessages": 129,
+          "peakBufferedBytes": 2107503,
+          "emptyBufferMs": 384,
+          "recoveryStalls": 0
+        }
+      ],
+      "requestWindow": 32,
+      "sourceWindow": 8,
+      "batchSize": 32,
+      "bytes": 8388625,
+      "elapsedMs": 4482,
+      "batchWorkMs": 3830,
+      "interBatchGapMs": 650,
+      "batches": 5,
+      "peakWrites": 1,
+      "verified": true,
+      "metrics": {
+        "requestToReceiveMs": {
+          "meanMs": 514.374,
+          "maxMs": 928.067,
+          "count": 129
+        },
+        "hashMs": {
+          "meanMs": 0.271,
+          "maxMs": 2.389,
+          "count": 129
+        },
+        "writeQueueMs": {
+          "meanMs": 0.019,
+          "maxMs": 0.115,
+          "count": 129
+        },
+        "writeMs": {
+          "meanMs": 8.171,
+          "maxMs": 8.942,
+          "count": 129
+        }
+      }
+    },
+    {
+      "scenario": "80ms-rtt",
+      "repeat": 0,
+      "name": "80ms-rtt",
+      "oneWayMs": 40,
+      "mbps": 20,
+      "writeMs": 8,
+      "recoverEvery": 0,
+      "engine": "reuben",
+      "setupMs": 45,
+      "totalMs": 3514,
+      "bytes": 8388625,
+      "elapsedMs": 3463,
+      "peakWrites": 2,
+      "verified": true,
+      "transport": [
+        {
+          "label": "reuben",
+          "binaryMessages": 129,
+          "peakBufferedBytes": 2098560,
+          "emptyBufferMs": 69,
+          "recoveryStalls": 0
+        }
+      ]
+    },
+    {
+      "scenario": "80ms-rtt",
+      "repeat": 1,
+      "name": "80ms-rtt",
+      "oneWayMs": 40,
+      "mbps": 20,
+      "writeMs": 8,
+      "recoverEvery": 0,
+      "engine": "reuben",
+      "setupMs": 45,
+      "totalMs": 3520,
+      "bytes": 8388625,
+      "elapsedMs": 3468,
+      "peakWrites": 2,
+      "verified": true,
+      "transport": [
+        {
+          "label": "reuben",
+          "binaryMessages": 129,
+          "peakBufferedBytes": 2098560,
+          "emptyBufferMs": 75,
+          "recoveryStalls": 0
+        }
+      ]
+    },
+    {
+      "scenario": "80ms-rtt",
+      "repeat": 1,
+      "name": "80ms-rtt",
+      "oneWayMs": 40,
+      "mbps": 20,
+      "writeMs": 8,
+      "recoverEvery": 0,
+      "engine": "current",
+      "setupMs": 173,
+      "totalMs": 4653,
+      "transport": [
+        {
+          "label": "phantom-distribution",
+          "binaryMessages": 129,
+          "peakBufferedBytes": 2107503,
+          "emptyBufferMs": 382,
+          "recoveryStalls": 0
+        }
+      ],
+      "requestWindow": 32,
+      "sourceWindow": 8,
+      "batchSize": 32,
+      "bytes": 8388625,
+      "elapsedMs": 4480,
+      "batchWorkMs": 3828,
+      "interBatchGapMs": 650,
+      "batches": 5,
+      "peakWrites": 1,
+      "verified": true,
+      "metrics": {
+        "requestToReceiveMs": {
+          "meanMs": 513.768,
+          "maxMs": 926.232,
+          "count": 129
+        },
+        "hashMs": {
+          "meanMs": 0.238,
+          "maxMs": 0.869,
+          "count": 129
+        },
+        "writeQueueMs": {
+          "meanMs": 0.018,
+          "maxMs": 0.312,
+          "count": 129
+        },
+        "writeMs": {
+          "meanMs": 8.145,
+          "maxMs": 8.971,
+          "count": 129
+        }
+      }
+    },
+    {
+      "scenario": "200ms-rtt",
+      "repeat": 0,
+      "name": "200ms-rtt",
+      "oneWayMs": 100,
+      "mbps": 20,
+      "writeMs": 8,
+      "recoverEvery": 0,
+      "engine": "current",
+      "setupMs": 412,
+      "totalMs": 6448,
+      "transport": [
+        {
+          "label": "phantom-distribution",
+          "binaryMessages": 129,
+          "peakBufferedBytes": 2107503,
+          "emptyBufferMs": 222,
+          "recoveryStalls": 0
+        }
+      ],
+      "requestWindow": 32,
+      "sourceWindow": 8,
+      "batchSize": 32,
+      "bytes": 8388625,
+      "elapsedMs": 6036,
+      "batchWorkMs": 4426,
+      "interBatchGapMs": 1609,
+      "batches": 5,
+      "peakWrites": 1,
+      "verified": true,
+      "metrics": {
+        "requestToReceiveMs": {
+          "meanMs": 633.283,
+          "maxMs": 1045.44,
+          "count": 129
+        },
+        "hashMs": {
+          "meanMs": 0.225,
+          "maxMs": 0.464,
+          "count": 129
+        },
+        "writeQueueMs": {
+          "meanMs": 0.014,
+          "maxMs": 0.063,
+          "count": 129
+        },
+        "writeMs": {
+          "meanMs": 8.135,
+          "maxMs": 8.832,
+          "count": 129
+        }
+      }
+    },
+    {
+      "scenario": "200ms-rtt",
+      "repeat": 0,
+      "name": "200ms-rtt",
+      "oneWayMs": 100,
+      "mbps": 20,
+      "writeMs": 8,
+      "recoverEvery": 0,
+      "engine": "reuben",
+      "setupMs": 105,
+      "totalMs": 3694,
+      "bytes": 8388625,
+      "elapsedMs": 3583,
+      "peakWrites": 2,
+      "verified": true,
+      "transport": [
+        {
+          "label": "reuben",
+          "binaryMessages": 129,
+          "peakBufferedBytes": 2098560,
+          "emptyBufferMs": 128,
+          "recoveryStalls": 0
+        }
+      ]
+    },
+    {
+      "scenario": "200ms-rtt",
+      "repeat": 1,
+      "name": "200ms-rtt",
+      "oneWayMs": 100,
+      "mbps": 20,
+      "writeMs": 8,
+      "recoverEvery": 0,
+      "engine": "reuben",
+      "setupMs": 105,
+      "totalMs": 3694,
+      "bytes": 8388625,
+      "elapsedMs": 3583,
+      "peakWrites": 2,
+      "verified": true,
+      "transport": [
+        {
+          "label": "reuben",
+          "binaryMessages": 129,
+          "peakBufferedBytes": 2098560,
+          "emptyBufferMs": 129,
+          "recoveryStalls": 0
+        }
+      ]
+    },
+    {
+      "scenario": "200ms-rtt",
+      "repeat": 1,
+      "name": "200ms-rtt",
+      "oneWayMs": 100,
+      "mbps": 20,
+      "writeMs": 8,
+      "recoverEvery": 0,
+      "engine": "current",
+      "setupMs": 413,
+      "totalMs": 6450,
+      "transport": [
+        {
+          "label": "phantom-distribution",
+          "binaryMessages": 129,
+          "peakBufferedBytes": 2107503,
+          "emptyBufferMs": 220,
+          "recoveryStalls": 0
+        }
+      ],
+      "requestWindow": 32,
+      "sourceWindow": 8,
+      "batchSize": 32,
+      "bytes": 8388625,
+      "elapsedMs": 6037,
+      "batchWorkMs": 4426,
+      "interBatchGapMs": 1609,
+      "batches": 5,
+      "peakWrites": 1,
+      "verified": true,
+      "metrics": {
+        "requestToReceiveMs": {
+          "meanMs": 633.524,
+          "maxMs": 1045.537,
+          "count": 129
+        },
+        "hashMs": {
+          "meanMs": 0.234,
+          "maxMs": 0.566,
+          "count": 129
+        },
+        "writeQueueMs": {
+          "meanMs": 0.015,
+          "maxMs": 0.126,
+          "count": 129
+        },
+        "writeMs": {
+          "meanMs": 8.09,
+          "maxMs": 8.908,
+          "count": 129
+        }
+      }
+    },
+    {
+      "scenario": "80ms-rtt-recovery",
+      "repeat": 0,
+      "name": "80ms-rtt-recovery",
+      "oneWayMs": 40,
+      "mbps": 20,
+      "writeMs": 8,
+      "recoverEvery": 8,
+      "engine": "current",
+      "setupMs": 173,
+      "totalMs": 5939,
+      "transport": [
+        {
+          "label": "phantom-distribution",
+          "binaryMessages": 129,
+          "peakBufferedBytes": 2107503,
+          "emptyBufferMs": 383,
+          "recoveryStalls": 16
+        }
+      ],
+      "requestWindow": 32,
+      "sourceWindow": 8,
+      "batchSize": 32,
+      "bytes": 8388625,
+      "elapsedMs": 5766,
+      "batchWorkMs": 5115,
+      "interBatchGapMs": 650,
+      "batches": 5,
+      "peakWrites": 1,
+      "verified": true,
+      "metrics": {
+        "requestToReceiveMs": {
+          "meanMs": 643.149,
+          "maxMs": 1247.783,
+          "count": 129
+        },
+        "hashMs": {
+          "meanMs": 0.248,
+          "maxMs": 0.763,
+          "count": 129
+        },
+        "writeQueueMs": {
+          "meanMs": 0.014,
+          "maxMs": 0.159,
+          "count": 129
+        },
+        "writeMs": {
+          "meanMs": 8.171,
+          "maxMs": 8.487,
+          "count": 129
+        }
+      }
+    },
+    {
+      "scenario": "80ms-rtt-recovery",
+      "repeat": 0,
+      "name": "80ms-rtt-recovery",
+      "oneWayMs": 40,
+      "mbps": 20,
+      "writeMs": 8,
+      "recoverEvery": 8,
+      "engine": "reuben",
+      "setupMs": 44,
+      "totalMs": 4801,
+      "bytes": 8388625,
+      "elapsedMs": 4749,
+      "peakWrites": 2,
+      "verified": true,
+      "transport": [
+        {
+          "label": "reuben",
+          "binaryMessages": 129,
+          "peakBufferedBytes": 2098560,
+          "emptyBufferMs": 69,
+          "recoveryStalls": 16
+        }
+      ]
+    },
+    {
+      "scenario": "80ms-rtt-recovery",
+      "repeat": 1,
+      "name": "80ms-rtt-recovery",
+      "oneWayMs": 40,
+      "mbps": 20,
+      "writeMs": 8,
+      "recoverEvery": 8,
+      "engine": "reuben",
+      "setupMs": 44,
+      "totalMs": 4812,
+      "bytes": 8388625,
+      "elapsedMs": 4751,
+      "peakWrites": 2,
+      "verified": true,
+      "transport": [
+        {
+          "label": "reuben",
+          "binaryMessages": 129,
+          "peakBufferedBytes": 2098560,
+          "emptyBufferMs": 81,
+          "recoveryStalls": 16
+        }
+      ]
+    },
+    {
+      "scenario": "80ms-rtt-recovery",
+      "repeat": 1,
+      "name": "80ms-rtt-recovery",
+      "oneWayMs": 40,
+      "mbps": 20,
+      "writeMs": 8,
+      "recoverEvery": 8,
+      "engine": "current",
+      "setupMs": 172,
+      "totalMs": 5937,
+      "transport": [
+        {
+          "label": "phantom-distribution",
+          "binaryMessages": 129,
+          "peakBufferedBytes": 2107503,
+          "emptyBufferMs": 382,
+          "recoveryStalls": 16
+        }
+      ],
+      "requestWindow": 32,
+      "sourceWindow": 8,
+      "batchSize": 32,
+      "bytes": 8388625,
+      "elapsedMs": 5764,
+      "batchWorkMs": 5115,
+      "interBatchGapMs": 648,
+      "batches": 5,
+      "peakWrites": 1,
+      "verified": true,
+      "metrics": {
+        "requestToReceiveMs": {
+          "meanMs": 643.403,
+          "maxMs": 1247.415,
+          "count": 129
+        },
+        "hashMs": {
+          "meanMs": 0.243,
+          "maxMs": 0.963,
+          "count": 129
+        },
+        "writeQueueMs": {
+          "meanMs": 0.01,
+          "maxMs": 0.051,
+          "count": 129
+        },
+        "writeMs": {
+          "meanMs": 8.137,
+          "maxMs": 9.315,
+          "count": 129
+        }
+      }
+    }
+  ],
+  "summary": [
+    {
+      "scenario": "low-latency",
+      "currentMs": 760,
+      "reubenMs": 697.5,
+      "elapsedReductionPercent": 8.22,
+      "speedup": 1.09
+    },
+    {
+      "scenario": "80ms-rtt",
+      "currentMs": 4481,
+      "reubenMs": 3465.5,
+      "elapsedReductionPercent": 22.66,
+      "speedup": 1.293
+    },
+    {
+      "scenario": "200ms-rtt",
+      "currentMs": 6036.5,
+      "reubenMs": 3583,
+      "elapsedReductionPercent": 40.64,
+      "speedup": 1.685
+    },
+    {
+      "scenario": "80ms-rtt-recovery",
+      "currentMs": 5765,
+      "reubenMs": 4750,
+      "elapsedReductionPercent": 17.61,
+      "speedup": 1.214
+    }
+  ]
+}
