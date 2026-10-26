@@ -15,7 +15,7 @@ const browsers=[],results=[];let failed;
 try{
  for(let n=1;n<=2;n++)browsers.push(await chromium.launch({headless:true,executablePath:resolve(root,'tools/perf/delivery-native/chromium.sh'),env:{...process.env,PHANTOM_SHAPED_PEER:`shaped${n}`},args:['--no-sandbox','--disable-dev-shm-usage','--disable-features=WebRtcHideLocalIpsWithMdns']}));
  // Alternate the order in the repeat so startup/order effects do not always favor one case.
- const cases=[['raw',65536,1,1],['raw',65536,1,3],['raw',65536,3,1]];
+ const cases=[['sdk',65536,1,1],['sdk',65536,3,1]];
  for(let repeat=0;repeat<2;repeat++)for(const test of (repeat?[...cases].reverse():cases)){
   const [mode,messageBytes,parallel,streams]=test,contexts=await Promise.all(browsers.map(b=>b.newContext())),pages=await Promise.all(contexts.map(c=>c.newPage())),pageErrors=[];let problem;
   try{
