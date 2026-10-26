@@ -7,7 +7,7 @@ import {createRequire} from 'node:module';
 import assert from 'node:assert/strict';
 const require=createRequire(new URL('../swarm/package.json',import.meta.url));
 const {chromium}=process.env.PHANTOM_PLAYWRIGHT_ROOT?require(process.env.PHANTOM_PLAYWRIGHT_ROOT):require('playwright');
-const root=fileURLToPath(new URL('../../',import.meta.url)),output=process.env.PHANTOM_REUBEN_BROWSER_OUTPUT??resolve(root,'tools/perf/reuben/browser-results.json');
+const root=resolve(fileURLToPath(new URL('../../',import.meta.url))),output=process.env.PHANTOM_REUBEN_BROWSER_OUTPUT??resolve(root,'tools/perf/reuben/browser-results.json');
 const bytes=Number(process.env.PHANTOM_REUBEN_BROWSER_BYTES??(32*1024*1024+17));
 const server=createServer(async(req,res)=>{try{const path=decodeURIComponent(new URL(req.url,'http://localhost').pathname),target=resolve(root,'.'+path);if(!target.startsWith(root+sep)||!/^\/(packages\/|tools\/perf\/reuben\/)/.test(path)||!['.js','.mjs','.html'].includes(extname(target))){res.writeHead(403).end();return;}res.setHeader('Content-Type',extname(target)==='.html'?'text/html':'text/javascript');res.setHeader('Cache-Control','no-store');res.end(await readFile(target));}catch{res.writeHead(404).end();}});
 await new Promise(r=>server.listen(0,'127.0.0.1',r));let browser;
