@@ -87,10 +87,10 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
     }
   }
   function payloadSend(link,data){link.dc.send(data);link.payloadEnd=link.submittedBytes;}
-  function closeLink(id){pendingSignals.delete(id);closedJobs.set(id,Date.now());const link=links.get(id);if(!link)return;links.delete(id);link.sendController.abort();files.flushTimings(link.peer,link.job.asset);if(link.readyTimer)clearTimeout(link.readyTimer);link.readyTimer=null;link.pc.onicecandidate=null;link.pc.onconnectionstatechange=null;link.pc.ondatachannel=null;if(link.dc){link.dc.onopen=null;link.dc.onmessage=null;link.dc.onclose=null;try{link.dc.close();}catch{}}try{link.pc.close();}catch{}link.pendingIce.length=0;link.binary=null;emit('distributionConnectionClosed',{jobId:id,peer:link.peer});}
+  function closeLink(id){pendingSignals.delete(id);closedJobs.set(id,Date.now());const link=links.get(id);if(!link)return;links.delete(id);link.sendController.abort();link.receiveController?.abort();files.flushTimings(link.peer,link.job.asset);if(link.readyTimer)clearTimeout(link.readyTimer);link.readyTimer=null;link.pc.onicecandidate=null;link.pc.onconnectionstatechange=null;link.pc.ondatachannel=null;if(link.dc){link.dc.onopen=null;link.dc.onmessage=null;link.dc.onclose=null;try{link.dc.close();}catch{}}try{link.pc.close();}catch{}link.pendingIce.length=0;link.binary=null;emit('distributionConnectionClosed',{jobId:id,peer:link.peer});}
   async function receive(link){const job=link.job,startedAt=performance.now();let succeeded=false;
     emit('distributionBatchStarted',{jobId:job.id,batch:job.batch??0,total:job.indexes.length,peer:link.peer});try{
-    await files.request(job.asset,{peers:[link.peer],indexes:job.indexes});
+    await files.request(job.asset,{peers:[link.peer],indexes:job.indexes,signal:link.receiveController.signal});
     if(!ownsBatch(link,job))return;
     const asset=assets.get(job.asset);if(!asset)throw Error('Unknown distribution');
     const have=asset.holders.get(self())??new Set();for(const i of job.indexes)have.add(i);asset.holders.set(self(),have);dirty=true;
@@ -110,7 +110,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
   async function startReceiver(link){
     if(links.get(link.job.id)!==link||link.job.receiver!==self()||(link.requireReady&&!link.sourceReady)||link.started||link.dc?.readyState!=='open')return;
     let manifest;try{manifest=files.getManifest(link.job.asset);}catch{return;}
-    const job=link.job;link.started=true;
+    const job=link.job;link.started=true;link.receiveController=new AbortController();
     try{
       if(chunkStore.save&&link.job.needsManifest)await chunkStore.save(networkId,{manifest,proof:assets.get(manifest.id).proof});
       if(!ownsBatch(link,job))return;
@@ -149,7 +149,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
     };
     dc.onclose=()=>{if(links.get(link.job.id)===link){
       const interrupted=link.job.receiver===self()&&!link.completed;
-      if(interrupted)files.cancel(link.job.asset);closeLink(link.job.id);
+      closeLink(link.job.id);
       // Receiver completion crosses SYS independently of this channel's close.
       // A normal close at the source must not invalidate verified receipt.
       if(interrupted){frame(leader(),{type:'failed',jobId:link.job.id,batch:batchOf(link.job),reason:'channel_closed'});emit('distributionConnectionFailed',{id:link.job.asset,jobId:link.job.id,batch:batchOf(link.job),peer:link.peer,reason:'channel_closed'});}
@@ -164,7 +164,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
     pc.onicecandidate=e=>{if(e.candidate)frame(peer,{type:'signal',jobId:job.id,candidate:e.candidate.toJSON?.()??e.candidate});};
     pc.onconnectionstatechange=()=>{if(['failed','closed'].includes(pc.connectionState)&&links.get(job.id)===link){
       const current=link.job,interrupted=current.receiver===self()&&!link.completed;
-      if(interrupted)files.cancel(current.asset);closeLink(current.id);
+      closeLink(current.id);
       if(interrupted){frame(leader(),{type:'failed',jobId:current.id,batch:batchOf(current),reason:'rtc_transport_failed'});emit('distributionConnectionFailed',{id:current.asset,jobId:current.id,batch:batchOf(current),peer:link.peer,reason:'rtc_transport_failed'});}
     }};
     pc.ondatachannel=e=>bind(link,e.channel);
@@ -229,7 +229,6 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
     if(body.type==='close'){
       const link=links.get(body.jobId);
       if(link&&(link.peer===sender||sender===leader())&&sameBatch(link.job,body.batch)){
-        if(link.job.receiver===self()&&!link.completed)files.cancel(link.job.asset);
         closeLink(body.jobId);
       }else if(!link&&sender===leader()&&typeof body.jobId==='string'&&body.jobId.length<=128&&sameBatch({batch:0},body.batch))closeLink(body.jobId);
       return;
@@ -293,7 +292,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
     }
   }
   function syncLeadership(){const token=leader()+':'+state().mirror;
-    if(token!==leaderToken){leaderToken=token;checkedToken='';receivedSequence=-1;reported.clear();mirrored.clear();mirrorJobs.clear();for(const job of [...jobs.values()])finishJob(job);for(const id of [...links.keys()]){const link=links.get(id);if(link.job.receiver===self()&&!link.completed)files.cancel(link.job.asset);closeLink(id);}dirty=true;lastReport=0;}
+    if(token!==leaderToken){leaderToken=token;checkedToken='';receivedSequence=-1;reported.clear();mirrored.clear();mirrorJobs.clear();for(const job of [...jobs.values()])finishJob(job);for(const id of [...links.keys()]){const link=links.get(id);closeLink(id);}dirty=true;lastReport=0;}
   }
   function restore(){
     if(restoration)return restoration;
@@ -329,12 +328,12 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
     if(isLeader()&&state().state==='admitted'&&checkedToken!==token&&!checking){checking=true;try{let approved=true;if(checkAdmin)approved=await checkAdmin();else{const orders=await readAdminOrders({networkId,peerId:self()});if(!Array.isArray(orders))throw Error('Admin orders must be an array');for(const record of orders){if(!await lifecycle?.apply(record))throw Error('Invalid admin order');}}if(approved&&!closed&&leaderToken===token){checkedToken=token;emit('distributionAdminChecked',{peerId:self()});}}catch(e){error(e);}finally{checking=false;}}
     for(const link of links.values())observeDrain(link);
     if(Date.now()-lastReport>1000){if(state().role==='peer'&&state().state!=='admitted')core.command('PHANTOM_DIST_RECOVER_SYS',{});report();}schedule();mirror();
-    for(const [id,link]of links)if(Date.now()>link.job.deadline){if(link.job.receiver===self()&&!link.completed)files.cancel(link.job.asset);closeLink(id);frame(leader(),{type:'failed',jobId:id,batch:batchOf(link.job)});}
+    for(const [id,link]of links)if(Date.now()>link.job.deadline){closeLink(id);frame(leader(),{type:'failed',jobId:id,batch:batchOf(link.job)});}
   }
   const off=core.onEvent(event=>{if(event.type==='PRESENCE_ROSTER')setRoster(event.payload?.list??[]);if(event.type==='PHANTOM_ADMIN_LINK_READY'){reported.clear();mirrored.clear();dirty=true;lastReport=0;}if(event.type==='PHANTOM_DIST')void handle(event.payload.from,event.payload.frame).catch(error);});
   const timer=setInterval(()=>{void tick().catch(error);},intervalMs);
   return {
-    dropPeer(peer){files.dropPeer(peer);roster=roster.filter(p=>p!==peer);for(const asset of assets.values())asset.holders.delete(peer);for(const job of [...jobs.values()])if(job.source===peer||job.receiver===peer)finishJob(job);for(const [id,link]of [...links])if(link.peer===peer){if(link.job.receiver===self()&&!link.completed)files.cancel(link.job.asset);closeLink(id);}for(const [id,job]of mirrorJobs)if(job.source===peer||job.receiver===peer)mirrorJobs.delete(id);dirty=true;},
+    dropPeer(peer){files.dropPeer(peer);roster=roster.filter(p=>p!==peer);for(const asset of assets.values())asset.holders.delete(peer);for(const job of [...jobs.values()])if(job.source===peer||job.receiver===peer)finishJob(job);for(const [id,link]of [...links])if(link.peer===peer){closeLink(id);}for(const [id,job]of mirrorJobs)if(job.source===peer||job.receiver===peer)mirrorJobs.delete(id);dirty=true;},
     restore,
     async getFile(id){await restore();const asset=assets.get(id);if(closed||!asset||asset.holders.get(self())?.size!==asset.total)throw Error('No complete local distribution copy');return files.getFile(id);},
     async prepare(file,settings={}){if(closed)throw Error('Distribution closed');await restore();const manifest=await files.publish(file,settings);preparedFiles.set(manifest,{file,id:manifest.id});return manifest;},
