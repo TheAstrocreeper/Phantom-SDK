@@ -140,6 +140,7 @@ export function createPhantom({ doorway, origin = 'https://phantom.local',
   return {
     getState() {return structuredClone(networkState);},
     getPeerConnections() {return disposed?[]:engine.peerConnections();},
+    scoutPeer(peer) {return disposed?Promise.resolve(null):engine.scoutPeer(peer);},
     refreshNetworkPermissions(){return networkPermissions.refresh();},
     onState(listener) {
       if(disposed)throw new Error('Phantom instance disposed');

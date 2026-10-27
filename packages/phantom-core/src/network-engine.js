@@ -13,6 +13,7 @@ import { sysBirthDisposition, isCurrentSysBirth, runSysBirth } from './sys-birth
 import {acceptsBootstrapRouteHint} from './bootstrap-route-hint.js';
 import {createDeferredSysOffers} from './deferred-sys-offers.js';
 import { acceptsSuccessorHandshake } from './successor-handshake.js';
+import {scoutConnection} from './connection-scout.js';
 /** Peer networking engine: membership, leadership, signaling, and data channels. */
 export function createNetworkEngine(host) {
   const canUsePeer=peer=>{try{return host.canUsePeer?host.canUsePeer(peer)===true:true;}catch{return false;}};
@@ -14366,6 +14367,15 @@ export function createNetworkEngine(host) {
     },
     snapshot() { return snapshot("sdk_read"); },
     peerConnections() {return phantomPeerConnections();},
+    async scoutPeer(peer) {
+      const key=phantomShortKey(peer);
+      if(!key||!canUsePeer(key)||!phantomPeerConnections().some(item=>item.peerId===key&&item.state==='ready'))return null;
+      const entry=phantomChatPeers.get(key),pc=entry?.pc,channel=entry?.dc;
+      if(!pc||channel?.readyState!=='open')return null;
+      const observation=await scoutConnection(pc,{channel});
+      if(!canUsePeer(key)||phantomChatPeers.get(key)!==entry||entry.pc!==pc||entry.dc!==channel||channel.readyState!=='open')return null;
+      return observation;
+    },
     dispose() {
       let failure;
       for (const dispose of [()=>networkFirstSignaling.clear(),()=>signalingBridge.clear(),()=>signalingPeerKeys.clear(),

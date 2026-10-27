@@ -7,13 +7,13 @@ export function createCapabilityExchange({send,allowed,localReport,onReport=()=>
  const permitted=peer=>typeof peer==='string'&&/^[0-9a-f]{16}$/.test(peer)&&allowed(peer)===true;
  const canonical=report=>{
   if(!report||report.version!==1||!Array.isArray(report.protocols))throw new TypeError('Invalid capability report');
-  return createCapabilityReport({version:1,messageLimit:report.messageLimit},{protocols:report.protocols,maxChunkBytes:report.maxChunkBytes});
+  return createCapabilityReport({version:1,messageLimit:report.messageLimit,observationScope:report.observationScope,controlRoute:report.controlRoute},{protocols:report.protocols,maxChunkBytes:report.maxChunkBytes});
  };
  return {
   request(peer){if(closed||!permitted(peer))throw Error('Peer unavailable');send(peer,{type:'capabilityRequest',version:1});},
   receive(peer,body){
    if(closed||!permitted(peer)||!body||body.version!==1)return false;
-   if(body.type==='capabilityRequest'){const report=canonical(localReport());send(peer,{type:'capabilityReport',version:1,report});return true;}
+   if(body.type==='capabilityRequest'){const report=canonical(localReport(peer));send(peer,{type:'capabilityReport',version:1,report});return true;}
    if(body.type!=='capabilityReport')return false;
    let report;try{report=canonical(body.report);}catch{return false;}
    if(!peers.has(peer)&&peers.size>=128)return false;peers.set(peer,report);onReport(peer,structuredClone(report));return true;

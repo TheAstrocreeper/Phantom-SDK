@@ -9,7 +9,7 @@ export function createPlanAgreement({send,allowed,localReport,remoteReport,newId
  return {
   propose(peer,settings={}){
    if(closed||!validPeer(peer))throw Error('Peer unavailable');const remote=remoteReport(peer);if(!remote)throw Error('Peer capability report unavailable');
-   const plan=planConnection({...settings,local:localReport(),remote});if(plan.status!=='proposed')throw Error('No compatible transfer plan');
+   const plan=planConnection({...settings,local:localReport(peer),remote});if(plan.status!=='proposed')throw Error('No compatible transfer plan');
    const id=newId();if(!validId(id)||pending.has(id)||pending.size>=128)throw Error('Unable to allocate plan');
    for(const [old,item] of pending)if(item.peer===peer)pending.delete(old);agreed.delete(peer);
    pending.set(id,{peer,plan});try{send(peer,{type:'planProposal',version:1,id,protocol:plan.protocol,payloadBytes:plan.payloadBytes,framingBytes:plan.framingBytes,messageBytes:plan.messageBytes,fragmentFallback:plan.fragmentFallback});}catch(error){pending.delete(id);throw error;}return id;
@@ -17,8 +17,8 @@ export function createPlanAgreement({send,allowed,localReport,remoteReport,newId
   receive(peer,body){
    if(closed||!validPeer(peer)||!body||body.version!==1||!validId(body.id))return false;
    if(body.type==='planProposal'){
-    const local=localReport(),p=body.payloadBytes,f=body.framingBytes,m=body.messageBytes;
-    const ownLimit=local.messageLimit?.status==='known'?local.messageLimit.bytes:65536;
+    const local=localReport(peer),p=body.payloadBytes,f=body.framingBytes,m=body.messageBytes;
+    const ownLimit=local.messageLimit?.status==='known'?local.messageLimit.bytes:local.messageLimit?.status==='unlimited'?Infinity:65536;
     const canFragment=body.fragmentFallback==='phantom-file-fragments-v1'&&local.protocols.includes(body.fragmentFallback);
     const accepted=typeof body.protocol==='string'&&local.protocols.includes(body.protocol)&&Number.isSafeInteger(p)&&p>=1024&&p<=local.maxChunkBytes&&Number.isSafeInteger(f)&&f>=0&&Number.isSafeInteger(m)&&m>f&&m<=ownLimit&&(p+f<=m||canFragment);
     send(peer,{type:'planDecision',version:1,id:body.id,accepted});return true;

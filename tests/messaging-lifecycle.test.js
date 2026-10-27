@@ -38,6 +38,15 @@ test('automatic messaging establishes and restores ready channels without applic
  assert.deepEqual(f.a.getPeerConnections(),[]);
 });
 
+test('scout reads the actual ready peer connection and refuses removed peers',async()=>{
+ const f=await fixture();try{
+  await until(()=>f.networks.every(n=>n.getPeerConnections()[0]?.state==='ready'));
+  const peer=f.b.getState().peerId,observation=await f.cores[0].scoutPeer(peer);
+  assert.equal(observation.messageLimit.bytes,262144);assert.equal(observation.channel.state,'open');
+  assert.equal(await f.cores[0].scoutPeer('ffffffffffffffff'),null);
+ }finally{f.close();}
+});
+
 test('manual messaging keeps invitation consent and never auto-accepts',async()=>{
  const f=await fixture('manual');try{
   assert.ok(f.networks.every(n=>n.getPeerConnections()[0]?.state==='idle'));

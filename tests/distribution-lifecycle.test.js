@@ -7,11 +7,11 @@ import {memoryRTC} from './fixtures/memory-rtc.js';
 const ids=['1111111111111111','2222222222222222'],leader='3333333333333333';
 const pause=ms=>new Promise(r=>setTimeout(r,ms));
 async function until(check){const end=Date.now()+2000;while(Date.now()<end){if(check())return;await pause(5);}assert.fail('distribution did not settle');}
-async function fixture({intervalMs=1000,onSend,legacyProtocol=false,receiverStore,assignedRanges=false,scout=false,capabilityExchange=false,maxChunkBytes=65536,chunkSize=16384,fileSize=65536,maxMessageSize=262144}={}){
+async function fixture({intervalMs=1000,onSend,legacyProtocol=false,receiverStore,assignedRanges=false,scout=false,capabilityExchange=false,controlObservations=null,maxChunkBytes=65536,chunkSize=16384,fileSize=65536,maxMessageSize=262144}={}){
  const admin=await createAdminIdentity(),callbacks=new Map(),events=[],frames=[],RTC=memoryRTC({onSend,maxMessageSize});
  const states=ids.map(peerId=>({peerId,leader,mirror:ids[0],role:'peer',state:'admitted',admitted:true}));
  const deliver=(to,from,body)=>{if(legacyProtocol&&body.type==='signal')body={...body,readyProtocol:undefined};return callbacks.get(to)?.({type:'PHANTOM_DIST',payload:{from:leader,frame:{networkId:'room',from,to,body}}});};
- const ds=ids.map((id,i)=>createNetworkDistribution({core:{getState:()=>states[i],onEvent(fn){callbacks.set(id,fn);return()=>callbacks.delete(id);},command(type,{frame}){if(type!=='PHANTOM_DIST_SEND')return;frames.push(frame);queueMicrotask(()=>deliver(frame.to,frame.from,frame.body));}},networkId:'room',adminPublicKey:admin.publicKey,lifecycle:{issue:(action,target)=>admin.sign({networkId:'room',action,target,operationId:crypto.randomUUID()})},runtime:{crypto,RTCPeerConnection:RTC},options:{intervalMs,requestTimeoutMs:1000,assignedRanges,scout,capabilityExchange,maxChunkBytes,...(i===1&&receiverStore?{chunkStore:receiverStore}:{})},emit:(type,data)=>events.push({peer:id,type,data})}));
+ const ds=ids.map((id,i)=>createNetworkDistribution({core:{getState:()=>states[i],...(controlObservations?{scoutPeer:async()=>controlObservations[i]}:{}),onEvent(fn){callbacks.set(id,fn);return()=>callbacks.delete(id);},command(type,{frame}){if(type!=='PHANTOM_DIST_SEND')return;frames.push(frame);queueMicrotask(()=>deliver(frame.to,frame.from,frame.body));}},networkId:'room',adminPublicKey:admin.publicKey,lifecycle:{issue:(action,target)=>admin.sign({networkId:'room',action,target,operationId:crypto.randomUUID()})},runtime:{crypto,RTCPeerConnection:RTC},options:{intervalMs,requestTimeoutMs:1000,assignedRanges,scout,capabilityExchange,maxChunkBytes,...(i===1&&receiverStore?{chunkStore:receiverStore}:{})},emit:(type,data)=>events.push({peer:id,type,data})}));
  for(const fn of callbacks.values())fn({type:'PRESENCE_ROSTER',payload:{list:[...ids,leader].map(hKey=>({hKey}))}});
  const file=new Blob([Uint8Array.from({length:fileSize},(_,i)=>i%251)]),manifest=await ds[0].publish(file,{chunkSize});
  await ds[1].publish(file,{chunkSize});
@@ -37,6 +37,22 @@ test('distribution exchanges compatible capabilities before creating a file job'
   await assert.rejects(f.ds[0].publish(file,{prepared:manifest,recipients:[leader]}),/recipient/);
   f.ds[0].dropPeer(ids[1]);assert.equal(f.ds[0].getCapabilities(ids[1]),null);assert.equal(f.ds[0].getPlan(ids[1]),null);
  }finally{f.close();}
+});
+test('peer control observations inform a plan before any transfer job',async()=>{
+ const observation=bytes=>({messageLimit:{status:'known',bytes},route:{localType:'host',remoteType:'srflx',protocol:'udp',rttSeconds:.05,address:'192.0.2.1'},stats:{rows:[{address:'private'}]}});
+ const f=await fixture({capabilityExchange:true,maxChunkBytes:262144,controlObservations:[observation(262144),observation(131072)]});
+ try{f.ds[0].requestCapabilities(ids[1]);await until(()=>f.ds[0].getCapabilities(ids[1]));const remote=f.ds[0].getCapabilities(ids[1]);assert.equal(remote.messageLimit.bytes,131072);assert.equal(remote.observationScope,'control');assert.equal(JSON.stringify(remote).includes('192.0.2.1'),false);
+  const id=f.ds[0].proposePlan(ids[1],{maxPayloadBytes:262144});await until(()=>f.ds[0].getPlan(ids[1])?.id===id);const plan=f.ds[0].getPlan(ids[1]).plan;assert.equal(plan.messageBytes,131072);assert.equal(plan.payloadBytes,131072);assert.equal(plan.observations.local.scope,'control');assert.equal(f.frames.some(x=>x.body.type==='job'),false);
+ }finally{f.close();}
+});
+test('a late observation cannot send capabilities after the peer is removed',async()=>{
+ let resolveObservation;const pending=new Promise(resolve=>{resolveObservation=resolve;});
+ const f=await fixture({capabilityExchange:true,controlObservations:[pending,null]});
+ try{f.ds[0].requestCapabilities(ids[1]);f.ds[0].dropPeer(ids[1]);resolveObservation({messageLimit:{status:'known',bytes:262144}});await pause(20);assert.equal(f.frames.some(x=>x.body.type==='capabilityRequest'),false);assert.equal(f.ds[0].getCapabilities(ids[1]),null);}finally{f.close();}
+});
+test('both peers can start scouting at the same time',async()=>{
+ const observation={messageLimit:{status:'known',bytes:262144},route:null};const f=await fixture({capabilityExchange:true,controlObservations:[observation,observation]});
+ try{f.ds[0].requestCapabilities(ids[1]);f.ds[1].requestCapabilities(ids[0]);await until(()=>f.ds[0].getCapabilities(ids[1])&&f.ds[1].getCapabilities(ids[0]));assert.equal(f.ds[0].getCapabilities(ids[1]).messageLimit.bytes,262144);assert.equal(f.ds[1].getCapabilities(ids[0]).messageLimit.bytes,262144);}finally{f.close();}
 });
 test('opt-in scout reports both transfer endpoints without blocking transfer',async()=>{
  const f=await fixture({assignedRanges:true,scout:true});

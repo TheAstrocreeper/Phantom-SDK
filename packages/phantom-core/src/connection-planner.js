@@ -3,7 +3,18 @@ export function createCapabilityReport(observation, {protocols = [],maxChunkByte
  if (!observation || observation.version !== 1 || !Number.isInteger(maxChunkBytes) || maxChunkBytes<1024 || maxChunkBytes>262144 || !Array.isArray(protocols) || protocols.some(p => typeof p !== 'string' || !/^[a-z0-9][a-z0-9._-]{0,63}$/i.test(p)) || protocols.length > 32) throw new TypeError('Invalid scout observation or protocols');
  const value=observation.messageLimit;
  const messageLimit=value?.status==='known' && Number.isSafeInteger(value.bytes) && value.bytes>0 ? {status:'known',bytes:value.bytes} : value?.status==='unlimited' ? {status:'unlimited',bytes:null} : {status:'unknown',bytes:null};
- return {version:1,messageLimit,maxChunkBytes,protocols:[...new Set(protocols)].sort()};
+ const result={version:1,messageLimit,maxChunkBytes,protocols:[...new Set(protocols)].sort()};
+ // A control connection is evidence about that connection, not a guarantee for a later file connection.
+ if(observation.observationScope==='control') {
+  result.observationScope='control';
+  const route=observation.controlRoute;
+  const types=new Set(['host','srflx','prflx','relay']);
+  if(route&&types.has(route.localType)&&types.has(route.remoteType)&&['udp','tcp'].includes(route.protocol)) {
+   result.controlRoute={localType:route.localType,remoteType:route.remoteType,protocol:route.protocol};
+   if(typeof route.rttSeconds==='number'&&Number.isFinite(route.rttSeconds)&&route.rttSeconds>=0&&route.rttSeconds<=3600)result.controlRoute.rttSeconds=route.rttSeconds;
+  }
+ }
+ return result;
 }
 
 /** Produce a proposal only; callers must negotiate it and validate each actual connection. */
@@ -33,5 +44,6 @@ export function planConnection({local,remote,defaultMessageBytes=65536,maxPayloa
  const fragmentFallback=canFragment&&payloadBytes>wirePayload?fragmentProtocol:null;
  if(!payloadBytes) reasons.push('framing_exceeds_limit');
  else if(payloadBytes<1024) reasons.push('payload_below_minimum');
- return {version:1,status:protocol&&payloadBytes>=1024?'proposed':'unavailable',protocol,messageBytes,payloadBytes,framingBytes,fragmentFallback,reasons,scope:'observed_connections_only',requiresAgreement:true,validateTargetConnection:true};
+ return {version:1,status:protocol&&payloadBytes>=1024?'proposed':'unavailable',protocol,messageBytes,payloadBytes,framingBytes,fragmentFallback,reasons,scope:'control_connection_observation',requiresAgreement:true,validateTargetConnection:true,
+  observations:{local:{scope:local.observationScope??'unknown',route:local.controlRoute??null},remote:{scope:remote.observationScope??'unknown',route:remote.controlRoute??null}}};
 }

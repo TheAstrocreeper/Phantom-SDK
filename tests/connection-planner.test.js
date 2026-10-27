@@ -5,6 +5,11 @@ const report=(limit,protocols=['file-v1'])=>createCapabilityReport({version:1,me
 test('report only exposes explicitly selected capabilities',()=>{
  const r=report({status:'known',bytes:262144});assert.deepEqual(r,{version:1,messageLimit:{status:'known',bytes:262144},maxChunkBytes:65536,protocols:['file-v1']});
 });
+test('control route observations retain only bounded non-identifying fields',()=>{
+ const r=createCapabilityReport({version:1,messageLimit:{status:'known',bytes:131072},observationScope:'control',controlRoute:{localType:'host',remoteType:'srflx',protocol:'udp',rttSeconds:.04,address:'192.0.2.1'},stats:{rows:[{secret:'private'}]}},{protocols:['file-v1'],maxChunkBytes:262144});
+ assert.deepEqual(r.controlRoute,{localType:'host',remoteType:'srflx',protocol:'udp',rttSeconds:.04});assert.equal(r.observationScope,'control');assert.equal(JSON.stringify(r).includes('192.0.2.1'),false);
+ const p=planConnection({local:r,remote:r,maxPayloadBytes:262144,protocolPreference:['file-v1']});assert.equal(p.messageBytes,131072);assert.equal(p.payloadBytes,131072);assert.equal(p.observations.local.scope,'control');assert.equal(p.validateTargetConnection,true);
+});
 test('plan respects smaller limit, overhead and actual implementation bound',()=>{
  const local=report({status:'known',bytes:262144}),remote=report({status:'known',bytes:131072});
  const p=planConnection({local,remote,maxPayloadBytes:65536,framingBytes:12,protocolPreference:['file-v1']});
