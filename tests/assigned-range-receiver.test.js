@@ -2,6 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {createFileDistribution,createMemoryChunkStore} from '../packages/phantom-core/src/files.js';
 import {createAssignedRangeReceiver} from '../packages/phantom-core/src/assigned-range-receiver.js';
+import {createAdminAuthorization,createAdminIdentity} from '../packages/phantom-core/src/authorization.js';
 const authorized=async()=>true;
 
 async function fixture(){
@@ -41,4 +42,26 @@ test('rejects tampered manifests and bounds queued writes',async()=>{
  const memory=createMemoryChunkStore();let entered,release;const inside=new Promise(r=>entered=r),gate=new Promise(r=>release=r);
  const receiver=await createAssignedRangeReceiver({manifest:f.manifest,chunkStore:{...memory,async put(...args){entered();await gate;await memory.put(...args);}},verifyManifest:authorized,maxPending:1,maxWrites:1});
  const lease=receiver.claim([0,1]),first=receiver.receive(lease,0,f.chunk(0));await inside;await assert.rejects(receiver.receive(lease,1,f.chunk(1)),/capacity/);release();await first;await receiver.close();
+});
+test('accepts a signed publication only for its intended recipient',async()=>{
+ const f=await fixture(),admin=await createAdminIdentity(),recipient='a'.repeat(16),other='b'.repeat(16),networkId='range-test';
+ const proof=await admin.sign({networkId,action:'content.publish',target:f.manifest.id,recipients:[recipient],operationId:crypto.randomUUID()});
+ const policy=createAdminAuthorization({networkId,adminPublicKey:admin.publicKey,crypto});
+ const verifier=peer=>async manifest=>{const order=await policy.verify(proof);return !!order&&order.action==='content.publish'&&order.target===manifest.id&&order.recipients.includes(peer);};
+ await assert.rejects(createAssignedRangeReceiver({manifest:f.manifest,chunkStore:createMemoryChunkStore(),verifyManifest:verifier(other)}),/authorization/);
+ const receiver=await createAssignedRangeReceiver({manifest:f.manifest,chunkStore:createMemoryChunkStore(),verifyManifest:verifier(recipient)});const lease=receiver.claim([0]);await receiver.receive(lease,0,f.chunk(0));assert.equal(receiver.snapshot().received,1);await receiver.close();
+});
+test('rejects invalid trusted storage inventory',async()=>{
+ const f=await fixture(),store={...createMemoryChunkStore(),getVerifiedIndexes:()=>[f.manifest.total]};
+ await assert.rejects(createAssignedRangeReceiver({manifest:f.manifest,chunkStore:store,verifyManifest:authorized}),/Invalid verified storage inventory/);
+});
+test('handles assignments at both ends of a virtual 1200 MiB manifest',async()=>{
+ const hex=bytes=>Array.from(new Uint8Array(bytes),b=>b.toString(16).padStart(2,'0')).join('');
+ const digest=async bytes=>hex(await crypto.subtle.digest('SHA-256',bytes));
+ const chunkSize=65536,size=1200*1024*1024,total=size/chunkSize,chunk=new Uint8Array(chunkSize),hash=await digest(chunk),hashes=Array(total).fill(hash);
+ const m={version:1,name:'virtual',type:'application/octet-stream',size,chunkSize,total,hashRoot:await digest(new TextEncoder().encode(hashes.join(''))),distributionId:''};
+ m.id='sha256:'+await digest(new TextEncoder().encode(JSON.stringify([m.name,m.type,m.size,m.chunkSize,m.total,m.hashRoot,m.distributionId])));m.hashes=hashes;
+ const memory=createMemoryChunkStore(),store={...memory,getVerifiedIndexes:()=>[]};
+ const receiver=await createAssignedRangeReceiver({manifest:m,chunkStore:store,verifyManifest:authorized});const first=receiver.claim([0]),last=receiver.claim([total-1]);
+ await receiver.receive(last,total-1,chunk.buffer);await receiver.receive(first,0,chunk.buffer);assert.deepEqual(receiver.snapshot().have,[0,total-1]);await receiver.close();
 });

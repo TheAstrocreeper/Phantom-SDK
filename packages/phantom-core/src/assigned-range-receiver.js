@@ -20,6 +20,7 @@ export async function createAssignedRangeReceiver({manifest,chunkStore,verifyMan
  }else{
   for(const i of all){check();const bytes=await chunkStore.get(m.id,i);check();if(bytes instanceof ArrayBuffer&&bytes.byteLength===Math.min(m.chunkSize,m.size-i*m.chunkSize)&&await digest(bytes)===m.hashes[i])have.add(i);}
  }
+ check();
  const owners=new Map(),leases=new Set(),queued=[];let activeWrites=0,pendingCount=0,generation=0;
  function finishRetirement(lease){if(lease.live||lease.pending.size)return;for(const i of lease.indexes)if(owners.get(i)===lease)owners.delete(i);leases.delete(lease);lease.retiredResolve?.();}
  function assertLease(lease,index){check();if(!leases.has(lease)||!lease.live||!lease.indexes.has(index)||owners.get(index)!==lease)throw Error('Range assignment retired');}

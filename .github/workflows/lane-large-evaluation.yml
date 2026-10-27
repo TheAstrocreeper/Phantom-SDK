@@ -1,0 +1,31 @@
+name: Assigned-lane full large file
+on:
+  push:
+    branches: ['codex/lane-priority-model']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  large:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      PHANTOM_SHAPED_RTT_MS: '80'
+      PHANTOM_SHAPED_LOSS: '0'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: node --test tests/assigned-range-receiver.test.js
+      - run: npm ci --prefix tools/swarm
+      - run: sudo apt-get update && sudo apt-get install -y iproute2 socat
+      - name: Use installed Chrome
+        run: echo "PHANTOM_CHROMIUM_EXECUTABLE=$(command -v google-chrome)" >> "$GITHUB_ENV"
+      - run: bash tools/perf/delivery-native/lane-sdk-large-run.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: assigned-lane-full-1200MiB
+          path: tools/perf/delivery-native/lane-sdk-large-results-*/
+          if-no-files-found: error
