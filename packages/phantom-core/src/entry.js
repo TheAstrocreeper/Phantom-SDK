@@ -51,6 +51,8 @@ export function createPhantomEntry({openContext, relays, doorways, adminPublicKe
     const network={invite,networkId:context.networkId,
       refreshNetworkPermissions:()=>{active();return core.refreshNetworkPermissions?.()??Promise.resolve({localNetwork:{state:'unknown',name:null,reason:'permissions_api_unavailable',nextAction:'none'}});},
       prepareDistributionFile:(file,options)=>{active();if(!distribution)throw new Error('Enable distribution in SDK configuration');return distribution.prepare(file,options);},
+      requestTransferCapabilities:peer=>{active();if(!distribution)throw new Error('Enable distribution in SDK configuration');return distribution.requestCapabilities(peer);},
+      getTransferCapabilities:peer=>{active();return distribution?.getCapabilities(peer)??null;},
       distributeFile:(file,options)=>{active();if(!distribution)throw new Error('Enable distribution in SDK configuration');return distribution.publish(file,options);},
       getDistributionState:()=>distribution?.snapshot()??null,
       getDistributedFile:id=>{active();if(!distribution)throw new Error('Enable distribution in SDK configuration');return distribution.getFile(id);},
