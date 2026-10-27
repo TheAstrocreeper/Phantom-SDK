@@ -1,0 +1,29 @@
+name: Feed observation
+on:
+  push:
+    branches: ['codex/feed-observation']
+permissions:
+  contents: read
+jobs:
+  observe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PHANTOM_SHAPED_RTT_MS: '80'
+      PHANTOM_SHAPED_LOSS: '0.1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci --prefix tools/swarm
+      - run: sudo apt-get update && sudo apt-get install -y iproute2 socat
+      - name: Use installed Chrome
+        run: echo "PHANTOM_CHROMIUM_EXECUTABLE=$(command -v google-chrome)" >> "$GITHUB_ENV"
+      - run: bash tools/perf/delivery-native/coordinator-run.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: feed-observation
+          path: tools/perf/delivery-native/coordinator-results-*/
+          if-no-files-found: error

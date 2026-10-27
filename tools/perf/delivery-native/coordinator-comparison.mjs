@@ -15,7 +15,7 @@ const browsers=[],results=[];let failed;
 try{
  for(let n=1;n<=2;n++)browsers.push(await chromium.launch({headless:true,executablePath:resolve(root,'tools/perf/delivery-native/chromium.sh'),env:{...process.env,PHANTOM_SHAPED_PEER:`shaped${n}`},args:['--no-sandbox','--disable-dev-shm-usage','--disable-features=WebRtcHideLocalIpsWithMdns']}));
  // Alternate the order in the repeat so startup/order effects do not always favor one case.
- const cases=[['sdk',65536,3],['assigned',65536,3],['mixed',65536,3]];
+ const cases=[['assigned',65536,3]];
  for(let repeat=0;repeat<2;repeat++)for(const test of (repeat?[...cases].reverse():cases)){
   const [mode,messageBytes,parallel]=test,contexts=await Promise.all(browsers.map(b=>b.newContext())),pages=await Promise.all(contexts.map(c=>c.newPage())),pageErrors=[];let problem;
   try{
@@ -30,7 +30,7 @@ try{
    const endpoints=await Promise.all(pages.map(p=>p.evaluate(async()=>{if(record.errors.length&&navigator.storage?.estimate)record.storageEstimate=await navigator.storage.estimate().catch(()=>null);return record;})));let verifiedBytes=0;
    if(!problem){const id=await pages[0].evaluate(()=>assetId);verifiedBytes=await pages[1].evaluate(id=>verify(id),id);assert.equal(verifiedBytes,64*1024*1024);if(mode==='lanes'||mode==='lanes_fail'){const control=endpoints[1].controls.find(c=>c.id===controlId);assert.ok(control,'control delivered');assert.ok(control.receivedAtBytes<64*1024*1024,'control arrived before file completed');if(mode==='lanes_fail')assert.equal(endpoints[0].reassignments,1);}}
    const r=endpoints[1],first=r.marks.find(m=>m.bytes===2*1024*1024),last=r.marks.at(-1),steadyMbps=first&&last&&last.bytes>first.bytes?(last.bytes-first.bytes)*8/(last.atMs-first.atMs)/1000:null;
-   results.push({mode,messageBytes,parallel,repeat,elapsedMs:Date.now()-start,problem,verifiedBytes,steadyMbps,endpoints,pageErrors});console.log('RESULT',JSON.stringify({mode,messageBytes,parallel,repeat,problem,verifiedBytes,steadyMbps}));assert.deepEqual(pageErrors,[]);assert.deepEqual(endpoints.flatMap(e=>e.errors),[]);
+   results.push({mode,messageBytes,parallel,repeat,elapsedMs:Date.now()-start,problem,verifiedBytes,steadyMbps,endpoints,pageErrors});console.log('RESULT',JSON.stringify({mode,messageBytes,parallel,repeat,problem,verifiedBytes,steadyMbps}));if(problem)throw Error(problem);assert.deepEqual(pageErrors,[]);assert.deepEqual(endpoints.flatMap(e=>e.errors),[]);
   }finally{for(const p of pages)await p.evaluate(()=>window.stop?.()).catch(()=>{});await Promise.all(contexts.map(c=>c.close()));}
  }
  const qdiscs=[1,2].map(n=>JSON.parse(execFileSync('ip',['netns','exec',`shaped${n}`,'tc','-s','-j','qdisc','show','dev','eth0'],{encoding:'utf8'})));for(const qs of qdiscs)assert.ok(qs.find(q=>q.kind==='netem')?.bytes>0);results.push({qdiscs});
