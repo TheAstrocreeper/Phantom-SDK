@@ -15,10 +15,11 @@ export async function createDownloadSink(size) {
   }
   if (!navigator.serviceWorker.controller) await new Promise((resolve,reject)=>{const timeout=setTimeout(()=>reject(Error('Download worker did not take control')),10000);navigator.serviceWorker.addEventListener('controllerchange',()=>{clearTimeout(timeout);resolve();},{once:true});});
   const id = crypto.randomUUID(), pair = new MessageChannel(), pending = new Map();
+  window.streamDebug={messages:[],puts:0};
   let finishResolve, finishReject, rejected;
   let registerResolve; const registered = new Promise(resolve => {registerResolve = resolve;});
   pair.port1.onmessage = e => {
-    const m = e.data;
+    const m = e.data; if(window.streamDebug.messages.length<30)window.streamDebug.messages.push(m.type==='debug'?m:m.type);
     if (m.type === 'registered') registerResolve();
     else if (m.type === 'consumed') { pending.get(m.index)?.resolve(); pending.delete(m.index); }
     else if (m.type === 'closed') finishResolve?.();
@@ -28,7 +29,7 @@ export async function createDownloadSink(size) {
   await registered;
   return {
     start(){const a=document.createElement('a');a.href=`/tools/perf/continuous-prototype/download/${id}`;a.download='phantom-stream-test.bin';document.body.append(a);a.click();a.remove();},
-    put(_id,index,bytes){if(rejected)return Promise.reject(rejected);return new Promise((resolve,reject)=>{const transfer=bytes.slice(0);pending.set(index,{resolve,reject});pair.port1.postMessage({type:'chunk',index,bytes:transfer},[transfer]);});},
+    put(_id,index,bytes){window.streamDebug.puts++;if(rejected)return Promise.reject(rejected);return new Promise((resolve,reject)=>{const transfer=bytes.slice(0);pending.set(index,{resolve,reject});pair.port1.postMessage({type:'chunk',index,bytes:transfer},[transfer]);});},
     finish(){return new Promise((resolve,reject)=>{finishResolve=resolve;finishReject=reject;pair.port1.postMessage({type:'end'});});},
     abort(error){pair.port1.postMessage({type:'abort',error:String(error)});}
   };

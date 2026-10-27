@@ -8,6 +8,7 @@ self.addEventListener('message', event => {
   let controller, waiting = [], ended = false, failure;
   const pump = () => {
     if (!controller) return;
+    port.postMessage({type:'debug',stage:'pump',queued:waiting.length,want:controller.desiredSize});
     if (failure) { controller.error(failure); controller = null; return; }
     while (waiting.length && controller.desiredSize > 0) {
       const {index, bytes} = waiting.shift();
@@ -22,7 +23,7 @@ self.addEventListener('message', event => {
     else if (e.data?.type === 'abort') failure = Error(e.data.error || 'Transfer aborted');
     pump();
   };
-  sessions.set(id, {size, create() { return new ReadableStream({start(c){controller=c; pump();},pull(){pump();},cancel(reason){port.postMessage({type:'cancel',error:String(reason)});sessions.delete(id);}}); }});
+  sessions.set(id, {size, port, create() { return new ReadableStream({start(c){controller=c; pump();},pull(){pump();},cancel(reason){port.postMessage({type:'cancel',error:String(reason)});sessions.delete(id);}}); }});
   port.postMessage({type:'registered'});
 });
 self.addEventListener('fetch', event => {
@@ -31,6 +32,7 @@ self.addEventListener('fetch', event => {
   if (!url.pathname.startsWith(prefix)) return;
   const id = url.pathname.slice(prefix.length), session = sessions.get(id);
   if (!session) { event.respondWith(new Response('Unknown download',{status:404})); return; }
+  session.port.postMessage({type:'debug',stage:'fetch'});
   sessions.delete(id);
   event.respondWith(new Response(session.create(), {headers:{'Content-Type':'application/octet-stream','Content-Disposition':'attachment; filename="phantom-stream-test.bin"','Content-Length':String(session.size),'Cache-Control':'no-store'}}));
 });
