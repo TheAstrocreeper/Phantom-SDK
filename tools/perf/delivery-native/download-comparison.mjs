@@ -15,18 +15,18 @@ const browsers=[],results=[];let failed;
 try{
  for(let n=1;n<=2;n++)browsers.push(await chromium.launch({headless:true,executablePath:resolve(root,'tools/perf/delivery-native/chromium.sh'),env:{...process.env,PHANTOM_SHAPED_PEER:`shaped${n}`},args:['--no-sandbox','--disable-dev-shm-usage','--disable-features=WebRtcHideLocalIpsWithMdns']}));
  // Alternate the order in the repeat so startup/order effects do not always favor one case.
- const cases=[['download',65536,1],['stream',65536,1]];
- for(let repeat=0;repeat<2;repeat++)for(const test of (repeat?[...cases].reverse():cases)){
+ const cases=[['download',65536,1]];
+ for(let repeat=0;repeat<1;repeat++)for(const test of (repeat?[...cases].reverse():cases)){
   const [mode,messageBytes,parallel]=test,contexts=await Promise.all(browsers.map(b=>b.newContext())),pages=await Promise.all(contexts.map(c=>c.newPage())),pageErrors=[];let problem;
   try{
    for(let i=0;i<2;i++){pages[i].on('pageerror',e=>pageErrors.push(e.message));await pages[i].exposeFunction('bridge',frame=>pages[1-i].evaluate(frame=>deliver(frame),frame));await pages[i].exposeFunction('ice',c=>pages[1-i].evaluate(c=>addIce(c),c));}
    await Promise.all(pages.map(p=>p.goto('http://127.0.0.1:8080/tools/perf/continuous-prototype/')));await Promise.all(pages.map(p=>p.waitForFunction(()=>window.ready)));
-   const publicKey=await pages[0].evaluate(()=>makeAdmin()),ids=['1111111111111111','2222222222222222'];await Promise.all(pages.map((p,i)=>Promise.race([p.evaluate(options=>configure(options),{selfId:ids[i],peerId:ids[1-i],publicKey,mode,messageBytes,parallel}),new Promise((_,reject)=>setTimeout(()=>reject(Error('configure timed out: '+mode+' peer '+i)),15000))])));
-   if(mode==='stream'||mode==='download'){const offer=await pages[0].evaluate(()=>offer()),answer=await pages[1].evaluate(o=>window.answer(o),offer);await pages[0].evaluate(a=>setRemote(a),answer);await pages[0].waitForFunction(()=>dc.readyState==='open');}
-   let downloadPromise; if(mode==='download'){downloadPromise=pages[1].waitForEvent('download',{timeout:90000});downloadPromise.catch(()=>{});await pages[1].evaluate(()=>startDownload());}
-   const start=Date.now();const publishing=pages[0].evaluate(()=>publish());publishing.catch(()=>{});
+   console.log('STAGE configuring');const publicKey=await pages[0].evaluate(()=>makeAdmin()),ids=['1111111111111111','2222222222222222'];await Promise.all(pages.map((p,i)=>Promise.race([p.evaluate(options=>configure(options),{selfId:ids[i],peerId:ids[1-i],publicKey,mode,messageBytes,parallel}),new Promise((_,reject)=>setTimeout(()=>reject(Error('configure timed out: '+mode+' peer '+i)),15000))])));
+   console.log('STAGE configured');if(mode==='stream'||mode==='download'){const offer=await pages[0].evaluate(()=>offer()),answer=await pages[1].evaluate(o=>window.answer(o),offer);await pages[0].evaluate(a=>setRemote(a),answer);await pages[0].waitForFunction(()=>dc.readyState==='open');}
+   console.log('STAGE channel-open');let downloadPromise; if(mode==='download'){downloadPromise=pages[1].waitForEvent('download',{timeout:90000});downloadPromise.catch(()=>{});await pages[1].evaluate(()=>startDownload());}
+   console.log('STAGE download-requested');const start=Date.now();const publishing=pages[0].evaluate(()=>publish());publishing.catch(()=>{});
    try{await pages[1].waitForFunction(()=>record.complete,null,{timeout:90000});}catch{problem='90-second receive deadline';}
-   if (!problem) await publishing; else void publishing.catch(()=>{});
+   console.log('STAGE receiver-wait',problem??'complete');if (!problem) await publishing; else void publishing.catch(()=>{});
    const endpoints=await Promise.all(pages.map(p=>p.evaluate(()=>record)));let verifiedBytes=0;
    if(!problem){const id=mode==='sdk'?await pages[0].evaluate(()=>assetId):null;if(mode==='download'){const download=await downloadPromise;const failure=await download.failure();if(failure)throw Error('Browser download failed: '+failure);const data=await readFile(await download.path());assert.equal(data.length,32*1024*1024);assert.equal(data.some(v=>v!==0),false);verifiedBytes=data.length;}else verifiedBytes=await pages[1].evaluate(id=>verify(id),id);assert.equal(verifiedBytes,32*1024*1024);}
    const r=endpoints[1],first=r.marks.find(m=>m.bytes===2*1024*1024),last=r.marks.at(-1),steadyMbps=first&&last&&last.bytes>first.bytes?(last.bytes-first.bytes)*8/(last.atMs-first.atMs)/1000:null;

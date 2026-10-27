@@ -30,4 +30,4 @@ for n in 1 2; do
  ip netns exec "shaped$n" socat TCP-LISTEN:8080,bind=127.0.0.1,reuseaddr,fork TCP:10.211.0.1:8080 > "$report/proxy-$n.log" 2>&1 &
 done
 # The private PID namespace reaps browser and proxy children on every exit.
-node tools/perf/delivery-native/download-comparison.mjs "$report"
+timeout 120s node tools/perf/delivery-native/download-comparison.mjs "$report"
