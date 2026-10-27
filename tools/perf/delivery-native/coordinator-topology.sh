@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 [[ -n ${PHANTOM_SHAPED_PARENT_NET:-} && $(readlink /proc/self/ns/net) != "$PHANTOM_SHAPED_PARENT_NET" ]] || { echo 'Isolated network namespace required' >&2; exit 2; }
 [[ -n ${PHANTOM_SHAPED_PARENT_MNT:-} && $(readlink /proc/self/ns/mnt) != "$PHANTOM_SHAPED_PARENT_MNT" ]] || { echo 'Isolated mount namespace required' >&2; exit 2; }
-case ${PHANTOM_SHAPED_RTT_MS:-} in 0|80) ;; *) echo 'Unsupported RTT' >&2; exit 2;; esac
+case ${PHANTOM_SHAPED_RTT_MS:-} in 0|80|400) ;; *) echo 'Unsupported RTT' >&2; exit 2;; esac
 case ${PHANTOM_SHAPED_LOSS:-} in 0|0.1|1) ;; *) echo "Unsupported loss" >&2; exit 2;; esac
 report=${1:?report directory required}
 mount --make-rprivate /
