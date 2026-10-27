@@ -1,5 +1,7 @@
 import {createServer} from 'node:http';
-import {readFile,mkdir,writeFile} from 'node:fs/promises';
+import {readFile,mkdir,writeFile,mkdtemp,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
 import {readlinkSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
 import {resolve,sep} from 'node:path';
@@ -11,13 +13,13 @@ assert.equal(readlinkSync('/proc/self/ns/net'),process.env.PHANTOM_SHAPED_NET);
 assert.notEqual(process.env.PHANTOM_SHAPED_NET,process.env.PHANTOM_SHAPED_PARENT_NET);
 const root=resolve(fileURLToPath(new URL('../../../',import.meta.url))),folder=resolve(process.argv[2]);await mkdir(folder,{recursive:true});
 const server=createServer(async(req,res)=>{try{const path=new URL(req.url,'http://localhost').pathname;if(path==='/'){res.setHeader('Content-Type','text/html');res.end('<!doctype html><script type="module" src="/tools/perf/delivery-native/lane-sdk-large-fixture.js"></script>');return;}const target=resolve(root,'.'+path);if(!target.startsWith(root+sep)||!/^\/(packages|tools\/perf\/(delivery-native|continuous-prototype|lane-priority))\//.test(path)||!path.endsWith('.js')){res.writeHead(403).end();return;}res.setHeader('Content-Type','text/javascript');res.end(await readFile(target));}catch{res.writeHead(404).end();}});await new Promise(r=>server.listen(8080,'10.211.0.1',r));
-const browsers=[],results=[];let failed;
+const browsers=[],results=[],profileRoot=await mkdtemp(join(tmpdir(),'phantom-lane-large-'));let failed;
 try{
- for(let n=1;n<=2;n++)browsers.push(await chromium.launch({headless:true,executablePath:resolve(root,'tools/perf/delivery-native/chromium.sh'),env:{...process.env,PHANTOM_SHAPED_PEER:`shaped${n}`},args:['--no-sandbox','--disable-dev-shm-usage','--disable-features=WebRtcHideLocalIpsWithMdns']}));
+ for(let n=1;n<=2;n++)browsers.push(await chromium.launchPersistentContext(join(profileRoot,`peer-${n}`),{headless:true,executablePath:resolve(root,'tools/perf/delivery-native/chromium.sh'),env:{...process.env,PHANTOM_SHAPED_PEER:`shaped${n}`},args:['--no-sandbox','--disable-dev-shm-usage','--disable-features=WebRtcHideLocalIpsWithMdns']}));
  // Alternate the order in the repeat so startup/order effects do not always favor one case.
  const cases=[['lanes_fail',65536,3]];
  for(let repeat=0;repeat<1;repeat++)for(const test of (repeat?[...cases].reverse():cases)){
-  const [mode,messageBytes,parallel]=test,contexts=await Promise.all(browsers.map(b=>b.newContext())),pages=await Promise.all(contexts.map(c=>c.newPage())),pageErrors=[];let problem;
+  const [mode,messageBytes,parallel]=test,contexts=browsers,pages=await Promise.all(contexts.map(c=>c.newPage())),pageErrors=[];let problem;
   try{
    for(let i=0;i<2;i++){pages[i].on('pageerror',e=>pageErrors.push(e.message));await pages[i].exposeFunction('bridge',frame=>pages[1-i].evaluate(frame=>deliver(frame),frame));await pages[i].exposeFunction('ice',(c,index)=>pages[1-i].evaluate(({c,index})=>addIce(c,index),{c,index}));}
    await Promise.all(pages.map(p=>p.goto('http://127.0.0.1:8080/')));await Promise.all(pages.map(p=>p.waitForFunction(()=>window.ready)));
@@ -34,5 +36,5 @@ try{
   }finally{for(const p of pages)await p.evaluate(()=>window.stop?.()).catch(()=>{});await Promise.all(contexts.map(c=>c.close()));}
  }
  const qdiscs=[1,2].map(n=>JSON.parse(execFileSync('ip',['netns','exec',`shaped${n}`,'tc','-s','-j','qdisc','show','dev','eth0'],{encoding:'utf8'})));for(const qs of qdiscs)assert.ok(qs.find(q=>q.kind==='netem')?.bytes>0);results.push({qdiscs});
-}catch(error){failed=error;process.exitCode=1;console.error(error);}finally{await writeFile(resolve(folder,'results.json'),JSON.stringify({schema:1,source:process.env.GITHUB_SHA,profile:{addedRttMs:80,rateKbitPerSecond:15600,lossPercent:Number(process.env.PHANTOM_SHAPED_LOSS),fileBytes:1200*1024*1024,scope:'Full 1200 MiB generated file; independently assigned 2 MiB ranges across three data channels, each hashed and verified into the IndexedDB chunk store; no same-run SDK baseline. Experimental range transport uses SDK manifest verification, signed publication proof and assigned-range receiver; coordinator, live revocation propagation, durable resume and production peer signaling are not integrated. Framing and flow control differ. Failure case intentionally closes one lane and injects a control message; no timing-based stall detection. Two native Chrome endpoints; kernel-shaped UDP in both directions. TCP signaling unshaped. Independent random loss, not a measured model of the phone path. Steady payload rate excludes first 2 MiB; partial runs remain explicitly incomplete.'},passed:!failed,error:failed?.stack,results},null,2));await Promise.all(browsers.map(b=>b.close()));await new Promise(r=>server.close(r));}
+}catch(error){failed=error;process.exitCode=1;console.error(error);}finally{await writeFile(resolve(folder,'results.json'),JSON.stringify({schema:1,source:process.env.GITHUB_SHA,profile:{addedRttMs:80,rateKbitPerSecond:15600,lossPercent:Number(process.env.PHANTOM_SHAPED_LOSS),fileBytes:1200*1024*1024,scope:'Full 1200 MiB generated file using disposable persistent browser profiles; independently assigned 2 MiB ranges across three data channels, each hashed and verified into the IndexedDB chunk store; no same-run SDK baseline. Experimental range transport uses SDK manifest verification, signed publication proof and assigned-range receiver; coordinator, live revocation propagation, durable resume and production peer signaling are not integrated. Framing and flow control differ. Failure case intentionally closes one lane and injects a control message; no timing-based stall detection. Two native Chrome endpoints; kernel-shaped UDP in both directions. TCP signaling unshaped. Independent random loss, not a measured model of the phone path. Steady payload rate excludes first 2 MiB; partial runs remain explicitly incomplete.'},passed:!failed,error:failed?.stack,results},null,2));await Promise.all(browsers.map(b=>b.close().catch(()=>{})));await rm(profileRoot,{recursive:true,force:true});await new Promise(r=>server.close(r));}
 
