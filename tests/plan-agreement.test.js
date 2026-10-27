@@ -19,3 +19,8 @@ test('a replacement proposal invalidates the earlier plan and late acknowledgmen
  assert.equal(n.receive(ids[0],{type:'planDecision',version:1,id:two,accepted:true}),true);assert.equal(n.get(ids[0]).id,two);
  n.propose(ids[0],{protocolPreference:['file-v1']});assert.equal(n.get(ids[0]),null);
 });
+test('peers agree larger chunks only when both support fragment fallback',()=>{
+ const protocols=['file-v1','phantom-file-fragments-v1'];const cap=createCapabilityReport({version:1,messageLimit:{status:'unknown'}},{protocols,maxChunkBytes:262144});const nodes=[];
+ for(let i=0;i<2;i++)nodes[i]=createPlanAgreement({send:(p,body)=>nodes[1-i].receive(ids[i],body),allowed:p=>p===ids[1-i],localReport:()=>cap,remoteReport:()=>cap,newId:()=>`wide-${i}`});
+ nodes[0].propose(ids[1],{protocolPreference:['file-v1'],maxPayloadBytes:262144,allowFragmentation:true});assert.equal(nodes[0].get(ids[1]).plan.payloadBytes,262144);assert.equal(nodes[0].get(ids[1]).plan.fragmentFallback,'phantom-file-fragments-v1');
+});

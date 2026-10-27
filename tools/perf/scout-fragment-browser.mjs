@@ -25,11 +25,11 @@ try{
   try{
    services[0].requestCapabilities(ids[1]);await wait(()=>services[0].getCapabilities(ids[1]));
    const bytes=Uint8Array.from({length:262144+17},(_,i)=>i%251),file=new File([bytes],'fixture');let chunkSize=262144;
-   if(agreed){const id=services[0].proposePlan(ids[1]);await wait(()=>services[0].getPlan(ids[1])?.id===id);const prepared=await services[0].prepareAgreed(file,ids[1]);chunkSize=prepared.chunkSize;await services[0].publish(file,{prepared,recipients:[ids[1]]});}
+   if(agreed){const id=services[0].proposePlan(ids[1],{maxPayloadBytes:262144,allowFragmentation:true});await wait(()=>services[0].getPlan(ids[1])?.id===id);const prepared=await services[0].prepareAgreed(file,ids[1]);chunkSize=prepared.chunkSize;await services[0].publish(file,{prepared,recipients:[ids[1]]});}
    else await services[0].publish(file,{chunkSize,recipients:[ids[1]]});
    await wait(()=>events.some(e=>e.i===1&&e.type==='distributionComplete'));const blob=events.find(e=>e.i===1&&e.type==='distributionComplete').data.blob,received=new Uint8Array(await blob.arrayBuffer());
    return {agreed,chunkSize,wireLimit,expected:bytes.length,received:received.length,identical:received.every((v,i)=>v===bytes[i]),fragments:sent.length};
   }finally{services.forEach(s=>s.close());}
  },{agreed:process.env.PHANTOM_SCOUT_AGREED==='1'});
- assert.deepEqual(errors,[]);assert.equal(result.expected,262161);assert.equal(result.received,result.expected);assert.equal(result.identical,true);assert.equal(result.chunkSize,result.agreed?65536:262144);assert.ok(result.fragments>=4);console.log(JSON.stringify(result));
+ assert.deepEqual(errors,[]);assert.equal(result.expected,262161);assert.equal(result.received,result.expected);assert.equal(result.identical,true);assert.equal(result.chunkSize,262144);assert.ok(result.fragments>=4);console.log(JSON.stringify(result));
 }finally{await browser?.close();await new Promise(r=>server.close(r));}

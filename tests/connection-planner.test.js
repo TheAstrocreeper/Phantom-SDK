@@ -25,3 +25,9 @@ test('a peer without larger chunk capability forces the legacy limit',()=>{
  const local=createCapabilityReport({version:1,messageLimit:{status:'known',bytes:262144}},{protocols:['file-v1'],maxChunkBytes:262144});
  const remote=report({status:'known',bytes:262144});const p=planConnection({local,remote,maxPayloadBytes:262144,protocolPreference:['file-v1']});assert.equal(p.payloadBytes,65536);
 });
+test('both peers can explicitly plan larger chunks while retaining a smaller wire fallback',()=>{
+ const protocols=['file-v1','phantom-file-fragments-v1'];const local=createCapabilityReport({version:1,messageLimit:{status:'unknown'}},{protocols,maxChunkBytes:262144});
+ const p=planConnection({local,remote:local,maxPayloadBytes:262144,protocolPreference:['file-v1'],allowFragmentation:true});
+ assert.equal(p.payloadBytes,262144);assert.equal(p.messageBytes,65536);assert.equal(p.fragmentFallback,'phantom-file-fragments-v1');
+ const legacy=report({status:'unknown'});assert.equal(planConnection({local,remote:legacy,maxPayloadBytes:262144,protocolPreference:['file-v1'],allowFragmentation:true}).payloadBytes,65536);
+});

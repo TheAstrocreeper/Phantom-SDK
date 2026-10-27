@@ -7,9 +7,9 @@ export function createCapabilityReport(observation, {protocols = [],maxChunkByte
 }
 
 /** Produce a proposal only; callers must negotiate it and validate each actual connection. */
-export function planConnection({local,remote,defaultMessageBytes=65536,maxPayloadBytes=65536,framingBytes=0,protocolPreference=[]}={}) {
+export function planConnection({local,remote,defaultMessageBytes=65536,maxPayloadBytes=65536,framingBytes=0,protocolPreference=[],allowFragmentation=false}={}) {
  if (!local || local.version!==1 || !remote || remote.version!==1 || !Array.isArray(local.protocols) || !Array.isArray(remote.protocols) || local.protocols.length>32 || remote.protocols.length>32 || [...local.protocols,...remote.protocols].some(p=>typeof p!=='string'||!/^[a-z0-9][a-z0-9._-]{0,63}$/i.test(p))) throw new TypeError('Two valid v1 capability reports required');
- if (![defaultMessageBytes,maxPayloadBytes].every(n=>Number.isSafeInteger(n)&&n>0) || !Number.isSafeInteger(framingBytes) || framingBytes<0 || !Array.isArray(protocolPreference) || protocolPreference.length>32 || protocolPreference.some(p=>typeof p!=='string')) throw new TypeError('Invalid planner bounds');
+ if (![defaultMessageBytes,maxPayloadBytes].every(n=>Number.isSafeInteger(n)&&n>0) || !Number.isSafeInteger(framingBytes) || framingBytes<0 || typeof allowFragmentation!=='boolean' || !Array.isArray(protocolPreference) || protocolPreference.length>32 || protocolPreference.some(p=>typeof p!=='string')) throw new TypeError('Invalid planner bounds');
  const reasons=[], limits=[];
  for (const [side,report] of [['local',local],['remote',remote]]) {
   const limit=report.messageLimit;
@@ -26,8 +26,12 @@ export function planConnection({local,remote,defaultMessageBytes=65536,maxPayloa
   if(Number.isInteger(report.maxChunkBytes)&&report.maxChunkBytes>=1024&&report.maxChunkBytes<=262144)chunkCaps.push(report.maxChunkBytes);
   else{chunkCaps.push(65536);reasons.push(`${side}_chunk_limit_unknown`);}
  }
- const payloadBytes=Math.max(0,Math.min(maxPayloadBytes,...chunkCaps,messageBytes-framingBytes));
+ const fragmentProtocol='phantom-file-fragments-v1';
+ const canFragment=allowFragmentation&&local.protocols.includes(fragmentProtocol)&&remote.protocols.includes(fragmentProtocol);
+ const wirePayload=Math.max(0,messageBytes-framingBytes);
+ const payloadBytes=wirePayload?Math.max(0,Math.min(maxPayloadBytes,...chunkCaps,canFragment?Infinity:wirePayload)):0;
+ const fragmentFallback=canFragment&&payloadBytes>wirePayload?fragmentProtocol:null;
  if(!payloadBytes) reasons.push('framing_exceeds_limit');
  else if(payloadBytes<1024) reasons.push('payload_below_minimum');
- return {version:1,status:protocol&&payloadBytes>=1024?'proposed':'unavailable',protocol,messageBytes,payloadBytes,framingBytes,reasons,scope:'observed_connections_only',requiresAgreement:true,validateTargetConnection:true};
+ return {version:1,status:protocol&&payloadBytes>=1024?'proposed':'unavailable',protocol,messageBytes,payloadBytes,framingBytes,fragmentFallback,reasons,scope:'observed_connections_only',requiresAgreement:true,validateTargetConnection:true};
 }
