@@ -108,7 +108,9 @@ export function createFileDistribution({core,crypto=globalThis.crypto,emit=()=>{
   const wanted=new Set(indexes??Array.from({length:m.total},(_,i)=>i));
   const trustedWrites=typeof chunkStore.getVerifiedIndexes==='function';
   const committed=trustedWrites?await verifiedIndexes(m,[...wanted]):null;
-  const have=new Set();for(const i of wanted){if(trustedWrites?committed.has(i):await readChunk(m,i))have.add(i);}
+  if(signal?.aborted)throw new Error('File download aborted');
+  const have=new Set();for(const i of wanted){if(signal?.aborted)throw new Error('File download aborted');if(trustedWrites?committed.has(i):await readChunk(m,i))have.add(i);}
+  if(signal?.aborted)throw new Error('File download aborted');
   check(id);
   const order=[...wanted].filter(i=>!have.has(i)).sort((a,b)=>a-b);
   return new Promise((resolve,reject)=>{const d={m,wanted,order,available:new Set(order),selections:new Map(),trustedWrites,requestWindow:window,partial:indexes!==undefined,peers:[...new Set(peers)].filter(canUsePeer),have,startedAt:now(),peerProgress:new Map(),verifiedBytes:0,verificationMs:0,verified:new Set(have),writes:new Map(),timings:createFileTimings(),pending:new Map(),attempts:new Map(),resolve,reject,signal,abort:()=>fail(id,new Error('File download aborted'))};downloads.set(id,d);signal?.addEventListener('abort',d.abort,{once:true});if(signal?.aborted){d.abort();return;}pump(id);});

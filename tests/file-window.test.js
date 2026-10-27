@@ -71,6 +71,13 @@ test('overlapping requests cannot replace a download while its storage inventory
  try{const original=f.download();await inside;await assert.rejects(f.download(),/already active/);release();const blob=await original;assert.deepEqual(new Uint8Array(await blob.arrayBuffer()),f.bytes);}
  finally{release();f.close();}
 });
+test('aborting an inventory scan stops before reading the remaining chunks',async()=>{
+ const memory=createMemoryChunkStore();let release,entered,reads=0;const gate=new Promise(r=>release=r),inside=new Promise(r=>entered=r);
+ const store={...memory,async get(id,index){reads++;if(reads===1){entered();await gate;}return memory.get(id,index);}};
+ const f=await fixture({receiverStore:store}),controller=new AbortController();
+ try{const rejected=assert.rejects(f.download({signal:controller.signal}),/aborted/);await inside;controller.abort();release();await rejected;assert.equal(reads,1);assert.equal(f.requests.length,0);const blob=await f.download();assert.deepEqual(new Uint8Array(await blob.arrayBuffer()),f.bytes);}
+ finally{release();f.close();}
+});
 test('opt-in block source reads coalesce actual file requests without changing ordered verified delivery',async()=>{
  const f=await fixture({window:32,length:65536,readDelay:8,sourceReadBlockBytes:4*1024*1024});
  try{const blob=await f.download();assert.deepEqual(new Uint8Array(await blob.arrayBuffer()),f.bytes);assert.equal(f.sourceReadCalls,1);assert.equal(f.peakReads,1);assert.deepEqual(f.sent,Array.from({length:64},(_,i)=>i));}
