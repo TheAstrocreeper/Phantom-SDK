@@ -15,7 +15,7 @@ const browsers=[],results=[];let failed;
 try{
  for(let n=1;n<=2;n++)browsers.push(await chromium.launch({headless:true,executablePath:resolve(root,'tools/perf/delivery-native/chromium.sh'),env:{...process.env,PHANTOM_SHAPED_PEER:`shaped${n}`},args:['--no-sandbox','--disable-dev-shm-usage','--disable-features=WebRtcHideLocalIpsWithMdns']}));
  // Alternate the order in the repeat so startup/order effects do not always favor one case.
- const cases=[['sdk',65536,3],['assigned',65536,3],['mixed',65536,3]];
+ const cases=[['assigned',65536,3],['wide',65536,3]];
  for(let repeat=0;repeat<2;repeat++)for(const test of (repeat?[...cases].reverse():cases)){
   const [mode,messageBytes,parallel]=test,contexts=await Promise.all(browsers.map(b=>b.newContext())),pages=await Promise.all(contexts.map(c=>c.newPage())),pageErrors=[];let problem;
   try{
@@ -34,5 +34,5 @@ try{
   }finally{for(const p of pages)await p.evaluate(()=>window.stop?.()).catch(()=>{});await Promise.all(contexts.map(c=>c.close()));}
  }
  const qdiscs=[1,2].map(n=>JSON.parse(execFileSync('ip',['netns','exec',`shaped${n}`,'tc','-s','-j','qdisc','show','dev','eth0'],{encoding:'utf8'})));for(const qs of qdiscs)assert.ok(qs.find(q=>q.kind==='netem')?.bytes>0);results.push({qdiscs});
-}catch(error){failed=error;process.exitCode=1;console.error(error);}finally{await writeFile(resolve(folder,'results.json'),JSON.stringify({schema:1,source:process.env.GITHUB_SHA,profile:{addedRttMs:80,rateKbitPerSecond:15600,lossPercent:Number(process.env.PHANTOM_SHAPED_LOSS),fileBytes:64*1024*1024,scope:'Real SDK coordinator, 64 MiB verified. Compare current three-association striped jobs with experimental assigned jobs over separate connections. Two Chrome endpoints, simulated 80 ms RTT and independent random loss. No real-device claims. Two repetitions; excludes first 2 MiB from steady throughput.'},passed:!failed,error:failed?.stack,results},null,2));await Promise.all(browsers.map(b=>b.close()));await new Promise(r=>server.close(r));}
+}catch(error){failed=error;process.exitCode=1;console.error(error);}finally{await writeFile(resolve(folder,'results.json'),JSON.stringify({schema:1,source:process.env.GITHUB_SHA,profile:{addedRttMs:80,rateKbitPerSecond:15600,lossPercent:Number(process.env.PHANTOM_SHAPED_LOSS),fileBytes:64*1024*1024,scope:'Real SDK coordinator, 64 MiB verified. Compare 32 versus 96 shared receive slots and corresponding bounded source queues using assigned jobs over separate connections. Two Chrome endpoints, simulated 80 ms RTT and independent random loss. No real-device claims. Two repetitions; excludes first 2 MiB from steady throughput.'},passed:!failed,error:failed?.stack,results},null,2));await Promise.all(browsers.map(b=>b.close()));await new Promise(r=>server.close(r));}
 

@@ -68,7 +68,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
     if(type==='fileTransferTiming'){emit('distributionTransferTiming',payload);return;}
     if(type==='fileProgress'){for(const link of links.values())if(link.job.asset===payload.id&&link.job.receiver===self()&&link.peer===payload.from)progress(link);const asset=assets.get(payload.id);if(asset){let indexes=progressIndexes.get(payload.id);if(!indexes){indexes=new Set(asset.holders.get(self())??[]);progressIndexes.set(payload.id,indexes);}indexes.add(payload.index);payload={...payload,received:indexes.size};}}
     emit(type==='fileProgress'?'distributionProgress':type==='fileError'?'distributionError':'distributionFileEvent',{fileEvent:type,...payload});
-  },chunkStore,...Object.fromEntries(Object.entries(options).filter(([key])=>['chunkStore','requestTimeoutMs','requestWindow','maxAttemptsPerPeer','maxFileBytes'].includes(key)))});
+  },chunkStore,...Object.fromEntries(Object.entries(options).filter(([key])=>['chunkStore','requestTimeoutMs','requestWindow','maxReceiveSlots','maxAttemptsPerPeer','maxFileBytes'].includes(key)))});
   async function sendBinary(link,payload){let ok=false,reason='Distribution connection unavailable',bufferWaitMs=0;const waitAt=performance.now();try{
     await waitForDataChannelCapacity(link.dc,{bytes:payload.bytes.byteLength,timeoutMs:jobTimeoutMs,signal:link.sendController.signal});
     bufferWaitMs=performance.now()-waitAt;
