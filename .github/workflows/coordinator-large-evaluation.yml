@@ -1,0 +1,37 @@
+name: SDK coordinator full large file
+on:
+  push:
+    branches: ['codex/lane-priority-model']
+    paths: ['.github/workflows/coordinator-large-evaluation.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  large:
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [sdk, assigned]
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      PHANTOM_SHAPED_RTT_MS: '80'
+      PHANTOM_SHAPED_LOSS: '0'
+      PHANTOM_COORDINATOR_MODE: '${{ matrix.mode }}'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: node --test tests/assigned-range-receiver.test.js
+      - run: npm ci --prefix tools/swarm
+      - run: sudo apt-get update && sudo apt-get install -y iproute2 socat
+      - name: Use installed Chrome
+        run: echo "PHANTOM_CHROMIUM_EXECUTABLE=$(command -v google-chrome)" >> "$GITHUB_ENV"
+      - run: bash tools/perf/delivery-native/coordinator-large-run.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coordinator-full-1200MiB-${{ matrix.mode }}
+          path: tools/perf/delivery-native/coordinator-large-results-*/
+          if-no-files-found: error
