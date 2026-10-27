@@ -2,7 +2,17 @@
 // not that the download was saved successfully.
 export async function createDownloadSink(size) {
   const registration = await navigator.serviceWorker.register('/tools/perf/continuous-prototype/download-worker.js');
-  await navigator.serviceWorker.ready;
+  // The test page is outside this worker's scope; wait for its registration,
+  // not navigator.serviceWorker.ready (which waits for a page controller).
+  let worker = registration.active;
+  if (!worker) {
+    worker = registration.installing || registration.waiting;
+    if (!worker) throw Error('Download worker unavailable');
+    await new Promise((resolve,reject)=>{
+      const changed=()=>{if(worker.state==='activated'){worker.removeEventListener('statechange',changed);resolve();}else if(worker.state==='redundant'){worker.removeEventListener('statechange',changed);reject(Error('Download worker activation failed'));}};
+      worker.addEventListener('statechange',changed);changed();
+    });
+  }
   const id = crypto.randomUUID(), pair = new MessageChannel(), pending = new Map();
   let finishResolve, finishReject, rejected;
   let registerResolve; const registered = new Promise(resolve => {registerResolve = resolve;});
@@ -13,7 +23,7 @@ export async function createDownloadSink(size) {
     else if (m.type === 'closed') finishResolve?.();
     else if (m.type === 'cancel') { rejected = Error(m.error || 'Download cancelled'); for (const p of pending.values()) p.reject(rejected); pending.clear(); finishReject?.(rejected); }
   };
-  registration.active.postMessage({type:'register',id,size},[pair.port2]);
+  worker.postMessage({type:'register',id,size},[pair.port2]);
   await registered;
   return {
     start(){const a=document.createElement('a');a.href=`/tools/perf/continuous-prototype/download/${id}`;a.download='phantom-stream-test.bin';document.body.append(a);a.click();a.remove();},
