@@ -2,7 +2,7 @@ name: SDK coordinator full large file
 on:
   push:
     branches: ['codex/lane-priority-model']
-    paths: ['.github/workflows/coordinator-large-evaluation.yml']
+    paths: ['.github/workflows/coordinator-large-evaluation.yml', 'packages/phantom-core/src/network-distribution.js']
   workflow_dispatch:
 permissions:
   contents: read

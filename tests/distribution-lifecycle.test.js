@@ -15,7 +15,7 @@ async function fixture({intervalMs=1000,onSend,legacyProtocol=false,receiverStor
  for(const fn of callbacks.values())fn({type:'PRESENCE_ROSTER',payload:{list:[...ids,leader].map(hKey=>({hKey}))}});
  const file=new Blob([Uint8Array.from({length:65536},(_,i)=>i%251)]),manifest=await ds[0].publish(file);
  await ds[1].publish(file);
- function job(id,source,receiver,indexes,deadlineMs=2000){const job={id,source,receiver,indexes,asset:manifest.id,needsManifest:false,deadline:Date.now()+deadlineMs};const body={type:'job',job,asset:{...manifest,proof:frames.find(f=>f.body.type==='inventory').body.proof}};for(const to of [receiver,source])deliver(to,leader,body);}
+ function job(id,source,receiver,indexes,deadlineMs=2000){const job={id,source,receiver,indexes,asset:manifest.id,needsManifest:false,deadline:Date.now()+deadlineMs,...(assignedRanges?{assigned:true}:{})};const body={type:'job',job,asset:{...manifest,proof:frames.find(f=>f.body.type==='inventory').body.proof}};for(const to of [receiver,source])deliver(to,leader,body);}
  return {ds,events,frames,states,job,close(){ds.forEach(d=>d.close());}};
 }
 test('opposite-direction jobs keep requests and binary replies on their assigned channels',async()=>{

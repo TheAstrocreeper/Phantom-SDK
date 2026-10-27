@@ -14,8 +14,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
   // advertise support. Keep disabled until real-browser validation is complete.
   const assignedRanges=options.assignedRanges===true;
   if(![1,3].includes(transferLanes)||maxConnections<transferLanes)throw new TypeError('Invalid distribution transfer lanes');
-  if(assignedRanges&&transferLanes!==1)throw new TypeError('Assigned ranges require independent distribution connections');
-  const maxJobs=Math.floor(maxConnections/transferLanes);
+  const maxJobs=assignedRanges?maxConnections:Math.floor(maxConnections/transferLanes);
   const DistributionRTC=transferLanes===1?runtime.RTCPeerConnection:createStripedRTC(runtime.RTCPeerConnection,{lanes:transferLanes});
   const jobTimeoutMs=options.jobTimeoutMs??15000, intervalMs=options.intervalMs??250;
   if(!Number.isInteger(maxConnections)||maxConnections<1||maxConnections>16||!Number.isInteger(batchSize)||batchSize<1||batchSize>64||!Number.isFinite(jobTimeoutMs)||jobTimeoutMs<100||!Number.isFinite(intervalMs)||intervalMs<10)throw new TypeError('Invalid distribution limits');
@@ -95,7 +94,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
   function closeLink(id){pendingSignals.delete(id);closedJobs.set(id,Date.now());const link=links.get(id);if(!link)return;links.delete(id);link.sendController.abort();link.receiveController?.abort();files.flushTimings(link.peer,link.job.asset);if(link.readyTimer)clearTimeout(link.readyTimer);link.readyTimer=null;link.pc.onicecandidate=null;link.pc.onconnectionstatechange=null;link.pc.ondatachannel=null;if(link.dc){link.dc.onopen=null;link.dc.onmessage=null;link.dc.onclose=null;try{link.dc.close();}catch{}}try{link.pc.close();}catch{}link.pendingIce.length=0;link.binary=null;emit('distributionConnectionClosed',{jobId:id,peer:link.peer});}
   async function receive(link){const job=link.job,startedAt=performance.now();let succeeded=false;
     emit('distributionBatchStarted',{jobId:job.id,batch:job.batch??0,total:job.indexes.length,peer:link.peer});try{
-    await files.request(job.asset,{peers:[link.peer],indexes:job.indexes,signal:link.receiveController.signal,concurrentRanges:assignedRanges});
+    await files.request(job.asset,{peers:[link.peer],indexes:job.indexes,signal:link.receiveController.signal,concurrentRanges:job.assigned===true});
     if(!ownsBatch(link,job))return;
     const asset=assets.get(job.asset);if(!asset)throw Error('Unknown distribution');
     const have=asset.holders.get(self())??new Set();for(const i of job.indexes)have.add(i);asset.holders.set(self(),have);dirty=true;
@@ -160,12 +159,14 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
       if(interrupted){frame(leader(),{type:'failed',jobId:link.job.id,batch:batchOf(link.job),reason:'channel_closed'});emit('distributionConnectionFailed',{id:link.job.asset,jobId:link.job.id,batch:batchOf(link.job),peer:link.peer,reason:'channel_closed'});}
     }};
   }
-  async function open(job){if(links.has(job.id)||closedJobs.has(job.id))return;if(links.size>=maxJobs){frame(leader(),{type:'failed',jobId:job.id,batch:batchOf(job)});return;}
+  async function open(job){if(links.has(job.id)||closedJobs.has(job.id))return;const used=[...links.values()].reduce((n,link)=>n+(link.job.assigned?1:transferLanes),0);if(links.size>=maxJobs||used+(job.assigned?1:transferLanes)>maxConnections){frame(leader(),{type:'failed',jobId:job.id,batch:batchOf(job)});return;}
     const asset=assets.get(job.asset);if(!asset||!allowed(asset.id,asset.distributionId))return;
     const peer=job.source===self()?job.receiver:job.source;
     let link;
     try{
-    const pc=new DistributionRTC(options.rtcConfiguration??defaultRTCConfiguration());link={pc,peer,job,sendController:new AbortController(),started:false,pendingIce:[]};links.set(job.id,link);
+    const RTC=job.assigned===true?runtime.RTCPeerConnection:DistributionRTC;
+    if(job.assigned===true&&!assignedRanges)throw Error('Assigned ranges are not supported');
+    const pc=new RTC(options.rtcConfiguration??defaultRTCConfiguration());link={pc,peer,job,sendController:new AbortController(),started:false,pendingIce:[]};links.set(job.id,link);
     pc.onicecandidate=e=>{if(e.candidate)frame(peer,{type:'signal',jobId:job.id,candidate:e.candidate.toJSON?.()??e.candidate});};
     pc.onconnectionstatechange=()=>{if(['failed','closed'].includes(pc.connectionState)&&links.get(job.id)===link){
       const current=link.job,interrupted=current.receiver===self()&&!link.completed;
@@ -214,7 +215,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
       const asset=await acceptAsset(body.asset);if(!asset||(asset.proof.recipients&&!asset.proof.recipients.includes(job.receiver))||job.indexes.some(i=>!Number.isInteger(i)||i<0||i>=asset.total))return;
       if(body.type==='continue'){
         const link=links.get(job.id);
-        if(!link?.reuse||link.dc?.readyState!=='open'||job.asset!==link.job.asset||job.source!==link.job.source||job.receiver!==link.job.receiver||body.previousBatch!==(link.job.batch??0)||job.batch!==body.previousBatch+1)return;
+        if(!link?.reuse||link.dc?.readyState!=='open'||job.asset!==link.job.asset||job.source!==link.job.source||job.receiver!==link.job.receiver||!!job.assigned!==!!link.job.assigned||body.previousBatch!==(link.job.batch??0)||job.batch!==body.previousBatch+1)return;
         if(job.receiver===self()&&!link.completed)return;
         link.job=job;link.started=false;link.completed=false;link.sourceReady=false;link.binary=null;link.requestedIndexes.clear();link.activity=0;link.announcedActivity=0;link.leases={};
         if(job.receiver===self())probeSource(link);
@@ -245,7 +246,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
       if(body.type==='done'&&(sender!==job.receiver||(body.batch??0)!==(job.batch??0)))return;
       if(body.type==='done'){const a=assets.get(job.asset),have=a?.holders.get(sender)??new Set();for(const i of job.indexes)have.add(i);a?.holders.set(sender,have);dirty=true;setupFailures.delete(job.source+':'+job.receiver);blockedUntil.delete(job.source+':'+job.receiver);}
       else {const pair=job.source+':'+job.receiver;let delay=1000;if(body.reason==='rtc_setup_failed'){const failures=(setupFailures.get(pair)??0)+1;setupFailures.set(pair,failures);delay=Math.min(60000,jobTimeoutMs*2**Math.min(failures-1,3));}blockedUntil.set(pair,Date.now()+delay);emit('distributionJobFailed',{jobId:job.id,source:job.source,receiver:job.receiver,reportedBy:sender,reason:body.reason??'transfer_failed',retryAfterMs:delay});}
-      if(body.type==='done'&&reuseConnections&&body.reuse===true){
+      if(body.type==='done'&&reuseConnections&&body.reuse===true&&!(assignedRanges&&!job.assigned&&rangePeers.has(job.source)&&rangePeers.has(job.receiver))){
         const asset=assets.get(job.asset),have=asset?.holders.get(job.receiver),source=asset?.holders.get(job.source);
         // A live inventory cursor visits each piece once across reused batches.
         // Newly acquired pieces remain visible without rescanning the file or reopening RTC.
@@ -274,12 +275,12 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
     for(const asset of assets.values()){
       if(!allowed(asset.id,asset.distributionId))continue;
       for(const [peer]of asset.holders)if(!live.has(peer)){asset.holders.delete(peer);dirty=true;}
-      const counts=peer=>[...jobs.values()].filter(j=>j.source===peer||j.receiver===peer).length;
+      const counts=peer=>[...jobs.values()].filter(j=>j.source===peer||j.receiver===peer).reduce((n,j)=>n+(j.assigned?1:transferLanes),0);
       const canReceive=receiver=>{
         if(!live.has(receiver)||(asset.proof.recipients&&!asset.proof.recipients.includes(receiver)))return false;
         const have=asset.holders.get(receiver)??new Set();
         const active=[...jobs.values()].filter(j=>j.receiver===receiver);
-        return !(have.size===asset.total&&(asset.total>0||asset.holders.has(receiver)))&&(!active.length||(assignedRanges&&rangePeers.has(receiver)&&asset.holders.has(receiver)&&active.every(j=>j.asset===asset.id&&rangePeers.has(j.source))))&&counts(receiver)<maxJobs;
+        return !(have.size===asset.total&&(asset.total>0||asset.holders.has(receiver)))&&(!active.length||(assignedRanges&&rangePeers.has(receiver)&&asset.holders.has(receiver)&&active.every(j=>j.assigned===true&&j.asset===asset.id&&rangePeers.has(j.source))))&&counts(receiver)<maxConnections;
       };
       const receivers=roster.filter(canReceive);
       if(!receivers.length)continue;
@@ -290,11 +291,11 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
       for(const receiver of receivers){
         if(!canReceive(receiver))continue;
         const have=asset.holders.get(receiver)??new Set();
-        const candidates=[...asset.holders].filter(([peer,indexes])=>peer!==receiver&&live.has(peer)&&counts(peer)<maxJobs&&(![...jobs.values()].some(j=>j.receiver===receiver)||rangePeers.has(peer))&&(blockedUntil.get(peer+':'+receiver)??0)<=now&&(asset.total===0||[...indexes].some(i=>!have.has(i)))).sort((a,b)=>counts(a[0])-counts(b[0])||a[1].size-b[1].size||a[0].localeCompare(b[0]));
+        const candidates=[...asset.holders].filter(([peer,indexes])=>{const useAssigned=assignedRanges&&rangePeers.has(receiver)&&rangePeers.has(peer),cost=useAssigned?1:transferLanes;return peer!==receiver&&live.has(peer)&&counts(peer)+cost<=maxConnections&&counts(receiver)+cost<=maxConnections&&(![...jobs.values()].some(j=>j.receiver===receiver)||useAssigned)&&(blockedUntil.get(peer+':'+receiver)??0)<=now&&(asset.total===0||[...indexes].some(i=>!have.has(i)));}).sort((a,b)=>counts(a[0])-counts(b[0])||a[1].size-b[1].size||a[0].localeCompare(b[0]));
         const reserved=new Set([...jobs.values()].filter(j=>j.asset===asset.id&&j.receiver===receiver).flatMap(j=>j.indexes));
         const candidate=candidates.find(([,indexes])=>asset.total===0||[...indexes].some(i=>!have.has(i)&&!reserved.has(i)));
         if(!candidate)continue;const [source,indexes]=candidate,wanted=[...indexes].filter(i=>!have.has(i)&&!reserved.has(i)).sort((a,b)=>rarity(a)-rarity(b)||a-b).slice(0,batchSize);
-        const job={id:crypto.randomUUID(),asset:asset.id,source,receiver,indexes:wanted,needsManifest:!asset.holders.has(receiver),deadline:now+jobTimeoutMs};jobs.set(job.id,job);for(const i of wanted)copies.set(i,rarity(i)+1);dirty=true;
+        const job={id:crypto.randomUUID(),asset:asset.id,source,receiver,indexes:wanted,needsManifest:!asset.holders.has(receiver),deadline:now+jobTimeoutMs,...(assignedRanges&&rangePeers.has(source)&&rangePeers.has(receiver)?{assigned:true}:{})};jobs.set(job.id,job);for(const i of wanted)copies.set(i,rarity(i)+1);dirty=true;
         const body={type:'job',job,asset:{id:asset.id,total:asset.total,distributionId:asset.distributionId,proof:asset.proof}};
         // Receiver first so an immediately delivered offer has an assigned owner.
         frame(receiver,body);frame(source,body);emit('distributionJob',{...job});
