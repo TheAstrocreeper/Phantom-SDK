@@ -64,6 +64,13 @@ test('failed transfer resumes from verified cache and requests only the missing 
 test('latency fixture benchmark compares verified window 1 and 8 transfers',async t=>{const durations=[];for(const window of [1,8]){const f=await fixture({window,delay:10});try{const start=performance.now();const blob=await f.download();durations.push(performance.now()-start);assert.deepEqual(new Uint8Array(await blob.arrayBuffer()),f.bytes);}finally{f.close();}}t.diagnostic(`Simulated 20 ms request/response latency: window 1 ${durations[0].toFixed(0)} ms; window 8 ${durations[1].toFixed(0)} ms. Not a real-device throughput benchmark.`);assert.ok(durations[1]<durations[0]/2);});
 
 async function waitUntil(check){const end=Date.now()+2000;while(!check()&&Date.now()<end)await new Promise(r=>setTimeout(r,2));assert.ok(check(),'condition did not settle');}
+test('overlapping requests cannot replace a download while its storage inventory is loading',async()=>{
+ const memory=createMemoryChunkStore();let release,entered;const gate=new Promise(r=>release=r),inside=new Promise(r=>entered=r);let first=true;
+ const store={...memory,async get(id,index){if(first){first=false;entered();await gate;}return memory.get(id,index);}};
+ const f=await fixture({receiverStore:store});
+ try{const original=f.download();await inside;await assert.rejects(f.download(),/already active/);release();const blob=await original;assert.deepEqual(new Uint8Array(await blob.arrayBuffer()),f.bytes);}
+ finally{release();f.close();}
+});
 test('opt-in block source reads coalesce actual file requests without changing ordered verified delivery',async()=>{
  const f=await fixture({window:32,length:65536,readDelay:8,sourceReadBlockBytes:4*1024*1024});
  try{const blob=await f.download();assert.deepEqual(new Uint8Array(await blob.arrayBuffer()),f.bytes);assert.equal(f.sourceReadCalls,1);assert.equal(f.peakReads,1);assert.deepEqual(f.sent,Array.from({length:64},(_,i)=>i));}
