@@ -1,6 +1,7 @@
 import {createStripedRTC} from './striped-distribution-rtc.js';
 import {defaultRTCConfiguration} from './rtc-configuration.js';
 import {waitForDataChannelCapacity} from './data-channel-capacity.js';
+import {scoutConnection} from './connection-scout.js';
 import {createFileDistribution,createMemoryChunkStore} from './files.js';
 import {createAdminAuthorization} from './authorization.js';
 
@@ -31,6 +32,15 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
   const isLeader=()=>state().role==='syscon1'&&leader()===self();
   const fire=(type,payload)=>{for(const fn of listeners)fn({type,payload});};
   function traceChunk(payload){if(options.traceChunks===true)emit('distributionChunkTrace',payload);}
+  function scout(link,phase){
+    if(options.scout!==true)return;
+    const pcs=Array.isArray(link.pc?.pcs)?link.pc.pcs:[link.pc];
+    for(const [lane,pc] of pcs.entries()){
+      const dc=Array.isArray(link.pc?.channels)?link.pc.channels[lane]:link.dc;
+      const context={phase,lane,jobId:link.job.id,role:link.job.source===self()?'source':'receiver',at:Date.now()};
+      void scoutConnection(pc,{channel:dc}).then(report=>emit('distributionScout',{...context,report})).catch(()=>emit('distributionScout',{...context,error:'scout_failed'}));
+    }
+  }
   function error(error,context={}){if(!closed)emit('distributionError',{...context,error:error.message});}
   const batchOf=job=>job.batch??0;
   const sameBatch=(job,batch)=>Number.isSafeInteger(batch??0)&&(batch??0)===batchOf(job);
@@ -91,7 +101,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
     }
   }
   function payloadSend(link,data){link.dc.send(data);link.payloadEnd=link.submittedBytes;}
-  function closeLink(id){pendingSignals.delete(id);closedJobs.set(id,Date.now());const link=links.get(id);if(!link)return;links.delete(id);link.sendController.abort();link.receiveController?.abort();files.flushTimings(link.peer,link.job.asset);if(link.readyTimer)clearTimeout(link.readyTimer);link.readyTimer=null;link.pc.onicecandidate=null;link.pc.onconnectionstatechange=null;link.pc.ondatachannel=null;if(link.dc){link.dc.onopen=null;link.dc.onmessage=null;link.dc.onclose=null;try{link.dc.close();}catch{}}try{link.pc.close();}catch{}link.pendingIce.length=0;link.binary=null;emit('distributionConnectionClosed',{jobId:id,peer:link.peer});}
+  function closeLink(id){pendingSignals.delete(id);closedJobs.set(id,Date.now());const link=links.get(id);if(!link)return;scout(link,'closing');links.delete(id);link.sendController.abort();link.receiveController?.abort();files.flushTimings(link.peer,link.job.asset);if(link.readyTimer)clearTimeout(link.readyTimer);link.readyTimer=null;link.pc.onicecandidate=null;link.pc.onconnectionstatechange=null;link.pc.ondatachannel=null;if(link.dc){link.dc.onopen=null;link.dc.onmessage=null;link.dc.onclose=null;try{link.dc.close();}catch{}}try{link.pc.close();}catch{}link.pendingIce.length=0;link.binary=null;emit('distributionConnectionClosed',{jobId:id,peer:link.peer});}
   async function receive(link){const job=link.job,startedAt=performance.now();let succeeded=false;
     emit('distributionBatchStarted',{jobId:job.id,batch:job.batch??0,total:job.indexes.length,peer:link.peer});try{
     await files.request(job.asset,{peers:[link.peer],indexes:job.indexes,signal:link.receiveController.signal,concurrentRanges:job.assigned===true});
@@ -130,7 +140,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
   }
   function bind(link,dc){if(dc.label!=='phantom-distribution'){dc.close();return;}link.dc=dc;dc.binaryType='arraybuffer';link.submittedBytes=0;link.payloadEnd=0;link.drainedBytes=0;link.manifestOffsets=new Set();link.requestedIndexes=new Set();
     const nativeSend=dc.send.bind(dc);dc.send=data=>{const result=nativeSend(data);link.submittedBytes+=typeof data==='string'?new TextEncoder().encode(data).byteLength:data.byteLength;return result;};
-    dc.onopen=()=>{if(links.get(link.job.id)!==link||link.opened)return;link.opened=true;emit('distributionConnectionOpened',{jobId:link.job.id,peer:link.peer});
+    dc.onopen=()=>{if(links.get(link.job.id)!==link||link.opened)return;link.opened=true;scout(link,'open');emit('distributionConnectionOpened',{jobId:link.job.id,peer:link.peer});
       if(link.job.source===self()&&!link.requireReady&&link.job.needsManifest)void files.share(link.peer,link.job.asset).catch(error);
       if(link.job.receiver===self()){if(link.requireReady)probeSource(link);startReceiver(link);}
     };

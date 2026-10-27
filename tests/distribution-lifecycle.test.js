@@ -7,17 +7,21 @@ import {memoryRTC} from './fixtures/memory-rtc.js';
 const ids=['1111111111111111','2222222222222222'],leader='3333333333333333';
 const pause=ms=>new Promise(r=>setTimeout(r,ms));
 async function until(check){const end=Date.now()+2000;while(Date.now()<end){if(check())return;await pause(5);}assert.fail('distribution did not settle');}
-async function fixture({intervalMs=1000,onSend,legacyProtocol=false,receiverStore,assignedRanges=false}={}){
+async function fixture({intervalMs=1000,onSend,legacyProtocol=false,receiverStore,assignedRanges=false,scout=false}={}){
  const admin=await createAdminIdentity(),callbacks=new Map(),events=[],frames=[],RTC=memoryRTC({onSend});
  const states=ids.map(peerId=>({peerId,leader,mirror:ids[0],role:'peer',state:'admitted',admitted:true}));
  const deliver=(to,from,body)=>{if(legacyProtocol&&body.type==='signal')body={...body,readyProtocol:undefined};return callbacks.get(to)?.({type:'PHANTOM_DIST',payload:{from:leader,frame:{networkId:'room',from,to,body}}});};
- const ds=ids.map((id,i)=>createNetworkDistribution({core:{getState:()=>states[i],onEvent(fn){callbacks.set(id,fn);return()=>callbacks.delete(id);},command(type,{frame}){if(type!=='PHANTOM_DIST_SEND')return;frames.push(frame);queueMicrotask(()=>deliver(frame.to,frame.from,frame.body));}},networkId:'room',adminPublicKey:admin.publicKey,lifecycle:{issue:(action,target)=>admin.sign({networkId:'room',action,target,operationId:crypto.randomUUID()})},runtime:{crypto,RTCPeerConnection:RTC},options:{intervalMs,requestTimeoutMs:1000,assignedRanges,...(i===1&&receiverStore?{chunkStore:receiverStore}:{})},emit:(type,data)=>events.push({peer:id,type,data})}));
+ const ds=ids.map((id,i)=>createNetworkDistribution({core:{getState:()=>states[i],onEvent(fn){callbacks.set(id,fn);return()=>callbacks.delete(id);},command(type,{frame}){if(type!=='PHANTOM_DIST_SEND')return;frames.push(frame);queueMicrotask(()=>deliver(frame.to,frame.from,frame.body));}},networkId:'room',adminPublicKey:admin.publicKey,lifecycle:{issue:(action,target)=>admin.sign({networkId:'room',action,target,operationId:crypto.randomUUID()})},runtime:{crypto,RTCPeerConnection:RTC},options:{intervalMs,requestTimeoutMs:1000,assignedRanges,scout,...(i===1&&receiverStore?{chunkStore:receiverStore}:{})},emit:(type,data)=>events.push({peer:id,type,data})}));
  for(const fn of callbacks.values())fn({type:'PRESENCE_ROSTER',payload:{list:[...ids,leader].map(hKey=>({hKey}))}});
  const file=new Blob([Uint8Array.from({length:65536},(_,i)=>i%251)]),manifest=await ds[0].publish(file);
  await ds[1].publish(file);
  function job(id,source,receiver,indexes,deadlineMs=2000){const job={id,source,receiver,indexes,asset:manifest.id,needsManifest:false,deadline:Date.now()+deadlineMs,...(assignedRanges?{assigned:true}:{})};const body={type:'job',job,asset:{...manifest,proof:frames.find(f=>f.body.type==='inventory').body.proof}};for(const to of [receiver,source])deliver(to,leader,body);}
  return {ds,events,frames,states,job,close(){ds.forEach(d=>d.close());}};
 }
+test('opt-in scout reports both transfer endpoints without blocking transfer',async()=>{
+ const f=await fixture({assignedRanges:true,scout:true});
+ try{f.job('scouted',ids[0],ids[1],[0]);await until(()=>f.frames.some(x=>x.body.type==='done')&&f.events.filter(x=>x.type==='distributionScout'&&x.data.phase==='open').length===2);assert.deepEqual(new Set(f.events.filter(x=>x.type==='distributionScout').map(x=>x.data.role)),new Set(['source','receiver']));assert.deepEqual(f.events.filter(x=>x.type==='distributionError'),[]);}finally{f.close();}
+});
 test('opposite-direction jobs keep requests and binary replies on their assigned channels',async()=>{
  const requests=[];let released=false;
  const f=await fixture({onSend(data,ch){let m;try{m=JSON.parse(data);}catch{return true;}
