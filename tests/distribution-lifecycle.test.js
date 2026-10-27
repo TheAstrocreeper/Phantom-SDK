@@ -11,12 +11,12 @@ async function fixture({intervalMs=1000,onSend,legacyProtocol=false,receiverStor
  const admin=await createAdminIdentity(),callbacks=new Map(),events=[],frames=[],RTC=memoryRTC({onSend,maxMessageSize});
  const states=ids.map(peerId=>({peerId,leader,mirror:ids[0],role:'peer',state:'admitted',admitted:true}));
  const deliver=(to,from,body)=>{if(legacyProtocol&&body.type==='signal')body={...body,readyProtocol:undefined};return callbacks.get(to)?.({type:'PHANTOM_DIST',payload:{from:leader,frame:{networkId:'room',from,to,body}}});};
- const ds=ids.map((id,i)=>createNetworkDistribution({core:{getState:()=>states[i],...(controlObservations?{scoutPeer:async()=>controlObservations[i]}:{}),onEvent(fn){callbacks.set(id,fn);return()=>callbacks.delete(id);},command(type,{frame}){if(type!=='PHANTOM_DIST_SEND')return;frames.push(frame);queueMicrotask(()=>deliver(frame.to,frame.from,frame.body));}},networkId:'room',adminPublicKey:admin.publicKey,lifecycle:{issue:(action,target)=>admin.sign({networkId:'room',action,target,operationId:crypto.randomUUID()})},runtime:{crypto,RTCPeerConnection:RTC},options:{intervalMs,requestTimeoutMs:1000,assignedRanges,scout,capabilityExchange,maxChunkBytes,...(i===1&&receiverStore?{chunkStore:receiverStore}:{})},emit:(type,data)=>events.push({peer:id,type,data})}));
+ const ds=ids.map((id,i)=>createNetworkDistribution({core:{getState:()=>states[i],...(controlObservations?{scoutPeer:async()=>typeof controlObservations[i]==='function'?controlObservations[i]():controlObservations[i]}:{}),onEvent(fn){callbacks.set(id,fn);return()=>callbacks.delete(id);},command(type,{frame}){if(type!=='PHANTOM_DIST_SEND')return;frames.push(frame);queueMicrotask(()=>deliver(frame.to,frame.from,frame.body));}},networkId:'room',adminPublicKey:admin.publicKey,lifecycle:{issue:(action,target)=>admin.sign({networkId:'room',action,target,operationId:crypto.randomUUID()})},runtime:{crypto,RTCPeerConnection:RTC},options:{intervalMs,requestTimeoutMs:1000,assignedRanges,scout,capabilityExchange,maxChunkBytes,...(i===1&&receiverStore?{chunkStore:receiverStore}:{})},emit:(type,data)=>events.push({peer:id,type,data})}));
  for(const fn of callbacks.values())fn({type:'PRESENCE_ROSTER',payload:{list:[...ids,leader].map(hKey=>({hKey}))}});
  const file=new Blob([Uint8Array.from({length:fileSize},(_,i)=>i%251)]),manifest=await ds[0].publish(file,{chunkSize});
  await ds[1].publish(file,{chunkSize});
  function job(id,source,receiver,indexes,deadlineMs=2000){const job={id,source,receiver,indexes,asset:manifest.id,needsManifest:false,deadline:Date.now()+deadlineMs,...(assignedRanges?{assigned:true}:{})};const body={type:'job',job,asset:{...manifest,proof:frames.find(f=>f.body.type==='inventory').body.proof}};for(const to of [receiver,source])deliver(to,leader,body);}
- return {ds,events,frames,states,job,file,manifest,close(){ds.forEach(d=>d.close());}};
+ return {ds,events,frames,states,job,deliver,file,manifest,close(){ds.forEach(d=>d.close());}};
 }
 test('advertised large chunks fragment on a smaller data-channel limit and remain verified',async()=>{
  const sizes=[];const f=await fixture({capabilityExchange:true,assignedRanges:true,maxChunkBytes:262144,chunkSize:262144,fileSize:262144+17,maxMessageSize:65536,onSend(data){if(data instanceof ArrayBuffer)sizes.push(data.byteLength);return true;}});
@@ -53,6 +53,23 @@ test('a late observation cannot send capabilities after the peer is removed',asy
 test('both peers can start scouting at the same time',async()=>{
  const observation={messageLimit:{status:'known',bytes:262144},route:null};const f=await fixture({capabilityExchange:true,controlObservations:[observation,observation]});
  try{f.ds[0].requestCapabilities(ids[1]);f.ds[1].requestCapabilities(ids[0]);await until(()=>f.ds[0].getCapabilities(ids[1])&&f.ds[1].getCapabilities(ids[0]));assert.equal(f.ds[0].getCapabilities(ids[1]).messageLimit.bytes,262144);assert.equal(f.ds[1].getCapabilities(ids[0]).messageLimit.bytes,262144);}finally{f.close();}
+});
+test('a second observation cannot erase a verified one while a plan is proposed',async()=>{
+ let calls=0,releaseLocal,releaseRemote;const localPending=new Promise(resolve=>releaseLocal=resolve),remotePending=new Promise(resolve=>releaseRemote=resolve);
+ const observation={messageLimit:{status:'known',bytes:262144},route:null};
+ const f=await fixture({capabilityExchange:true,maxChunkBytes:262144,controlObservations:[()=>++calls===1?observation:localPending,()=>remotePending]});
+ try{
+  f.ds[0].requestCapabilities(ids[1]);await until(()=>f.frames.some(x=>x.from===ids[0]&&x.body.type==='capabilityRequest'));
+  f.deliver(ids[0],ids[1],{type:'capabilityRequest',version:1});await until(()=>calls===2);
+  f.deliver(ids[0],ids[1],{type:'capabilityReport',version:1,report:{version:1,messageLimit:{status:'known',bytes:131072},maxChunkBytes:262144,protocols:['phantom-file-v1'],observationScope:'control'}});
+  await until(()=>f.ds[0].getCapabilities(ids[1]));f.ds[0].proposePlan(ids[1],{maxPayloadBytes:262144});
+  const proposal=f.frames.find(x=>x.from===ids[0]&&x.body.type==='planProposal');assert.equal(proposal.body.messageBytes,131072);assert.equal(proposal.body.payloadBytes,131072);
+ }finally{releaseLocal(observation);releaseRemote(observation);f.close();}
+});
+test('simultaneous inbound and outbound scouting share the in-flight observation',async()=>{
+ let calls=0,release;const pending=new Promise(resolve=>release=resolve),observation={messageLimit:{status:'known',bytes:262144},route:null};
+ const f=await fixture({capabilityExchange:true,controlObservations:[()=>{calls++;return pending;},observation]});
+ try{f.ds[0].requestCapabilities(ids[1]);f.deliver(ids[0],ids[1],{type:'capabilityRequest',version:1});await pause(10);assert.equal(calls,1);release(observation);await until(()=>f.frames.some(x=>x.from===ids[0]&&x.body.type==='capabilityReport')&&f.frames.some(x=>x.from===ids[0]&&x.body.type==='capabilityRequest'));assert.equal(calls,1);}finally{release(observation);f.close();}
 });
 test('opt-in scout reports both transfer endpoints without blocking transfer',async()=>{
  const f=await fixture({assignedRanges:true,scout:true});
