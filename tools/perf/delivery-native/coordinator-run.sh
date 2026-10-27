@@ -9,6 +9,7 @@ trap '"${privilege[@]}" chown -R "$(id -u):$(id -g)" "$report"' EXIT
 "${privilege[@]}" env PATH="$PATH:/usr/sbin:/sbin" \
  GITHUB_SHA="${GITHUB_SHA:-$(git rev-parse HEAD)}" \
  PHANTOM_SHAPED_RTT_MS="$PHANTOM_SHAPED_RTT_MS" \
+ PHANTOM_BENCHMARK_DEADLINE_MS="${PHANTOM_BENCHMARK_DEADLINE_MS:-180000}" \
  PHANTOM_SHAPED_LOSS="${PHANTOM_SHAPED_LOSS:?loss required}" \
  PHANTOM_REAL_CHROMIUM="${PHANTOM_CHROMIUM_EXECUTABLE:?Chrome required}" \
  PHANTOM_SHAPED_PARENT_NET="$(readlink /proc/self/ns/net)" \

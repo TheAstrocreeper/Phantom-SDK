@@ -1,0 +1,30 @@
+name: Receive benchmark deadline check
+on:
+  push:
+    branches: ['codex/receive-window-lab']
+    paths: ['.github/workflows/window-deadline-smoke.yml']
+permissions:
+  contents: read
+jobs:
+  deadline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      PHANTOM_SHAPED_RTT_MS: '80'
+      PHANTOM_SHAPED_LOSS: '0'
+      PHANTOM_BENCHMARK_DEADLINE_MS: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci --prefix tools/swarm
+      - run: sudo apt-get update && sudo apt-get install -y iproute2 socat
+      - run: echo "PHANTOM_CHROMIUM_EXECUTABLE=$(command -v google-chrome)" >> "$GITHUB_ENV"
+      - name: Confirm deadline makes the benchmark fail and retains partial results
+        run: |
+          if bash tools/perf/delivery-native/coordinator-run.sh; then
+            echo 'Expected an incomplete transfer to fail' >&2
+            exit 1
+          fi
+          node -e "const d=require('./tools/perf/delivery-native/coordinator-results-0/results.json'); if(d.passed !== false || !d.results.some(r => r.problem && r.verifiedBytes === 0)) process.exit(1)"

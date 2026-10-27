@@ -2,6 +2,7 @@ name: Receive window experiment
 on:
   push:
     branches: ['codex/receive-window-lab']
+    paths: ['.github/workflows/receive-window-lab.yml']
 permissions:
   contents: read
 jobs:
