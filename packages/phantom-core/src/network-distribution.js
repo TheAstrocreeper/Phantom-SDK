@@ -10,9 +10,8 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
   const reuseConnections=options.reuseConnections!==false;
   const maxConnections=options.maxConnections??3, batchSize=options.batchSize??8;
   const transferLanes=options.transferLanes??1;
-  // Experimental: all participating peers must opt in. Capability negotiation
-  // and mixed-version fallback are not implemented, so this must stay disabled
-  // in production until both exist.
+  // Experimental: the leader enables parallel jobs only after both endpoints
+  // advertise support. Keep disabled until real-browser validation is complete.
   const assignedRanges=options.assignedRanges===true;
   if(![1,3].includes(transferLanes)||maxConnections<transferLanes)throw new TypeError('Invalid distribution transfer lanes');
   if(assignedRanges&&transferLanes!==1)throw new TypeError('Assigned ranges require independent distribution connections');
@@ -27,6 +26,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
   const policy=adminPublicKey?createAdminAuthorization({networkId,adminPublicKey,crypto}):null;
   const preparedFiles=new WeakMap(),continuationSelections=new WeakMap(),progressIndexes=new Map();
   const assets=new Map(),jobs=new Map(),links=new Map(),listeners=new Set(),finished=new Set(),blockedUntil=new Map(),setupFailures=new Map(),pendingSignals=new Map(),reported=new Map(),mirrored=new Map(),mirrorJobs=new Map(),closedJobs=new Map();
+  const rangePeers=new Set();let rangeAdvertisement='';
   let closed=false,sequence=0,leaderToken='',checkedToken='',checking=false,dirty=false,lastReport=0,receivedSequence=-1;
   const state=()=>core.getState(),self=()=>state().peerId,leader=()=>state().leader;
   const isLeader=()=>state().role==='syscon1'&&leader()===self();
@@ -39,8 +39,8 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
   function frame(to,body){if(closed||!self()||!leader()||!canUsePeer(to))return;const packet={networkId,from:self(),to,body};if(to===self()){void handle(self(),packet).catch(error);return;}core.command('PHANTOM_DIST_SEND',{to:isLeader()?to:leader(),frame:packet});}
   // The facade supplies the committed roster projection. Reading it never changes it.
   let roster=[];
-  function setRoster(rows){roster=rows.map(r=>r.hKey).filter(k=>/^[0-9a-f]{16}$/.test(k)&&canUsePeer(k));}
-  function report(){for(const asset of assets.values())if(allowed(asset.id,asset.distributionId)&&asset.holders.has(self())){const sent=reported.get(asset.id)??new Set(),have=asset.holders.get(self());if(reported.has(asset.id)&&sent.size===have.size)continue;const indexes=[...have].filter(i=>!sent.has(i)).sort((a,b)=>a-b);for(let offset=0;offset<Math.max(1,indexes.length);offset+=128)frame(leader(),{type:'inventory',id:asset.id,total:asset.total,distributionId:asset.distributionId,proof:asset.proof,indexes:indexes.slice(offset,offset+128)});reported.set(asset.id,sent);}lastReport=Date.now();}
+  function setRoster(rows){roster=rows.map(r=>r.hKey).filter(k=>/^[0-9a-f]{16}$/.test(k)&&canUsePeer(k));for(const peer of rangePeers)if(!roster.includes(peer))rangePeers.delete(peer);}
+  function report(){if(assignedRanges&&self()&&leader()&&canUsePeer(leader())&&rangeAdvertisement!==leaderToken){rangeAdvertisement=leaderToken;frame(leader(),{type:'rangeCapability',version:1});}for(const asset of assets.values())if(allowed(asset.id,asset.distributionId)&&asset.holders.has(self())){const sent=reported.get(asset.id)??new Set(),have=asset.holders.get(self());if(reported.has(asset.id)&&sent.size===have.size)continue;const indexes=[...have].filter(i=>!sent.has(i)).sort((a,b)=>a-b);for(let offset=0;offset<Math.max(1,indexes.length);offset+=128)frame(leader(),{type:'inventory',id:asset.id,total:asset.total,distributionId:asset.distributionId,proof:asset.proof,indexes:indexes.slice(offset,offset+128)});reported.set(asset.id,sent);}lastReport=Date.now();}
   function table(){return {sequence,leader:self(),assets:[...assets.values()].map(a=>({id:a.id,total:a.total,distributionId:a.distributionId,proof:a.proof,holders:[...a.holders].map(([peer,indexes])=>({peer,indexes:[...indexes].sort((a,b)=>a-b)}))}))};}
   function mirror(){if(!isLeader()||!dirty)return;dirty=false;sequence++;const mirror=state().mirror;if(mirror&&mirror!==self()){
     // Page by holder; large piece inventories stay bounded to the control frame limit.
@@ -197,6 +197,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
     }
     if(packet.from!==from&&from!==leader())return;
     const body=packet.body,sender=packet.from;
+    if(body.type==='rangeCapability'&&isLeader()&&roster.includes(sender)&&body.version===1){rangePeers.add(sender);return;}
     if(body.type==='inventory'&&isLeader()&&roster.includes(sender)){
       const asset=await acceptAsset(body);if(!asset||!Array.isArray(body.indexes)||body.indexes.length>128||body.indexes.some(i=>!Number.isInteger(i)||i<0||i>=asset.total))return;
       const have=asset.holders.get(sender)??new Set(),old=have.size;for(const i of body.indexes)have.add(i);asset.holders.set(sender,have);if(have.size!==old)dirty=true;frame(sender,{type:'inventoryAck',id:asset.id,indexes:body.indexes});return;
@@ -278,7 +279,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
         if(!live.has(receiver)||(asset.proof.recipients&&!asset.proof.recipients.includes(receiver)))return false;
         const have=asset.holders.get(receiver)??new Set();
         const active=[...jobs.values()].filter(j=>j.receiver===receiver);
-        return !(have.size===asset.total&&(asset.total>0||asset.holders.has(receiver)))&&(!active.length||(assignedRanges&&asset.holders.has(receiver)&&active.every(j=>j.asset===asset.id)))&&counts(receiver)<maxJobs;
+        return !(have.size===asset.total&&(asset.total>0||asset.holders.has(receiver)))&&(!active.length||(assignedRanges&&rangePeers.has(receiver)&&asset.holders.has(receiver)&&active.every(j=>j.asset===asset.id&&rangePeers.has(j.source))))&&counts(receiver)<maxJobs;
       };
       const receivers=roster.filter(canReceive);
       if(!receivers.length)continue;
@@ -289,7 +290,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
       for(const receiver of receivers){
         if(!canReceive(receiver))continue;
         const have=asset.holders.get(receiver)??new Set();
-        const candidates=[...asset.holders].filter(([peer,indexes])=>peer!==receiver&&live.has(peer)&&counts(peer)<maxJobs&&(blockedUntil.get(peer+':'+receiver)??0)<=now&&(asset.total===0||[...indexes].some(i=>!have.has(i)))).sort((a,b)=>counts(a[0])-counts(b[0])||a[1].size-b[1].size||a[0].localeCompare(b[0]));
+        const candidates=[...asset.holders].filter(([peer,indexes])=>peer!==receiver&&live.has(peer)&&counts(peer)<maxJobs&&(![...jobs.values()].some(j=>j.receiver===receiver)||rangePeers.has(peer))&&(blockedUntil.get(peer+':'+receiver)??0)<=now&&(asset.total===0||[...indexes].some(i=>!have.has(i)))).sort((a,b)=>counts(a[0])-counts(b[0])||a[1].size-b[1].size||a[0].localeCompare(b[0]));
         const reserved=new Set([...jobs.values()].filter(j=>j.asset===asset.id&&j.receiver===receiver).flatMap(j=>j.indexes));
         const candidate=candidates.find(([,indexes])=>asset.total===0||[...indexes].some(i=>!have.has(i)&&!reserved.has(i)));
         if(!candidate)continue;const [source,indexes]=candidate,wanted=[...indexes].filter(i=>!have.has(i)&&!reserved.has(i)).sort((a,b)=>rarity(a)-rarity(b)||a-b).slice(0,batchSize);
@@ -301,7 +302,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
     }
   }
   function syncLeadership(){const token=leader()+':'+state().mirror;
-    if(token!==leaderToken){leaderToken=token;checkedToken='';receivedSequence=-1;reported.clear();mirrored.clear();mirrorJobs.clear();for(const job of [...jobs.values()])finishJob(job);for(const id of [...links.keys()]){const link=links.get(id);closeLink(id);}dirty=true;lastReport=0;}
+    if(token!==leaderToken){leaderToken=token;checkedToken='';receivedSequence=-1;rangePeers.clear();rangeAdvertisement='';reported.clear();mirrored.clear();mirrorJobs.clear();for(const job of [...jobs.values()])finishJob(job);for(const id of [...links.keys()]){const link=links.get(id);closeLink(id);}dirty=true;lastReport=0;}
   }
   function restore(){
     if(restoration)return restoration;
@@ -339,10 +340,10 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
     if(Date.now()-lastReport>1000){if(state().role==='peer'&&state().state!=='admitted')core.command('PHANTOM_DIST_RECOVER_SYS',{});report();}schedule();mirror();
     for(const [id,link]of links)if(Date.now()>link.job.deadline){closeLink(id);frame(leader(),{type:'failed',jobId:id,batch:batchOf(link.job)});}
   }
-  const off=core.onEvent(event=>{if(event.type==='PRESENCE_ROSTER')setRoster(event.payload?.list??[]);if(event.type==='PHANTOM_ADMIN_LINK_READY'){reported.clear();mirrored.clear();dirty=true;lastReport=0;}if(event.type==='PHANTOM_DIST')void handle(event.payload.from,event.payload.frame).catch(error);});
+  const off=core.onEvent(event=>{if(event.type==='PRESENCE_ROSTER')setRoster(event.payload?.list??[]);if(event.type==='PHANTOM_ADMIN_LINK_READY'){rangeAdvertisement='';reported.clear();mirrored.clear();dirty=true;lastReport=0;}if(event.type==='PHANTOM_DIST')void handle(event.payload.from,event.payload.frame).catch(error);});
   const timer=setInterval(()=>{void tick().catch(error);},intervalMs);
   return {
-    dropPeer(peer){files.dropPeer(peer);roster=roster.filter(p=>p!==peer);for(const asset of assets.values())asset.holders.delete(peer);for(const job of [...jobs.values()])if(job.source===peer||job.receiver===peer)finishJob(job);for(const [id,link]of [...links])if(link.peer===peer){closeLink(id);}for(const [id,job]of mirrorJobs)if(job.source===peer||job.receiver===peer)mirrorJobs.delete(id);dirty=true;},
+    dropPeer(peer){files.dropPeer(peer);rangePeers.delete(peer);roster=roster.filter(p=>p!==peer);for(const asset of assets.values())asset.holders.delete(peer);for(const job of [...jobs.values()])if(job.source===peer||job.receiver===peer)finishJob(job);for(const [id,link]of [...links])if(link.peer===peer){closeLink(id);}for(const [id,job]of mirrorJobs)if(job.source===peer||job.receiver===peer)mirrorJobs.delete(id);dirty=true;},
     restore,
     async getFile(id){await restore();const asset=assets.get(id);if(closed||!asset||asset.holders.get(self())?.size!==asset.total)throw Error('No complete local distribution copy');return files.getFile(id);},
     async prepare(file,settings={}){if(closed)throw Error('Distribution closed');await restore();const manifest=await files.publish(file,settings);preparedFiles.set(manifest,{file,id:manifest.id});return manifest;},
