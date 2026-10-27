@@ -1,0 +1,19 @@
+name: Scout fragment validation
+on:
+  push:
+    branches: ['codex/connection-scout']
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci --prefix tools/swarm
+      - run: node --test tests/capability-exchange.test.js tests/plan-agreement.test.js tests/connection-planner.test.js tests/message-size-guard.test.js tests/distribution-lifecycle.test.js tests/file-window.test.js
+      - name: Verify smaller message limit with real Chrome
+        run: PHANTOM_CHROMIUM_EXECUTABLE="$(command -v google-chrome)" node tools/perf/scout-fragment-browser.mjs

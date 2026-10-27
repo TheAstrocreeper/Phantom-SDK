@@ -7,17 +7,29 @@ import {memoryRTC} from './fixtures/memory-rtc.js';
 const ids=['1111111111111111','2222222222222222'],leader='3333333333333333';
 const pause=ms=>new Promise(r=>setTimeout(r,ms));
 async function until(check){const end=Date.now()+2000;while(Date.now()<end){if(check())return;await pause(5);}assert.fail('distribution did not settle');}
-async function fixture({intervalMs=1000,onSend,legacyProtocol=false,receiverStore,assignedRanges=false,scout=false,capabilityExchange=false}={}){
- const admin=await createAdminIdentity(),callbacks=new Map(),events=[],frames=[],RTC=memoryRTC({onSend});
+async function fixture({intervalMs=1000,onSend,legacyProtocol=false,receiverStore,assignedRanges=false,scout=false,capabilityExchange=false,maxChunkBytes=65536,chunkSize=16384,fileSize=65536,maxMessageSize=262144}={}){
+ const admin=await createAdminIdentity(),callbacks=new Map(),events=[],frames=[],RTC=memoryRTC({onSend,maxMessageSize});
  const states=ids.map(peerId=>({peerId,leader,mirror:ids[0],role:'peer',state:'admitted',admitted:true}));
  const deliver=(to,from,body)=>{if(legacyProtocol&&body.type==='signal')body={...body,readyProtocol:undefined};return callbacks.get(to)?.({type:'PHANTOM_DIST',payload:{from:leader,frame:{networkId:'room',from,to,body}}});};
- const ds=ids.map((id,i)=>createNetworkDistribution({core:{getState:()=>states[i],onEvent(fn){callbacks.set(id,fn);return()=>callbacks.delete(id);},command(type,{frame}){if(type!=='PHANTOM_DIST_SEND')return;frames.push(frame);queueMicrotask(()=>deliver(frame.to,frame.from,frame.body));}},networkId:'room',adminPublicKey:admin.publicKey,lifecycle:{issue:(action,target)=>admin.sign({networkId:'room',action,target,operationId:crypto.randomUUID()})},runtime:{crypto,RTCPeerConnection:RTC},options:{intervalMs,requestTimeoutMs:1000,assignedRanges,scout,capabilityExchange,...(i===1&&receiverStore?{chunkStore:receiverStore}:{})},emit:(type,data)=>events.push({peer:id,type,data})}));
+ const ds=ids.map((id,i)=>createNetworkDistribution({core:{getState:()=>states[i],onEvent(fn){callbacks.set(id,fn);return()=>callbacks.delete(id);},command(type,{frame}){if(type!=='PHANTOM_DIST_SEND')return;frames.push(frame);queueMicrotask(()=>deliver(frame.to,frame.from,frame.body));}},networkId:'room',adminPublicKey:admin.publicKey,lifecycle:{issue:(action,target)=>admin.sign({networkId:'room',action,target,operationId:crypto.randomUUID()})},runtime:{crypto,RTCPeerConnection:RTC},options:{intervalMs,requestTimeoutMs:1000,assignedRanges,scout,capabilityExchange,maxChunkBytes,...(i===1&&receiverStore?{chunkStore:receiverStore}:{})},emit:(type,data)=>events.push({peer:id,type,data})}));
  for(const fn of callbacks.values())fn({type:'PRESENCE_ROSTER',payload:{list:[...ids,leader].map(hKey=>({hKey}))}});
- const file=new Blob([Uint8Array.from({length:65536},(_,i)=>i%251)]),manifest=await ds[0].publish(file);
- await ds[1].publish(file);
+ const file=new Blob([Uint8Array.from({length:fileSize},(_,i)=>i%251)]),manifest=await ds[0].publish(file,{chunkSize});
+ await ds[1].publish(file,{chunkSize});
  function job(id,source,receiver,indexes,deadlineMs=2000){const job={id,source,receiver,indexes,asset:manifest.id,needsManifest:false,deadline:Date.now()+deadlineMs,...(assignedRanges?{assigned:true}:{})};const body={type:'job',job,asset:{...manifest,proof:frames.find(f=>f.body.type==='inventory').body.proof}};for(const to of [receiver,source])deliver(to,leader,body);}
- return {ds,events,frames,states,job,close(){ds.forEach(d=>d.close());}};
+ return {ds,events,frames,states,job,file,manifest,close(){ds.forEach(d=>d.close());}};
 }
+test('advertised large chunks fragment on a smaller data-channel limit and remain verified',async()=>{
+ const sizes=[];const f=await fixture({capabilityExchange:true,assignedRanges:true,maxChunkBytes:262144,chunkSize:262144,fileSize:262144+17,maxMessageSize:65536,onSend(data){if(data instanceof ArrayBuffer)sizes.push(data.byteLength);return true;}});
+ try{f.ds[0].requestCapabilities(ids[1]);await until(()=>f.ds[0].getCapabilities(ids[1]));f.job('fragmented',ids[0],ids[1],[0,1]);await until(()=>f.frames.some(x=>x.body.type==='done')||f.events.some(x=>x.type==='distributionError'));assert.deepEqual(f.events.filter(x=>x.type==='distributionError'),[]);assert.ok(f.frames.some(x=>x.body.type==='done'));assert.ok(sizes.length>=5);assert.ok(sizes.every(n=>n<=65536));assert.equal(f.events.filter(e=>e.type==='distributionProgress').length,2);}finally{f.close();}
+});
+test('oversize chunks do not use fragmentation without peer capability',async()=>{
+ const sizes=[];const f=await fixture({capabilityExchange:false,assignedRanges:true,maxChunkBytes:262144,chunkSize:262144,fileSize:262144,maxMessageSize:65536,onSend(data){if(data instanceof ArrayBuffer)sizes.push(data.byteLength);return true;}});
+ try{f.job('legacy-oversize',ids[0],ids[1],[0]);await until(()=>f.events.some(x=>x.type==='distributionError'));assert.ok(f.events.some(x=>x.type==='distributionError'&&/message limit/.test(x.data.error)));assert.equal(sizes.length,0);}finally{f.close();}
+});
+test('missing fragment fails the job without claiming a verified chunk',async()=>{
+ let dropNext=false,dropped=false;const f=await fixture({capabilityExchange:true,assignedRanges:true,maxChunkBytes:262144,chunkSize:262144,fileSize:262144,maxMessageSize:65536,onSend(data){if(typeof data==='string'){try{if(JSON.parse(data).kind==='binary-fragment'&&!dropped)dropNext=true;}catch{}}else if(dropNext){dropNext=false;dropped=true;return false;}return true;}});
+ try{f.ds[0].requestCapabilities(ids[1]);await until(()=>f.ds[0].getCapabilities(ids[1]));f.job('fragment-loss',ids[0],ids[1],[0]);await until(()=>f.frames.some(x=>x.body.type==='failed'));assert.equal(f.events.filter(x=>x.type==='distributionProgress').length,0);assert.ok(f.frames.some(x=>x.body.reason==='invalid_fragment'));}finally{f.close();}
+});
 test('distribution exchanges compatible capabilities before creating a file job',async()=>{
  const f=await fixture({capabilityExchange:true});
  try{f.ds[0].requestCapabilities(ids[1]);await until(()=>f.ds[0].getCapabilities(ids[1]));assert.equal(f.ds[0].getCapabilities(ids[1]).maxChunkBytes,65536);assert.equal(f.ds[0].getCapabilities(ids[1]).messageLimit.status,'unknown');assert.equal(f.frames.filter(x=>x.body.type==='job').length,0);

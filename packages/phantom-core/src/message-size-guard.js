@@ -7,3 +7,9 @@ export function fitsMessageLimits({connections,payloadBytes,headerBytes,wrapperB
   return known?payloadBytes+wrapperBytes<=limit&&headerBytes+wrapperBytes<=limit:payloadBytes<=unknownPayloadLimit;
  });
 }
+
+/** Smallest usable message payload across the actual target connections. */
+export function maxMessagePayload(connections,wrapperBytes=0,unknownLimit=65536) {
+ if(!Array.isArray(connections)||!connections.length||!Number.isSafeInteger(wrapperBytes)||wrapperBytes<0)return 0;
+ return Math.max(0,Math.min(...connections.map(pc=>{const n=pc?.sctp?.maxMessageSize;return typeof n==='number'&&(Number.isFinite(n)||n===Infinity)&&n>0?n:unknownLimit;}))-wrapperBytes);
+}
