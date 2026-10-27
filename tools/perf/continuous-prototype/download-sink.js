@@ -1,0 +1,24 @@
+// A test adapter; a consumed ACK means the browser stream accepted the bytes,
+// not that the download was saved successfully.
+export async function createDownloadSink(size) {
+  const registration = await navigator.serviceWorker.register('/tools/perf/continuous-prototype/download-worker.js');
+  await navigator.serviceWorker.ready;
+  const id = crypto.randomUUID(), pair = new MessageChannel(), pending = new Map();
+  let finishResolve, finishReject, rejected;
+  let registerResolve; const registered = new Promise(resolve => {registerResolve = resolve;});
+  pair.port1.onmessage = e => {
+    const m = e.data;
+    if (m.type === 'registered') registerResolve();
+    else if (m.type === 'consumed') { pending.get(m.index)?.resolve(); pending.delete(m.index); }
+    else if (m.type === 'closed') finishResolve?.();
+    else if (m.type === 'cancel') { rejected = Error(m.error || 'Download cancelled'); for (const p of pending.values()) p.reject(rejected); pending.clear(); finishReject?.(rejected); }
+  };
+  registration.active.postMessage({type:'register',id,size},[pair.port2]);
+  await registered;
+  return {
+    start(){const a=document.createElement('a');a.href=`/tools/perf/continuous-prototype/download/${id}`;a.download='phantom-stream-test.bin';document.body.append(a);a.click();a.remove();},
+    put(_id,index,bytes){if(rejected)return Promise.reject(rejected);return new Promise((resolve,reject)=>{pending.set(index,{resolve,reject});pair.port1.postMessage({type:'chunk',index,bytes},[bytes]);});},
+    finish(){return new Promise((resolve,reject)=>{finishResolve=resolve;finishReject=reject;pair.port1.postMessage({type:'end'});});},
+    abort(error){pair.port1.postMessage({type:'abort',error:String(error)});}
+  };
+}
