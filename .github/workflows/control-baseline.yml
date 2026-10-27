@@ -1,0 +1,17 @@
+name: SDK baseline verification
+on:
+  push:
+    branches: ['codex/control-baseline']
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci
+      - run: node --test tests/membership-live.test.js
