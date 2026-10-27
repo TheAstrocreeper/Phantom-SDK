@@ -10,7 +10,12 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
   const reuseConnections=options.reuseConnections!==false;
   const maxConnections=options.maxConnections??3, batchSize=options.batchSize??8;
   const transferLanes=options.transferLanes??1;
+  // Experimental: all participating peers must opt in. Capability negotiation
+  // and mixed-version fallback are not implemented, so this must stay disabled
+  // in production until both exist.
+  const assignedRanges=options.assignedRanges===true;
   if(![1,3].includes(transferLanes)||maxConnections<transferLanes)throw new TypeError('Invalid distribution transfer lanes');
+  if(assignedRanges&&transferLanes!==1)throw new TypeError('Assigned ranges require independent distribution connections');
   const maxJobs=Math.floor(maxConnections/transferLanes);
   const DistributionRTC=transferLanes===1?runtime.RTCPeerConnection:createStripedRTC(runtime.RTCPeerConnection,{lanes:transferLanes});
   const jobTimeoutMs=options.jobTimeoutMs??15000, intervalMs=options.intervalMs??250;
@@ -60,7 +65,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
     if(type==='SEND_FILE_BIN_CHUNK')void sendBinary(link,payload).catch(error);
   }};
   const files=createFileDistribution({core:transport,canUsePeer,crypto,allowed,emit:(type,payload)=>{
-    if(type==='fileOffer'){const asset=assets.get(payload.manifest.id);if(!asset||asset.total!==payload.manifest.total||asset.distributionId!==payload.manifest.distributionId){error(Error('Authorized manifest metadata mismatch'));return;}const link=[...links.values()].find(l=>l.job.asset===payload.manifest.id&&l.job.receiver===self()&&l.peer===payload.from);if(link)startReceiver(link);}
+    if(type==='fileOffer'){const asset=assets.get(payload.manifest.id);if(!asset||asset.total!==payload.manifest.total||asset.distributionId!==payload.manifest.distributionId){error(Error('Authorized manifest metadata mismatch'));return;}for(const link of links.values())if(link.job.asset===payload.manifest.id&&link.job.receiver===self()&&link.peer===payload.from)startReceiver(link);}
     if(type==='fileTransferTiming'){emit('distributionTransferTiming',payload);return;}
     if(type==='fileProgress'){for(const link of links.values())if(link.job.asset===payload.id&&link.job.receiver===self()&&link.peer===payload.from)progress(link);const asset=assets.get(payload.id);if(asset){let indexes=progressIndexes.get(payload.id);if(!indexes){indexes=new Set(asset.holders.get(self())??[]);progressIndexes.set(payload.id,indexes);}indexes.add(payload.index);payload={...payload,received:indexes.size};}}
     emit(type==='fileProgress'?'distributionProgress':type==='fileError'?'distributionError':'distributionFileEvent',{fileEvent:type,...payload});
@@ -90,7 +95,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
   function closeLink(id){pendingSignals.delete(id);closedJobs.set(id,Date.now());const link=links.get(id);if(!link)return;links.delete(id);link.sendController.abort();link.receiveController?.abort();files.flushTimings(link.peer,link.job.asset);if(link.readyTimer)clearTimeout(link.readyTimer);link.readyTimer=null;link.pc.onicecandidate=null;link.pc.onconnectionstatechange=null;link.pc.ondatachannel=null;if(link.dc){link.dc.onopen=null;link.dc.onmessage=null;link.dc.onclose=null;try{link.dc.close();}catch{}}try{link.pc.close();}catch{}link.pendingIce.length=0;link.binary=null;emit('distributionConnectionClosed',{jobId:id,peer:link.peer});}
   async function receive(link){const job=link.job,startedAt=performance.now();let succeeded=false;
     emit('distributionBatchStarted',{jobId:job.id,batch:job.batch??0,total:job.indexes.length,peer:link.peer});try{
-    await files.request(job.asset,{peers:[link.peer],indexes:job.indexes,signal:link.receiveController.signal});
+    await files.request(job.asset,{peers:[link.peer],indexes:job.indexes,signal:link.receiveController.signal,concurrentRanges:assignedRanges});
     if(!ownsBatch(link,job))return;
     const asset=assets.get(job.asset);if(!asset)throw Error('Unknown distribution');
     const have=asset.holders.get(self())??new Set();for(const i of job.indexes)have.add(i);asset.holders.set(self(),have);dirty=true;
@@ -245,8 +250,9 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
         // Newly acquired pieces remain visible without rescanning the file or reopening RTC.
         let selection=continuationSelections.get(job);const wanted=[];
         if(source&&have&&have.size<asset.total){
+          const reserved=new Set([...jobs.values()].filter(j=>j!==job&&j.asset===job.asset&&j.receiver===job.receiver).flatMap(j=>j.indexes));
           if(!selection||selection.source!==source)selection={source,iterator:source.values()};
-          while(wanted.length<batchSize){const step=selection.iterator.next();if(step.done)break;if(!have.has(step.value))wanted.push(step.value);}
+          while(wanted.length<batchSize){const step=selection.iterator.next();if(step.done)break;if(!have.has(step.value)&&!reserved.has(step.value))wanted.push(step.value);}
           wanted.sort((a,b)=>a-b);
         }
         if(wanted.length&&roster.includes(job.source)&&roster.includes(job.receiver)&&canUsePeer(job.source)&&canUsePeer(job.receiver)&&allowed(asset.id,asset.distributionId)){
@@ -271,7 +277,8 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
       const canReceive=receiver=>{
         if(!live.has(receiver)||(asset.proof.recipients&&!asset.proof.recipients.includes(receiver)))return false;
         const have=asset.holders.get(receiver)??new Set();
-        return !(have.size===asset.total&&(asset.total>0||asset.holders.has(receiver)))&&![...jobs.values()].some(j=>j.receiver===receiver)&&counts(receiver)<maxJobs;
+        const active=[...jobs.values()].filter(j=>j.receiver===receiver);
+        return !(have.size===asset.total&&(asset.total>0||asset.holders.has(receiver)))&&(!active.length||(assignedRanges&&asset.holders.has(receiver)&&active.every(j=>j.asset===asset.id)))&&counts(receiver)<maxJobs;
       };
       const receivers=roster.filter(canReceive);
       if(!receivers.length)continue;
@@ -283,7 +290,9 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
         if(!canReceive(receiver))continue;
         const have=asset.holders.get(receiver)??new Set();
         const candidates=[...asset.holders].filter(([peer,indexes])=>peer!==receiver&&live.has(peer)&&counts(peer)<maxJobs&&(blockedUntil.get(peer+':'+receiver)??0)<=now&&(asset.total===0||[...indexes].some(i=>!have.has(i)))).sort((a,b)=>counts(a[0])-counts(b[0])||a[1].size-b[1].size||a[0].localeCompare(b[0]));
-        if(!candidates.length)continue;const [source,indexes]=candidates[0],wanted=[...indexes].filter(i=>!have.has(i)).sort((a,b)=>rarity(a)-rarity(b)||a-b).slice(0,batchSize);
+        const reserved=new Set([...jobs.values()].filter(j=>j.asset===asset.id&&j.receiver===receiver).flatMap(j=>j.indexes));
+        const candidate=candidates.find(([,indexes])=>asset.total===0||[...indexes].some(i=>!have.has(i)&&!reserved.has(i)));
+        if(!candidate)continue;const [source,indexes]=candidate,wanted=[...indexes].filter(i=>!have.has(i)&&!reserved.has(i)).sort((a,b)=>rarity(a)-rarity(b)||a-b).slice(0,batchSize);
         const job={id:crypto.randomUUID(),asset:asset.id,source,receiver,indexes:wanted,needsManifest:!asset.holders.has(receiver),deadline:now+jobTimeoutMs};jobs.set(job.id,job);for(const i of wanted)copies.set(i,rarity(i)+1);dirty=true;
         const body={type:'job',job,asset:{id:asset.id,total:asset.total,distributionId:asset.distributionId,proof:asset.proof}};
         // Receiver first so an immediately delivered offer has an assigned owner.

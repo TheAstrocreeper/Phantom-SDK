@@ -7,11 +7,11 @@ import {memoryRTC} from './fixtures/memory-rtc.js';
 const ids=['1111111111111111','2222222222222222'],leader='3333333333333333';
 const pause=ms=>new Promise(r=>setTimeout(r,ms));
 async function until(check){const end=Date.now()+2000;while(Date.now()<end){if(check())return;await pause(5);}assert.fail('distribution did not settle');}
-async function fixture({intervalMs=1000,onSend,legacyProtocol=false,receiverStore}={}){
+async function fixture({intervalMs=1000,onSend,legacyProtocol=false,receiverStore,assignedRanges=false}={}){
  const admin=await createAdminIdentity(),callbacks=new Map(),events=[],frames=[],RTC=memoryRTC({onSend});
  const states=ids.map(peerId=>({peerId,leader,mirror:ids[0],role:'peer',state:'admitted',admitted:true}));
  const deliver=(to,from,body)=>{if(legacyProtocol&&body.type==='signal')body={...body,readyProtocol:undefined};return callbacks.get(to)?.({type:'PHANTOM_DIST',payload:{from:leader,frame:{networkId:'room',from,to,body}}});};
- const ds=ids.map((id,i)=>createNetworkDistribution({core:{getState:()=>states[i],onEvent(fn){callbacks.set(id,fn);return()=>callbacks.delete(id);},command(type,{frame}){if(type!=='PHANTOM_DIST_SEND')return;frames.push(frame);queueMicrotask(()=>deliver(frame.to,frame.from,frame.body));}},networkId:'room',adminPublicKey:admin.publicKey,lifecycle:{issue:(action,target)=>admin.sign({networkId:'room',action,target,operationId:crypto.randomUUID()})},runtime:{crypto,RTCPeerConnection:RTC},options:{intervalMs,requestTimeoutMs:1000,...(i===1&&receiverStore?{chunkStore:receiverStore}:{})},emit:(type,data)=>events.push({peer:id,type,data})}));
+ const ds=ids.map((id,i)=>createNetworkDistribution({core:{getState:()=>states[i],onEvent(fn){callbacks.set(id,fn);return()=>callbacks.delete(id);},command(type,{frame}){if(type!=='PHANTOM_DIST_SEND')return;frames.push(frame);queueMicrotask(()=>deliver(frame.to,frame.from,frame.body));}},networkId:'room',adminPublicKey:admin.publicKey,lifecycle:{issue:(action,target)=>admin.sign({networkId:'room',action,target,operationId:crypto.randomUUID()})},runtime:{crypto,RTCPeerConnection:RTC},options:{intervalMs,requestTimeoutMs:1000,assignedRanges,...(i===1&&receiverStore?{chunkStore:receiverStore}:{})},emit:(type,data)=>events.push({peer:id,type,data})}));
  for(const fn of callbacks.values())fn({type:'PRESENCE_ROSTER',payload:{list:[...ids,leader].map(hKey=>({hKey}))}});
  const file=new Blob([Uint8Array.from({length:65536},(_,i)=>i%251)]),manifest=await ds[0].publish(file);
  await ds[1].publish(file);
@@ -54,6 +54,18 @@ test('real source transport loss still cancels and reports the receiver job prom
   assert.ok(f.frames.some(f=>f.from===ids[1]&&f.body.type==='failed'&&f.body.jobId==='source-lost'));
   assert.ok(f.events.some(e=>e.type==='distributionConnectionFailed'&&e.data.jobId==='source-lost'));
   assert.ok(f.ds.every(d=>d.snapshot().connections.length===0));
+ }finally{f.close();}
+});
+test('assigned jobs on separate connections survive loss of a different range',async()=>{
+ let first;
+ const f=await fixture({assignedRanges:true,onSend(data,ch){let m;try{m=JSON.parse(data);}catch{return true;}if(m.sys==='PHANTOM_FILE_REQUEST'&&m.file.index===0){first=ch;return false;}return true;}});
+ try{
+  f.job('range-a',ids[0],ids[1],[0]);await until(()=>first);
+  f.job('range-b',ids[0],ids[1],[1]);
+  await until(()=>f.frames.some(x=>x.body.type==='done'&&x.body.jobId==='range-b'));
+  first.close();await until(()=>f.frames.some(x=>x.body.type==='failed'&&x.body.jobId==='range-a'));
+  assert.equal(f.frames.some(x=>x.body.type==='failed'&&x.body.jobId==='range-b'),false);
+  assert.ok(f.events.some(x=>x.peer===ids[1]&&x.type==='distributionBatchComplete'&&x.data.jobId==='range-b'));
  }finally{f.close();}
 });
 test('closing a job during inventory loading prevents its later chunk requests',async()=>{

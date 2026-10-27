@@ -78,6 +78,18 @@ test('aborting an inventory scan stops before reading the remaining chunks',asyn
  try{const rejected=assert.rejects(f.download({signal:controller.signal}),/aborted/);await inside;controller.abort();release();await rejected;assert.equal(reads,1);assert.equal(f.requests.length,0);const blob=await f.download();assert.deepEqual(new Uint8Array(await blob.arrayBuffer()),f.bytes);}
  finally{release();f.close();}
 });
+test('disjoint concurrent ranges complete independently when one range is aborted',async()=>{
+ const f=await fixture({drop:index=>index<4}),controller=new AbortController();
+ try{
+  const first=f.download({indexes:[0,1,2,3],concurrentRanges:true,signal:controller.signal});
+  const rejected=assert.rejects(first,/aborted/);
+  const second=f.download({indexes:[4,5,6,7],concurrentRanges:true});
+  await assert.rejects(f.download({indexes:[3,8],concurrentRanges:true}),/already active/);
+  await waitUntil(()=>f.requests.some(i=>i===0));controller.abort();await rejected;
+  assert.deepEqual((await second).indexes,[4,5,6,7]);
+  assert.deepEqual(f.events.filter(e=>e.type==='fileProgress').map(e=>e.data.index).sort((a,b)=>a-b),[4,5,6,7]);
+ }finally{f.close();}
+});
 test('opt-in block source reads coalesce actual file requests without changing ordered verified delivery',async()=>{
  const f=await fixture({window:32,length:65536,readDelay:8,sourceReadBlockBytes:4*1024*1024});
  try{const blob=await f.download();assert.deepEqual(new Uint8Array(await blob.arrayBuffer()),f.bytes);assert.equal(f.sourceReadCalls,1);assert.equal(f.peakReads,1);assert.deepEqual(f.sent,Array.from({length:64},(_,i)=>i));}
