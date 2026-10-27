@@ -26,10 +26,10 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y iproute2 socat
       - name: Use installed Chrome
         run: echo "PHANTOM_CHROMIUM_EXECUTABLE=$(command -v google-chrome)" >> "$GITHUB_ENV"
-      - run: bash tools/perf/delivery-native/lane-run.sh
+      - run: bash tools/perf/delivery-native/lane-recovery-run.sh
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: dedicated-lane-loss-${{ matrix.loss }}
-          path: tools/perf/delivery-native/lane-results-*/
+          name: dedicated-lane-recovery-loss-${{ matrix.loss }}
+          path: tools/perf/delivery-native/lane-recovery-results-*/
           if-no-files-found: error
