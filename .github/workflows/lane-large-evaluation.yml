@@ -2,6 +2,7 @@ name: Assigned-lane full large file
 on:
   push:
     branches: ['codex/lane-priority-model']
+    paths: ['tools/perf/lane-priority/trigger-large']
   workflow_dispatch:
 permissions:
   contents: read

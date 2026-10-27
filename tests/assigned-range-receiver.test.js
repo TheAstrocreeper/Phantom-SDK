@@ -35,6 +35,13 @@ test('resume retains only previously verified storage chunks',async()=>{
 test('revocation prevents a previously claimed chunk from being committed',async()=>{
  const f=await fixture();let active=true;const receiver=await createAssignedRangeReceiver({manifest:f.manifest,chunkStore:createMemoryChunkStore(),verifyManifest:authorized,allowed:()=>active});const lease=receiver.claim([0]);active=false;await assert.rejects(receiver.receive(lease,0,f.chunk(0)),/unavailable/);assert.equal(receiver.snapshot().received,0);await receiver.close();
 });
+test('a storage failure rejects the chunk and leaves it available after retirement',async()=>{
+ const f=await fixture(),memory=createMemoryChunkStore();let fail=true;
+ const store={...memory,async put(...args){if(fail)throw new DOMException('','QuotaExceededError');return memory.put(...args);}};
+ const receiver=await createAssignedRangeReceiver({manifest:f.manifest,chunkStore:store,verifyManifest:authorized});const old=receiver.claim([0]);
+ await assert.rejects(receiver.receive(old,0,f.chunk(0)),{name:'QuotaExceededError'});assert.equal(receiver.snapshot().received,0);await receiver.retire(old);fail=false;
+ const replacement=receiver.claim([0]);await receiver.receive(replacement,0,f.chunk(0));assert.equal(receiver.snapshot().received,1);await receiver.close();
+});
 test('rejects tampered manifests and bounds queued writes',async()=>{
  const f=await fixture(),bad={...f.manifest,hashes:[...f.manifest.hashes]};bad.hashes[0]='0'.repeat(64);
  await assert.rejects(createAssignedRangeReceiver({manifest:bad,chunkStore:createMemoryChunkStore(),verifyManifest:authorized}),/Manifest integrity/);

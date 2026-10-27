@@ -1,0 +1,20 @@
+name: Assigned-lane browser storage check
+on:
+  push:
+    branches: ['codex/lane-priority-model']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  storage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci --prefix tools/swarm
+      - name: Use installed Chrome
+        run: echo "PHANTOM_CHROMIUM_EXECUTABLE=$(command -v google-chrome)" >> "$GITHUB_ENV"
+      - run: node tools/perf/lane-priority/storage-check.mjs

@@ -14,7 +14,7 @@ async function indexedStore(){
  const db=await new Promise((resolve,reject)=>{opened.onsuccess=()=>resolve(opened.result);opened.onerror=()=>reject(opened.error);});
  const committed=new Set();return {
   getVerifiedIndexes(){return [...committed];},
-  async put(id,index,bytes){await new Promise((resolve,reject)=>{const tx=db.transaction('chunks','readwrite');tx.objectStore('chunks').put(new Blob([bytes]),[id,index]);tx.oncomplete=resolve;tx.onabort=()=>reject(tx.error||Error('IndexedDB write aborted'));});committed.add(index);},
+  async put(id,index,bytes){await new Promise((resolve,reject)=>{const tx=db.transaction('chunks','readwrite'),req=tx.objectStore('chunks').put(new Blob([bytes]),[id,index]);tx.oncomplete=resolve;tx.onabort=()=>reject(req.error||tx.error||Error('IndexedDB write aborted'));});committed.add(index);},
   async get(id,index){const blob=await new Promise((resolve,reject)=>{const tx=db.transaction('chunks','readonly'),req=tx.objectStore('chunks').get([id,index]);tx.oncomplete=()=>resolve(req.result);tx.onabort=()=>reject(tx.error||Error('IndexedDB read aborted'));});return blob?.arrayBuffer();}
  };
 }
@@ -66,7 +66,7 @@ window.configure=async({selfId,peerId,publicKey,mode,messageBytes,parallel=1})=>
       if(range.committed===chunksPerRange&&lease)await assigned.retire(lease);
       if(range.committed%16===0||range.committed===chunksPerRange)channel.readyState==='open'&&channel.send(JSON.stringify({type:'ack',count:range.committed}));
       if(range.committed===chunksPerRange)current=null;if(seen.size===chunkCount)record.complete=true;
-     }).catch(e=>{if(latestGeneration[range.range]===range.generation&&channel.readyState==='open')record.errors.push(e.message);});
+     }).catch(e=>{if(latestGeneration[range.range]===range.generation&&channel.readyState==='open'){const message=[e?.name,e?.message].filter(Boolean).join(': ')||'Range write failed';record.errors.push(message);channel.send(JSON.stringify({type:'error',error:message}));navigator.storage?.estimate?.().then(value=>{record.storageEstimate=value;}).catch(()=>{});}});
     };
    };
   }

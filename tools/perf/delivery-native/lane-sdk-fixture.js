@@ -56,7 +56,7 @@ window.configure=({selfId,peerId,publicKey,mode,messageBytes,parallel=1})=>{
       if(range.committed===chunksPerRange&&lease)await assigned.retire(lease);
       if(range.committed%16===0||range.committed===chunksPerRange)channel.readyState==='open'&&channel.send(JSON.stringify({type:'ack',count:range.committed}));
       if(range.committed===chunksPerRange)current=null;if(seen.size===chunkCount)record.complete=true;
-     }).catch(e=>{if(latestGeneration[range.range]===range.generation&&channel.readyState==='open')record.errors.push(e.message);});
+     }).catch(e=>{if(latestGeneration[range.range]===range.generation&&channel.readyState==='open'){const message=[e?.name,e?.message].filter(Boolean).join(': ')||'Range write failed';record.errors.push(message);channel.send(JSON.stringify({type:'error',error:message}));navigator.storage?.estimate?.().then(value=>{record.storageEstimate=value;}).catch(()=>{});}});
     };
    };
   }
