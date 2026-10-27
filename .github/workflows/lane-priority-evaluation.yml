@@ -21,15 +21,15 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-      - run: node --test tools/perf/lane-priority/*.test.js tools/perf/continuous-prototype/stream.test.js tools/perf/delivery-native/striped-rtc.test.mjs
+      - run: node --test tests/assigned-range-receiver.test.js tests/file-window.test.js tools/perf/lane-priority/*.test.js tools/perf/continuous-prototype/stream.test.js tools/perf/delivery-native/striped-rtc.test.mjs
       - run: npm ci --prefix tools/swarm
       - run: sudo apt-get update && sudo apt-get install -y iproute2 socat
       - name: Use installed Chrome
         run: echo "PHANTOM_CHROMIUM_EXECUTABLE=$(command -v google-chrome)" >> "$GITHUB_ENV"
-      - run: bash tools/perf/delivery-native/lane-recovery-run.sh
+      - run: bash tools/perf/delivery-native/lane-sdk-run.sh
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: dedicated-lane-recovery-loss-${{ matrix.loss }}
-          path: tools/perf/delivery-native/lane-recovery-results-*/
+          name: dedicated-lane-sdk-loss-${{ matrix.loss }}
+          path: tools/perf/delivery-native/lane-sdk-results-*/
           if-no-files-found: error

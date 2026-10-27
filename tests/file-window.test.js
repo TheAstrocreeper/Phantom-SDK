@@ -2,12 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createMemoryChunkStore,createFileDistribution} from '../packages/phantom-core/src/files.js';
 const tick=()=>new Promise(r=>setImmediate(r));
-async function fixture({window=8,sourceWindow=window,delay=0,timeout=1000,drop=()=>false,readDelay=0,sourceReadBlockBytes=0,corruptSource=false,receiverStore,receiverAllowed=()=>true,length=32*1024,onProgress=()=>{}}={}){
+async function fixture({window=8,sourceWindow=window,delay=0,timeout=1000,drop=()=>false,readDelay=0,sourceReadBlockBytes=0,corruptSource=false,receiverStore,receiverCrypto,receiverAllowed=()=>true,length=32*1024,onProgress=()=>{}}={}){
  const ids=['a'.repeat(16),'b'.repeat(16)],listeners=[new Set(),new Set()],requests=[],events=[],timers=new Set(),sent=[],timings=[];let offered,reading=0,peakReads=0,sourceReadCalls=0,prepared=false;
  const offer=new Promise(r=>offered=r);
  const schedule=fn=>{if(!delay)return queueMicrotask(fn);const t=setTimeout(()=>{timers.delete(t);fn();},delay);timers.add(t);};
  const cores=ids.map((id,i)=>({onEvent(fn){listeners[i].add(fn);return()=>listeners[i].delete(fn);},command(type,p){const j=ids.indexOf(p.to),deliver=e=>{for(const f of listeners[j])f(e);};if(type==='SEND_DM'){if(p.sys==='PHANTOM_FILE_REQUEST')requests.push(p.file.index);schedule(()=>deliver({type:'INCOMING_MSG',payload:{from:id,...p}}));}else{sent.push(p.file.index);if(!drop(p.file.index,requests.filter(x=>x===p.file.index).length))schedule(()=>deliver({type:'FILE_BIN_CHUNK',payload:{from:id,file:p.file,bytes:p.bytes}}));queueMicrotask(()=>{for(const f of listeners[i])f({type:'FILE_BIN_CHUNK_SENT',payload:{to:p.to,file:p.file,ok:true}});});}}}));
- const services=cores.map((core,i)=>createFileDistribution({core,canUsePeer:i===1?receiverAllowed:()=>true,requestWindow:i===0?sourceWindow:window,requestTimeoutMs:timeout,...(i===1&&receiverStore?{chunkStore:receiverStore}:{}),emit:(type,data)=>{if(type==='fileTransferTiming')timings.push({side:i,...data});if(i===1){events.push({type,data});if(type==='fileProgress')onProgress(data);if(type==='fileOffer')offered(data);}}}));
+ const services=cores.map((core,i)=>createFileDistribution({core,canUsePeer:i===1?receiverAllowed:()=>true,requestWindow:i===0?sourceWindow:window,requestTimeoutMs:timeout,...(i===1&&receiverStore?{chunkStore:receiverStore}:{}),...(i===1&&receiverCrypto?{crypto:receiverCrypto}:{}),emit:(type,data)=>{if(type==='fileTransferTiming')timings.push({side:i,...data});if(i===1){events.push({type,data});if(type==='fileProgress')onProgress(data);if(type==='fileOffer')offered(data);}}}));
  const bytes=new Uint8Array(length);crypto.getRandomValues(bytes);const blob=new Blob([bytes]),source={size:blob.size,slice(...args){const part=blob.slice(...args);return {async arrayBuffer(){if(prepared)sourceReadCalls++;const read=async()=>{const bytes=await part.arrayBuffer();if(prepared&&corruptSource)new Uint8Array(bytes)[0]^=1;return bytes;};if(!prepared||!readDelay)return read();reading++;peakReads=Math.max(peakReads,reading);try{await new Promise(r=>setTimeout(r,readDelay));return await read();}finally{reading--;}}};}};const m=await services[0].publish(source,{chunkSize:1024,sourceReadBlockBytes});prepared=true;await services[0].share(ids[1],m.id);await offer;
  return {requests,events,timings,sent,get sourceReadCalls(){return sourceReadCalls;},get peakReads(){return peakReads;},cancel:()=>services[1].cancel(m.id),m,bytes,download:(options={})=>services[1].request(m.id,{peers:[ids[0]],...options}),close(){services.forEach(s=>s.close());for(const t of timers)clearTimeout(t);}};
 }
@@ -136,6 +136,30 @@ test('cancelling during storage-backed assembly settles the request and emits no
  const inside=new Promise(r=>entered=r),gate=new Promise(r=>release=r);
  const f=await fixture({receiverStore:{...memory,async getFile(){entered();await gate;return new Blob([new Uint8Array(32768)]);}}});
  try{const result=f.download(),rejected=assert.rejects(result,/cancelled/);await inside;f.cancel();release();await rejected;await tick();assert.equal(f.events.some(e=>e.type==='fileComplete'),false);}finally{release();f.close();}
+});
+
+test('a cancelled assembly rejecting late cannot fail a replacement request',async()=>{
+ const memory=createMemoryChunkStore();let firstEntered,secondEntered,rejectFirst,releaseSecond,assemblies=0;
+ const firstInside=new Promise(r=>firstEntered=r),secondInside=new Promise(r=>secondEntered=r);
+ const firstGate=new Promise((_,reject)=>rejectFirst=reject),secondGate=new Promise(r=>releaseSecond=r);
+ const store={...memory,async getFile(id,m){assemblies++;if(assemblies===1){firstEntered();await firstGate;}else{secondEntered();await secondGate;}const parts=[];for(let i=0;i<m.total;i++)parts.push(await memory.get(id,i));return new Blob(parts,{type:m.type});}};
+ const f=await fixture({receiverStore:store});
+ try{
+  const old=f.download(),oldRejected=assert.rejects(old,/cancelled/);await firstInside;f.cancel();await oldRejected;
+  const replacement=f.download();await secondInside;rejectFirst(Error('retired assembly failed'));await tick();releaseSecond();
+  const blob=await replacement;assert.deepEqual(new Uint8Array(await blob.arrayBuffer()),f.bytes);
+ }finally{releaseSecond();f.close();}
+});
+
+test('a cancelled chunk verification rejecting late cannot fail a replacement request',async()=>{
+ let arm=false,entered,rejectOld;const inside=new Promise(r=>entered=r),gate=new Promise((_,reject)=>rejectOld=reject);
+ const receiverCrypto={subtle:{digest(...args){if(arm){arm=false;entered();return gate;}return crypto.subtle.digest(...args);}}};
+ const f=await fixture({receiverCrypto,window:1,length:2048});try{
+  arm=true;const old=f.download(),oldRejected=assert.rejects(old,/cancelled/);await inside;f.cancel();await oldRejected;
+  const replacement=f.download();rejectOld(Error('retired verification failed'));
+  const blob=await replacement;assert.deepEqual(new Uint8Array(await blob.arrayBuffer()),f.bytes);
+  assert.equal(f.events.some(e=>e.type==='fileError'&&e.data.error==='retired verification failed'),false);
+ }finally{f.close();}
 });
 
 test('verified immutable storage skips redundant completion reads and accepts a lazy native file',async()=>{
