@@ -13,6 +13,7 @@ export async function createDownloadSink(size) {
       worker.addEventListener('statechange',changed);changed();
     });
   }
+  if (!navigator.serviceWorker.controller) await new Promise((resolve,reject)=>{const timeout=setTimeout(()=>reject(Error('Download worker did not take control')),10000);navigator.serviceWorker.addEventListener('controllerchange',()=>{clearTimeout(timeout);resolve();},{once:true});});
   const id = crypto.randomUUID(), pair = new MessageChannel(), pending = new Map();
   let finishResolve, finishReject, rejected;
   let registerResolve; const registered = new Promise(resolve => {registerResolve = resolve;});
