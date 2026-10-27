@@ -5,6 +5,7 @@ import {scoutConnection} from './connection-scout.js';
 import {fitsMessageLimits} from './message-size-guard.js';
 import {createCapabilityExchange} from './capability-exchange.js';
 import {createCapabilityReport} from './connection-planner.js';
+import {createPlanAgreement} from './plan-agreement.js';
 import {createFileDistribution,createMemoryChunkStore} from './files.js';
 import {createAdminAuthorization} from './authorization.js';
 
@@ -51,8 +52,11 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
   function frame(to,body){if(closed||!self()||!leader()||!canUsePeer(to))return;const packet={networkId,from:self(),to,body};if(to===self()){void handle(self(),packet).catch(error);return;}core.command('PHANTOM_DIST_SEND',{to:isLeader()?to:leader(),frame:packet});}
   // The facade supplies the committed roster projection. Reading it never changes it.
   let roster=[];
-  const capabilityExchange=options.capabilityExchange===true?createCapabilityExchange({send:frame,allowed:peer=>roster.includes(peer)&&canUsePeer(peer),localReport:()=>createCapabilityReport({version:1,messageLimit:{status:'unknown',bytes:null}},{protocols:['phantom-file-v1'],maxChunkBytes:options.maxChunkBytes??65536}),onReport:(peer,report)=>emit('distributionCapability',{peer,report})}):null;
-  function setRoster(rows){const next=rows.map(r=>r.hKey).filter(k=>/^[0-9a-f]{16}$/.test(k)&&canUsePeer(k));for(const peer of roster)if(!next.includes(peer))capabilityExchange?.drop(peer);roster=next;for(const peer of rangePeers)if(!roster.includes(peer))rangePeers.delete(peer);}
+  const localCapability=()=>createCapabilityReport({version:1,messageLimit:{status:'unknown',bytes:null}},{protocols:['phantom-file-v1'],maxChunkBytes:options.maxChunkBytes??65536});
+  const peerAllowed=peer=>roster.includes(peer)&&canUsePeer(peer);
+  const capabilityExchange=options.capabilityExchange===true?createCapabilityExchange({send:frame,allowed:peerAllowed,localReport:localCapability,onReport:(peer,report)=>emit('distributionCapability',{peer,report})}):null;
+  const agreement=capabilityExchange?createPlanAgreement({send:frame,allowed:peerAllowed,localReport:localCapability,remoteReport:peer=>capabilityExchange.get(peer),newId:()=>crypto.randomUUID(),onDecision:result=>emit('distributionPlanDecision',result)}):null;
+  function setRoster(rows){const next=rows.map(r=>r.hKey).filter(k=>/^[0-9a-f]{16}$/.test(k)&&canUsePeer(k));for(const peer of roster)if(!next.includes(peer)){capabilityExchange?.drop(peer);agreement?.drop(peer);}roster=next;for(const peer of rangePeers)if(!roster.includes(peer))rangePeers.delete(peer);}
   function report(){if(assignedRanges&&self()&&leader()&&canUsePeer(leader())&&rangeAdvertisement!==leaderToken){rangeAdvertisement=leaderToken;frame(leader(),{type:'rangeCapability',version:1});}for(const asset of assets.values())if(allowed(asset.id,asset.distributionId)&&asset.holders.has(self())){const sent=reported.get(asset.id)??new Set(),have=asset.holders.get(self());if(reported.has(asset.id)&&sent.size===have.size)continue;const indexes=[...have].filter(i=>!sent.has(i)).sort((a,b)=>a-b);for(let offset=0;offset<Math.max(1,indexes.length);offset+=128)frame(leader(),{type:'inventory',id:asset.id,total:asset.total,distributionId:asset.distributionId,proof:asset.proof,indexes:indexes.slice(offset,offset+128)});reported.set(asset.id,sent);}lastReport=Date.now();}
   function table(){return {sequence,leader:self(),assets:[...assets.values()].map(a=>({id:a.id,total:a.total,distributionId:a.distributionId,proof:a.proof,holders:[...a.holders].map(([peer,indexes])=>({peer,indexes:[...indexes].sort((a,b)=>a-b)}))}))};}
   function mirror(){if(!isLeader()||!dirty)return;dirty=false;sequence++;const mirror=state().mirror;if(mirror&&mirror!==self()){
@@ -216,6 +220,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
     if(packet.from!==from&&from!==leader())return;
     const body=packet.body,sender=packet.from;
     if(['capabilityRequest','capabilityReport'].includes(body.type)){capabilityExchange?.receive(sender,body);return;}
+    if(['planProposal','planDecision'].includes(body.type)){agreement?.receive(sender,body);return;}
     if(body.type==='rangeCapability'&&isLeader()&&roster.includes(sender)&&body.version===1){rangePeers.add(sender);return;}
     if(body.type==='inventory'&&isLeader()&&roster.includes(sender)){
       const asset=await acceptAsset(body);if(!asset||!Array.isArray(body.indexes)||body.indexes.length>128||body.indexes.some(i=>!Number.isInteger(i)||i<0||i>=asset.total))return;
@@ -321,7 +326,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
     }
   }
   function syncLeadership(){const token=leader()+':'+state().mirror;
-    if(token!==leaderToken){leaderToken=token;checkedToken='';receivedSequence=-1;rangePeers.clear();capabilityExchange?.clear();rangeAdvertisement='';reported.clear();mirrored.clear();mirrorJobs.clear();for(const job of [...jobs.values()])finishJob(job);for(const id of [...links.keys()]){const link=links.get(id);closeLink(id);}dirty=true;lastReport=0;}
+    if(token!==leaderToken){leaderToken=token;checkedToken='';receivedSequence=-1;rangePeers.clear();capabilityExchange?.clear();agreement?.clear();rangeAdvertisement='';reported.clear();mirrored.clear();mirrorJobs.clear();for(const job of [...jobs.values()])finishJob(job);for(const id of [...links.keys()]){const link=links.get(id);closeLink(id);}dirty=true;lastReport=0;}
   }
   function restore(){
     if(restoration)return restoration;
@@ -362,12 +367,15 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
   const off=core.onEvent(event=>{if(event.type==='PRESENCE_ROSTER')setRoster(event.payload?.list??[]);if(event.type==='PHANTOM_ADMIN_LINK_READY'){rangeAdvertisement='';reported.clear();mirrored.clear();dirty=true;lastReport=0;}if(event.type==='PHANTOM_DIST')void handle(event.payload.from,event.payload.frame).catch(error);});
   const timer=setInterval(()=>{void tick().catch(error);},intervalMs);
   return {
-    dropPeer(peer){files.dropPeer(peer);capabilityExchange?.drop(peer);rangePeers.delete(peer);roster=roster.filter(p=>p!==peer);for(const asset of assets.values())asset.holders.delete(peer);for(const job of [...jobs.values()])if(job.source===peer||job.receiver===peer)finishJob(job);for(const [id,link]of [...links])if(link.peer===peer){closeLink(id);}for(const [id,job]of mirrorJobs)if(job.source===peer||job.receiver===peer)mirrorJobs.delete(id);dirty=true;},
+    dropPeer(peer){files.dropPeer(peer);capabilityExchange?.drop(peer);agreement?.drop(peer);rangePeers.delete(peer);roster=roster.filter(p=>p!==peer);for(const asset of assets.values())asset.holders.delete(peer);for(const job of [...jobs.values()])if(job.source===peer||job.receiver===peer)finishJob(job);for(const [id,link]of [...links])if(link.peer===peer){closeLink(id);}for(const [id,job]of mirrorJobs)if(job.source===peer||job.receiver===peer)mirrorJobs.delete(id);dirty=true;},
     requestCapabilities(peer){if(!capabilityExchange)throw Error('Capability exchange is disabled');capabilityExchange.request(peer);},
     getCapabilities(peer){return capabilityExchange?.get(peer)??null;},
+    proposePlan(peer,settings={}){if(!agreement)throw Error('Capability exchange is disabled');return agreement.propose(peer,{...settings,protocolPreference:['phantom-file-v1']});},
+    getPlan(peer){return agreement?.get(peer)??null;},
     restore,
     async getFile(id){await restore();const asset=assets.get(id);if(closed||!asset||asset.holders.get(self())?.size!==asset.total)throw Error('No complete local distribution copy');return files.getFile(id);},
     async prepare(file,settings={}){if(closed)throw Error('Distribution closed');await restore();const manifest=await files.publish(file,settings);preparedFiles.set(manifest,{file,id:manifest.id});return manifest;},
+    async prepareAgreed(file,peer,settings={}){if(closed||!peerAllowed(peer))throw Error('Peer unavailable');const agreed=agreement?.get(peer);if(!agreed)throw Error('No agreed plan');if('chunkSize' in settings)throw TypeError('Chunk size comes from the agreed plan');await restore();const manifest=await files.publish(file,{...settings,chunkSize:agreed.plan.payloadBytes});if(closed||!peerAllowed(peer)||agreement.get(peer)?.id!==agreed.id)throw Error('Agreed plan no longer valid');preparedFiles.set(manifest,{file,id:manifest.id,peer,planId:agreed.id});return manifest;},
     async publish(file,{authorization,recipients,prepared,...settings}={}){if(closed)throw Error('Distribution closed');if(!state().admitted)throw Error('Wait for network admission before distributing');if(!policy)throw Error('Distribution requires an admin authority');await restore();if(closed)throw Error('Distribution closed');
       if(recipients!==undefined){
         if(!Array.isArray(recipients)||recipients.length>128||recipients.some(id=>typeof id!=='string'||! /^[0-9a-f]{16}$/.test(id)))throw new TypeError('Invalid publication recipients');
@@ -377,6 +385,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
       if(prepared!==undefined){
         const record=preparedFiles.get(prepared);
         if(!record||record.file!==file||Object.keys(settings).length)throw new TypeError('Use an unchanged preparation from this distribution session without file settings');
+        if(record.peer&&(!recipients||recipients.length!==1||recipients[0]!==record.peer||!peerAllowed(record.peer)||agreement?.get(record.peer)?.id!==record.planId))throw Error('Agreed plan no longer matches the recipient');
         manifest=files.getManifest(record.id);
       }else manifest=await files.publish(file,settings);
       const existing=assets.get(manifest.id);
@@ -390,6 +399,6 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
     },
     snapshot:()=>({restoration:restorationState,restoreResults:structuredClone(restoreResults),leader:leader(),adminChecked:isLeader()&&checkedToken===leaderToken,assets:table().assets,jobs:[...(isLeader()?jobs:mirrorJobs).values()].map(j=>({...j,indexes:[...j.indexes]})),connections:[...links.values()].map(l=>({jobId:l.job.id,peer:l.peer,state:l.dc?.readyState??'connecting'}))}),
     stop(target){files.stop(target);for(const job of [...jobs.values()])if(job.asset===target||assets.get(job.asset)?.distributionId===target)finishJob(job);for(const [id,link]of [...links])if(link.job.asset===target||assets.get(link.job.asset)?.distributionId===target)closeLink(id);},
-    close(){if(closed)return;closed=true;capabilityExchange?.close();clearInterval(timer);off();files.close();for(const id of [...links.keys()])closeLink(id);jobs.clear();assets.clear();progressIndexes.clear();reported.clear();mirrored.clear();mirrorJobs.clear();pendingSignals.clear();closedJobs.clear();blockedUntil.clear();setupFailures.clear();finished.clear();listeners.clear();}
+    close(){if(closed)return;closed=true;agreement?.close();capabilityExchange?.close();clearInterval(timer);off();files.close();for(const id of [...links.keys()])closeLink(id);jobs.clear();assets.clear();progressIndexes.clear();reported.clear();mirrored.clear();mirrorJobs.clear();pendingSignals.clear();closedJobs.clear();blockedUntil.clear();setupFailures.clear();finished.clear();listeners.clear();}
   };
 }

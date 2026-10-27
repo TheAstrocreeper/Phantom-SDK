@@ -20,7 +20,11 @@ async function fixture({intervalMs=1000,onSend,legacyProtocol=false,receiverStor
 }
 test('distribution exchanges compatible capabilities before creating a file job',async()=>{
  const f=await fixture({capabilityExchange:true});
- try{f.ds[0].requestCapabilities(ids[1]);await until(()=>f.ds[0].getCapabilities(ids[1]));assert.equal(f.ds[0].getCapabilities(ids[1]).maxChunkBytes,65536);assert.equal(f.ds[0].getCapabilities(ids[1]).messageLimit.status,'unknown');assert.equal(f.frames.filter(x=>x.body.type==='job').length,0);f.ds[0].dropPeer(ids[1]);assert.equal(f.ds[0].getCapabilities(ids[1]),null);}finally{f.close();}
+ try{f.ds[0].requestCapabilities(ids[1]);await until(()=>f.ds[0].getCapabilities(ids[1]));assert.equal(f.ds[0].getCapabilities(ids[1]).maxChunkBytes,65536);assert.equal(f.ds[0].getCapabilities(ids[1]).messageLimit.status,'unknown');assert.equal(f.frames.filter(x=>x.body.type==='job').length,0);
+  const id=f.ds[0].proposePlan(ids[1]);await until(()=>f.ds[0].getPlan(ids[1])?.id===id);const file=new Blob([new Uint8Array(100000)]);const manifest=await f.ds[0].prepareAgreed(file,ids[1]);assert.equal(manifest.chunkSize,65536);
+  await assert.rejects(f.ds[0].publish(file,{prepared:manifest,recipients:[leader]}),/recipient/);
+  f.ds[0].dropPeer(ids[1]);assert.equal(f.ds[0].getCapabilities(ids[1]),null);assert.equal(f.ds[0].getPlan(ids[1]),null);
+ }finally{f.close();}
 });
 test('opt-in scout reports both transfer endpoints without blocking transfer',async()=>{
  const f=await fixture({assignedRanges:true,scout:true});
