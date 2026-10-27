@@ -26,7 +26,7 @@ export function createSourceBlockReader({onRead=()=>{}}={}) {
  return {
   read(source,index,chunkSize){
    if(closed)return Promise.reject(Error('Source reader closed'));
-   if(!Number.isInteger(index)||index<0||!Number.isInteger(chunkSize)||chunkSize<1024||chunkSize>65536||index*chunkSize>=source.size)return Promise.reject(Error('Invalid source chunk'));
+   if(!Number.isInteger(index)||index<0||!Number.isInteger(chunkSize)||chunkSize<1024||chunkSize>262144||index*chunkSize>=source.size)return Promise.reject(Error('Invalid source chunk'));
    return new Promise((resolve,reject)=>{waiting.push({source,index,chunkSize,start:index*chunkSize,end:Math.min(source.size,(index+1)*chunkSize),resolve,reject});pump();});
   },
   clear(){generation++;cached=null;},

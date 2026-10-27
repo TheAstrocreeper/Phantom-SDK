@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {createCapabilityReport,planConnection} from '../packages/phantom-core/src/connection-planner.js';
 const report=(limit,protocols=['file-v1'])=>createCapabilityReport({version:1,messageLimit:limit,environment:{userAgent:'private'},stats:{rows:[{address:'192.0.2.1'}]}},{protocols});
 test('report only exposes explicitly selected capabilities',()=>{
- const r=report({status:'known',bytes:262144});assert.deepEqual(r,{version:1,messageLimit:{status:'known',bytes:262144},protocols:['file-v1']});
+ const r=report({status:'known',bytes:262144});assert.deepEqual(r,{version:1,messageLimit:{status:'known',bytes:262144},maxChunkBytes:65536,protocols:['file-v1']});
 });
 test('plan respects smaller limit, overhead and actual implementation bound',()=>{
  const local=report({status:'known',bytes:262144}),remote=report({status:'known',bytes:131072});
@@ -19,5 +19,9 @@ test('unsupported protocol or no room for payload blocks proposal',()=>{
  const p=planConnection({local,remote,framingBytes:10,protocolPreference:['file-v1']});assert.equal(p.status,'unavailable');assert.deepEqual(p.reasons,['no_common_protocol','framing_exceeds_limit']);
 });
 test('unlimited observations still obey configured implementation cap',()=>{
- const local=report({status:'unlimited',bytes:null}),remote=report({status:'unlimited',bytes:null});const p=planConnection({local,remote,maxPayloadBytes:131072,defaultMessageBytes:262144,protocolPreference:['file-v1']});assert.equal(p.payloadBytes,131072);
+ const local=createCapabilityReport({version:1,messageLimit:{status:'unlimited',bytes:null}},{protocols:['file-v1'],maxChunkBytes:262144}),remote=local;const p=planConnection({local,remote,maxPayloadBytes:131072,defaultMessageBytes:262144,protocolPreference:['file-v1']});assert.equal(p.payloadBytes,131072);
+});
+test('a peer without larger chunk capability forces the legacy limit',()=>{
+ const local=createCapabilityReport({version:1,messageLimit:{status:'known',bytes:262144}},{protocols:['file-v1'],maxChunkBytes:262144});
+ const remote=report({status:'known',bytes:262144});const p=planConnection({local,remote,maxPayloadBytes:262144,protocolPreference:['file-v1']});assert.equal(p.payloadBytes,65536);
 });

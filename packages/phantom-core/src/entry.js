@@ -46,7 +46,7 @@ export function createPhantomEntry({openContext, relays, doorways, adminPublicKe
     const active=()=>{if(closed)throw new Error('Network closed');if(retired)throw new Error('Network permanently retired');};
     const canUsePeer=peer=>!config.canUsePeer||config.canUsePeer(peer)===true;
     files=createFileDistribution({core,canUsePeer,crypto:config.runtime?.crypto??globalThis.crypto,emit,
-      allowed:(id,target)=>!retired&&!closed&&!lifecycle?.isRevoked(id)&&(!target||!lifecycle?.isRevoked(target)),...Object.fromEntries(Object.entries(config.files??{}).filter(([key])=>['chunkStore','requestTimeoutMs','requestWindow','maxAttemptsPerPeer','maxFileBytes'].includes(key)))});
+      allowed:(id,target)=>!retired&&!closed&&!lifecycle?.isRevoked(id)&&(!target||!lifecycle?.isRevoked(target)),...Object.fromEntries(Object.entries(config.files??{}).filter(([key])=>['chunkStore','requestTimeoutMs','requestWindow','maxAttemptsPerPeer','maxFileBytes','maxChunkBytes'].includes(key)))});
     if(config.distribution)distribution=createNetworkDistribution({core,canUsePeer,networkId:context.networkId,adminPublicKey:context.adminPublicKey,lifecycle,runtime:config.runtime,emit,allowed:(id,target)=>!retired&&!closed&&!lifecycle?.isRevoked(id)&&(!target||!lifecycle?.isRevoked(target)),checkAdmin:()=>adminGate.wait(adminContext()),options:{...config.distribution,...(config.rtcConfiguration!==undefined?{rtcConfiguration:config.rtcConfiguration}:{})}});
     const network={invite,networkId:context.networkId,
       refreshNetworkPermissions:()=>{active();return core.refreshNetworkPermissions?.()??Promise.resolve({localNetwork:{state:'unknown',name:null,reason:'permissions_api_unavailable',nextAction:'none'}});},

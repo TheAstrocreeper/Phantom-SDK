@@ -2,6 +2,7 @@ import {createStripedRTC} from './striped-distribution-rtc.js';
 import {defaultRTCConfiguration} from './rtc-configuration.js';
 import {waitForDataChannelCapacity} from './data-channel-capacity.js';
 import {scoutConnection} from './connection-scout.js';
+import {fitsMessageLimits} from './message-size-guard.js';
 import {createFileDistribution,createMemoryChunkStore} from './files.js';
 import {createAdminAuthorization} from './authorization.js';
 
@@ -78,12 +79,15 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
     if(type==='fileTransferTiming'){emit('distributionTransferTiming',payload);return;}
     if(type==='fileProgress'){for(const link of links.values())if(link.job.asset===payload.id&&link.job.receiver===self()&&link.peer===payload.from)progress(link);const asset=assets.get(payload.id);if(asset){let indexes=progressIndexes.get(payload.id);if(!indexes){indexes=new Set(asset.holders.get(self())??[]);progressIndexes.set(payload.id,indexes);}indexes.add(payload.index);payload={...payload,received:indexes.size};}}
     emit(type==='fileProgress'?'distributionProgress':type==='fileError'?'distributionError':'distributionFileEvent',{fileEvent:type,...payload});
-  },chunkStore,...Object.fromEntries(Object.entries(options).filter(([key])=>['chunkStore','requestTimeoutMs','requestWindow','maxAttemptsPerPeer','maxFileBytes'].includes(key)))});
+  },chunkStore,...Object.fromEntries(Object.entries(options).filter(([key])=>['chunkStore','requestTimeoutMs','requestWindow','maxAttemptsPerPeer','maxFileBytes','maxChunkBytes'].includes(key)))});
   async function sendBinary(link,payload){let ok=false,reason='Distribution connection unavailable',bufferWaitMs=0;const waitAt=performance.now();try{
+    const striped=Array.isArray(link.pc?.pcs),pcs=striped?link.pc.pcs:[link.pc],overhead=striped?9:0;
+    const header=JSON.stringify({kind:'binary',file:payload.file}),headerBytes=new TextEncoder().encode(header).byteLength;
+    if(!fitsMessageLimits({connections:pcs,payloadBytes:payload.bytes.byteLength,headerBytes,wrapperBytes:overhead}))throw Error('File message exceeds the connection message limit');
     await waitForDataChannelCapacity(link.dc,{bytes:payload.bytes.byteLength,timeoutMs:jobTimeoutMs,signal:link.sendController.signal});
     bufferWaitMs=performance.now()-waitAt;
     if(closed||links.get(link.job.id)!==link||!canUsePeer(link.peer)||!allowed(payload.file.id,payload.file.distributionId)||link.dc.readyState!=='open')throw Error('Distribution revoked or disconnected');
-    payloadSend(link,JSON.stringify({kind:'binary',file:payload.file}));payloadSend(link,payload.bytes);ok=true;
+    payloadSend(link,header);payloadSend(link,payload.bytes);ok=true;
   }catch(e){reason=e.message;}fire('FILE_BIN_CHUNK_SENT',{...payload,ok,bufferWaitMs,error:ok?undefined:reason});}
   // Job timeout is an idle budget. Control keepalives alone cannot renew it.
   function progress(link){

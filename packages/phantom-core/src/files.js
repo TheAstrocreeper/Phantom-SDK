@@ -5,7 +5,7 @@ const digest=async(b,crypto)=>hex(await crypto.subtle.digest('SHA-256',b));
 const descriptor=m=>[m.name,m.type,m.size,m.chunkSize,m.total,m.hashRoot,m.distributionId];
 export function createMemoryChunkStore(){const data=new Map();return {async get(id,index){return data.get(id+':'+index);},async put(id,index,bytes){data.set(id+':'+index,bytes.slice(0));}};}
 /** Chunked file exchange over the peer data channel with backpressure. */
-export function createFileDistribution({core,crypto=globalThis.crypto,emit=()=>{},allowed=()=>true,canUsePeer=()=>true,chunkStore=createMemoryChunkStore(),requestTimeoutMs=10000,requestWindow=8,maxAttemptsPerPeer=2,maxFileBytes=Number.MAX_SAFE_INTEGER}) {
+export function createFileDistribution({core,crypto=globalThis.crypto,emit=()=>{},allowed=()=>true,canUsePeer=()=>true,chunkStore=createMemoryChunkStore(),requestTimeoutMs=10000,requestWindow=8,maxAttemptsPerPeer=2,maxFileBytes=Number.MAX_SAFE_INTEGER,maxChunkBytes=65536}) {
  const manifests=new Map(),sources=new Map(),offers=new Map(),downloads=new Map(),startingDownloads=new Map(),sendTimings=new Map(),activeSends=new Set(),peerGenerations=new Map();let closed=false;
  const sendQueue=createPreparedSendQueue({maxPerPeer:32}),sourceReader=createSourceBlockReader({onRead:p=>emit('fileSourceRead',p)}),writeQueue=[];let activeWrites=0,queuedWrites=0;
  const maxReceiveSlots=32,writeConcurrency=4;
@@ -13,12 +13,12 @@ export function createFileDistribution({core,crypto=globalThis.crypto,emit=()=>{
  function senderMetrics(to,id){const key=to+':'+id;let row=sendTimings.get(key);if(!row){row={to,id,total:0,timings:createFileTimings()};sendTimings.set(key,row);}return row;}
  function flushTimings(to,id){for(const [key,row]of sendTimings)if((!to||row.to===to)&&(!id||row.id===id)){if(row.total)emit('fileTransferTiming',{id:row.id,to:row.to,phase:'send',total:row.total,metrics:row.timings.summary()});sendTimings.delete(key);}}
 
- if(!Number.isFinite(requestTimeoutMs)||requestTimeoutMs<=0||!Number.isSafeInteger(maxFileBytes)||maxFileBytes<0)throw new TypeError('Invalid file service limits');
+ if(!Number.isFinite(requestTimeoutMs)||requestTimeoutMs<=0||!Number.isSafeInteger(maxFileBytes)||maxFileBytes<0||!Number.isInteger(maxChunkBytes)||maxChunkBytes<1024||maxChunkBytes>262144)throw new TypeError('Invalid file service limits');
  if(!Number.isInteger(requestWindow)||requestWindow<1||requestWindow>32||!Number.isInteger(maxAttemptsPerPeer)||maxAttemptsPerPeer<1||maxAttemptsPerPeer>3)throw new TypeError('Invalid file request window or retry limit');
  const check=id=>{if(closed)throw new Error('File service closed');const m=manifests.get(id);if(!m)throw new Error('Unknown file');if(!allowed(id,m.distributionId))throw new Error('Distribution revoked');return m;};
  const peerAllowed=peer=>{if(!canUsePeer(peer))throw new Error('Peer membership inactive');};
  const packet=(to,sys,file)=>{peerAllowed(to);core.command('SEND_DM',{to,sys,file});};
- function validManifest(m){return !!m&&!(m.version!==1||typeof m.id!=='string'||!/^sha256:[0-9a-f]{64}$/.test(m.id)||!Number.isSafeInteger(m.size)||m.size<0||m.size>maxFileBytes||!Number.isInteger(m.chunkSize)||m.chunkSize<1024||m.chunkSize>65536||m.total!==Math.ceil(m.size/m.chunkSize)||!Number.isSafeInteger(m.total)||typeof m.name!=='string'||m.name.length>256||typeof m.type!=='string'||m.type.length>128||typeof m.distributionId!=='string'||m.distributionId.length>256||! /^[0-9a-f]{64}$/.test(m.hashRoot));}
+ function validManifest(m){return !!m&&!(m.version!==1||typeof m.id!=='string'||!/^sha256:[0-9a-f]{64}$/.test(m.id)||!Number.isSafeInteger(m.size)||m.size<0||m.size>maxFileBytes||!Number.isInteger(m.chunkSize)||m.chunkSize<1024||m.chunkSize>maxChunkBytes||m.total!==Math.ceil(m.size/m.chunkSize)||!Number.isSafeInteger(m.total)||typeof m.name!=='string'||m.name.length>256||typeof m.type!=='string'||m.type.length>128||typeof m.distributionId!=='string'||m.distributionId.length>256||! /^[0-9a-f]{64}$/.test(m.hashRoot));}
  async function readChunk(m,index,includeSource=false,timings,prefix=''){
   const readAt=now();
   const record=includeSource&&sources.get(m.id),source=record?.file;
@@ -37,7 +37,7 @@ export function createFileDistribution({core,crypto=globalThis.crypto,emit=()=>{
  }
  async function publish(file,{name=file?.name||'file',type=file?.type||'application/octet-stream',chunkSize=16384,distributionId='',sourceReadBlockBytes=0}={}){
   if(closed)throw new Error('File service closed');if(!file?.slice||!Number.isSafeInteger(file.size)||file.size<0||file.size>maxFileBytes)throw new TypeError('Supply a Blob within maxFileBytes');
-  if(!Number.isInteger(chunkSize)||chunkSize<1024||chunkSize>65536)throw new TypeError('Chunk size must be 1024–65536 bytes');
+  if(!Number.isInteger(chunkSize)||chunkSize<1024||chunkSize>maxChunkBytes)throw new TypeError(`Chunk size must be 1024–${maxChunkBytes} bytes`);
   if(![0,4*1024*1024].includes(sourceReadBlockBytes))throw new TypeError('Source read block must be 0 or 4 MiB');
   if(typeof name!=='string'||name.length>256||typeof type!=='string'||type.length>128||typeof distributionId!=='string'||distributionId.length>256)throw new TypeError('Invalid file metadata');
   const total=Math.ceil(file.size/chunkSize),hashes=new Array(total),startedAt=performance.now();let readMs=0,hashMs=0;

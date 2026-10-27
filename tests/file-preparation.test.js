@@ -1,6 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createFileDistribution} from '../packages/phantom-core/src/files.js';
+test('larger chunks require explicit opt-in and a valid bounded capability',async()=>{
+ const core={onEvent(){return()=>{};},command(){}};const service=createFileDistribution({core});
+ try{await assert.rejects(service.publish(new Blob([new Uint8Array(262144)]),{chunkSize:262144}),/65536/);}finally{service.close();}
+ assert.throws(()=>createFileDistribution({core,maxChunkBytes:262145}),/limits/);
+});
 const core={onEvent(){return()=>{};},command(){}};
 test('block source cache is scoped to one publication and cannot warm a fresh transfer identity',async()=>{
  const file=new Blob([new Uint8Array(65536)]),reads=[];

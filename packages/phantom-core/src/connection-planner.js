@@ -1,9 +1,9 @@
 /** Shareable capability report. Raw stats, addresses and device fingerprints stay local. */
-export function createCapabilityReport(observation, {protocols = []} = {}) {
- if (!observation || observation.version !== 1 || !Array.isArray(protocols) || protocols.some(p => typeof p !== 'string' || !/^[a-z0-9][a-z0-9._-]{0,63}$/i.test(p)) || protocols.length > 32) throw new TypeError('Invalid scout observation or protocols');
+export function createCapabilityReport(observation, {protocols = [],maxChunkBytes=65536} = {}) {
+ if (!observation || observation.version !== 1 || !Number.isInteger(maxChunkBytes) || maxChunkBytes<1024 || maxChunkBytes>262144 || !Array.isArray(protocols) || protocols.some(p => typeof p !== 'string' || !/^[a-z0-9][a-z0-9._-]{0,63}$/i.test(p)) || protocols.length > 32) throw new TypeError('Invalid scout observation or protocols');
  const value=observation.messageLimit;
  const messageLimit=value?.status==='known' && Number.isSafeInteger(value.bytes) && value.bytes>0 ? {status:'known',bytes:value.bytes} : value?.status==='unlimited' ? {status:'unlimited',bytes:null} : {status:'unknown',bytes:null};
- return {version:1,messageLimit,protocols:[...new Set(protocols)].sort()};
+ return {version:1,messageLimit,maxChunkBytes,protocols:[...new Set(protocols)].sort()};
 }
 
 /** Produce a proposal only; callers must negotiate it and validate each actual connection. */
@@ -21,7 +21,13 @@ export function planConnection({local,remote,defaultMessageBytes=65536,maxPayloa
  if(!protocol) reasons.push('no_common_protocol');
  if(!limits.length) reasons.push('message_size_default_for_unlimited');
  const messageBytes=limits.length?Math.min(...limits):defaultMessageBytes;
- const payloadBytes=Math.max(0,Math.min(maxPayloadBytes,messageBytes-framingBytes));
+ const chunkCaps=[];
+ for(const [side,report] of [['local',local],['remote',remote]]){
+  if(Number.isInteger(report.maxChunkBytes)&&report.maxChunkBytes>=1024&&report.maxChunkBytes<=262144)chunkCaps.push(report.maxChunkBytes);
+  else{chunkCaps.push(65536);reasons.push(`${side}_chunk_limit_unknown`);}
+ }
+ const payloadBytes=Math.max(0,Math.min(maxPayloadBytes,...chunkCaps,messageBytes-framingBytes));
  if(!payloadBytes) reasons.push('framing_exceeds_limit');
- return {version:1,status:protocol&&payloadBytes?'proposed':'unavailable',protocol,messageBytes,payloadBytes,framingBytes,reasons,scope:'observed_connections_only',requiresAgreement:true,validateTargetConnection:true};
+ else if(payloadBytes<1024) reasons.push('payload_below_minimum');
+ return {version:1,status:protocol&&payloadBytes>=1024?'proposed':'unavailable',protocol,messageBytes,payloadBytes,framingBytes,reasons,scope:'observed_connections_only',requiresAgreement:true,validateTargetConnection:true};
 }
