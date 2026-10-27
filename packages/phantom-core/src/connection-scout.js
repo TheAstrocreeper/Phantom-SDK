@@ -1,4 +1,4 @@
-/** One on-demand, privacy-limited observation; never creates or changes a connection. */
+/** One on-demand observation; raw stats can contain network identifiers and stay local. */
 export async function scoutConnection(pc, {channel, runtime = globalThis} = {}) {
   if (!pc || typeof pc !== 'object') throw new TypeError('Supply a peer connection');
   const number = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
@@ -7,19 +7,29 @@ export async function scoutConnection(pc, {channel, runtime = globalThis} = {}) 
   const sctp = pc.sctp;
   const result = {
     version: 1,
-    connection: {state:state(pc.connectionState), iceState:state(pc.iceConnectionState), sctpState:state(sctp?.state)},
+    connection: {state:state(pc.connectionState), iceState:state(pc.iceConnectionState), iceGatheringState:state(pc.iceGatheringState), signalingState:state(pc.signalingState), sctpState:state(sctp?.state), dtlsState:state(sctp?.transport?.state)},
     messageLimit: limit(sctp?.maxMessageSize),
     maxChannels: number(sctp?.maxChannels),
     channel: channel ? {state:state(channel.readyState), ordered:typeof channel.ordered === 'boolean' ? channel.ordered : null, bufferedBytes:number(channel.bufferedAmount), lowThresholdBytes:number(channel.bufferedAmountLowThreshold), maxRetransmits:number(channel.maxRetransmits), maxPacketLifeTime:number(channel.maxPacketLifeTime)} : null,
-    features: {webCrypto:typeof runtime.crypto?.subtle?.digest === 'function', blob:typeof runtime.Blob === 'function', streams:typeof runtime.WritableStream === 'function'},
+    features: {webCrypto:typeof runtime.crypto?.subtle?.digest === 'function', blob:typeof runtime.Blob === 'function', streams:typeof runtime.WritableStream === 'function', indexedDB:!!runtime.indexedDB, fileSystemAccess:typeof runtime.showSaveFilePicker === 'function', serviceWorker:!!runtime.navigator?.serviceWorker},
+    environment: {userAgent:state(runtime.navigator?.userAgent), platform:state(runtime.navigator?.platform), languages:Array.isArray(runtime.navigator?.languages)?runtime.navigator.languages.filter(x=>typeof x==='string').slice(0,32):null, hardwareConcurrency:number(runtime.navigator?.hardwareConcurrency), deviceMemoryGiB:number(runtime.navigator?.deviceMemory), secureContext:typeof runtime.isSecureContext==='boolean'?runtime.isSecureContext:null, network:runtime.navigator?.connection?{effectiveType:state(runtime.navigator.connection.effectiveType), downlinkMbps:number(runtime.navigator.connection.downlink), rttMs:number(runtime.navigator.connection.rtt), saveData:typeof runtime.navigator.connection.saveData==='boolean'?runtime.navigator.connection.saveData:null}:null},
     route: null,
     statsStatus: 'unavailable',
+    stats: {rows:[], total:0, truncated:false, containsNetworkIdentifiers:true},
   };
   if (typeof pc.getStats !== 'function') return result;
   try {
     const report = await pc.getStats();
     const transports = [];
-    report.forEach(row => { if (row.type === 'transport' && row.selectedCandidatePairId) transports.push(row); });
+    report.forEach(row => {
+      result.stats.total++;
+      if (result.stats.rows.length < 512) {
+        // RTCStats are structured data; serialize to detach from the live report.
+        try { result.stats.rows.push(JSON.parse(JSON.stringify(row))); } catch { result.stats.rows.push({id:state(row.id),type:state(row.type),serializationError:true}); }
+      }
+      if (row.type === 'transport' && row.selectedCandidatePairId) transports.push(row);
+    });
+    result.stats.truncated = result.stats.total > result.stats.rows.length;
     // Do not guess which transport carries SCTP if multiple routes are present.
     const pair = transports.length === 1 && report.get(transports[0].selectedCandidatePairId);
     const local = pair && report.get(pair.localCandidateId), remote = pair && report.get(pair.remoteCandidateId);
