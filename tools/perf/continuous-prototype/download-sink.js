@@ -28,7 +28,7 @@ export async function createDownloadSink(size) {
   worker.postMessage({type:'register',id,size},[pair.port2]);
   await registered;
   return {
-    start(){const a=document.createElement('a');a.href=`/tools/perf/continuous-prototype/download/${id}`;a.download='phantom-stream-test.bin';document.body.append(a);a.click();a.remove();},
+    start(){const a=document.createElement('a');a.href=`/tools/perf/continuous-prototype/download/${id}`;document.body.append(a);a.click();a.remove();},
     put(_id,index,bytes){window.streamDebug.puts++;if(rejected)return Promise.reject(rejected);return new Promise((resolve,reject)=>{const transfer=bytes.slice(0);pending.set(index,{resolve,reject});pair.port1.postMessage({type:'chunk',index,bytes:transfer},[transfer]);});},
     finish(){return new Promise((resolve,reject)=>{finishResolve=resolve;finishReject=reject;pair.port1.postMessage({type:'end'});});},
     abort(error){pair.port1.postMessage({type:'abort',error:String(error)});}

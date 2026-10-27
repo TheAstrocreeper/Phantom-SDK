@@ -25,7 +25,7 @@ try{
    console.log('STAGE configured');if(mode==='stream'||mode==='download'){const offer=await pages[0].evaluate(()=>offer()),answer=await pages[1].evaluate(o=>window.answer(o),offer);await pages[0].evaluate(a=>setRemote(a),answer);await pages[0].waitForFunction(()=>dc.readyState==='open');}
    console.log('STAGE channel-open');let downloadPromise; if(mode==='download'){downloadPromise=pages[1].waitForEvent('download',{timeout:90000});downloadPromise.catch(()=>{});await pages[1].evaluate(()=>startDownload());}
    console.log('STAGE download-requested');const start=Date.now();const publishing=pages[0].evaluate(()=>publish());publishing.catch(()=>{});
-   try{await pages[1].waitForFunction(()=>record.complete,null,{timeout:20000});}catch{problem='20-second diagnostic deadline';}
+   try{await pages[1].waitForFunction(()=>record.complete,null,{timeout:90000});}catch{problem='90-second receive deadline';}
    console.log('STAGE receiver-wait',problem??'complete');if (!problem) await publishing; else void publishing.catch(()=>{});
    const endpoints=await Promise.all(pages.map(p=>p.evaluate(()=>({...record,streamDebug:window.streamDebug}))));let verifiedBytes=0;
    if(!problem){const id=mode==='sdk'?await pages[0].evaluate(()=>assetId):null;if(mode==='download'){const download=await downloadPromise;const failure=await download.failure();if(failure)throw Error('Browser download failed: '+failure);const data=await readFile(await download.path());assert.equal(data.length,32*1024*1024);assert.equal(data.some(v=>v!==0),false);verifiedBytes=data.length;}else verifiedBytes=await pages[1].evaluate(id=>verify(id),id);assert.equal(verifiedBytes,32*1024*1024);}
