@@ -62,8 +62,9 @@ test('authority silence expires the membership freshness lease and closes subscr
 });
 
 test('live SDK peers stop messaging and active distribution on Remove; fresh invite reuses identity and Leave closes locally', {timeout:30000},async()=>{
- let heldBinary=0,holdBinary=true;
- const f=await fixture(),adapter=bus(),RTC=memoryRTC({onSend:(data,channel)=>{if(holdBinary&&channel.label==='phantom-distribution'&&data instanceof ArrayBuffer){heldBinary++;return false;}return true;}}),networks=[],identities=[],credentials=new Map(),received=[];
+ let heldBinary=0,holdBinary=true,blockedChannel;
+ // Model a stalled ordered channel: later frames cannot overtake its held binary frame.
+ const f=await fixture(),adapter=bus(),RTC=memoryRTC({onSend:(data,channel)=>{if(holdBinary&&channel.label==='phantom-distribution'){if(channel===blockedChannel)return false;if(data instanceof ArrayBuffer){heldBinary++;blockedChannel=channel;return false;}}return true;}}),networks=[],identities=[],credentials=new Map(),received=[];
  async function peer(name,invite,saved,blind=false){
   const seed=saved??createBrowserIdentity(),identity=createNostrIdentity(seed);identities.push(identity);
   const pcs=[];class PeerRTC extends RTC{constructor(){super();pcs.push(this);}}
