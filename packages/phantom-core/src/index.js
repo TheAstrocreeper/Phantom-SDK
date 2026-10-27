@@ -232,3 +232,4 @@ export {createMembershipAuthority, createMemoryMembershipStore} from './membersh
 export {createMembershipAdmission} from './membership-admission.js';
 export {createMembershipRevocationVerifier} from './membership-proof.js';
 export {createPairingCode,parsePairingCode,pairingCoordinates} from './pairing-code.js';
+export {scoutConnection} from './connection-scout.js';
