@@ -178,3 +178,45 @@ check, not a phone throughput measurement. Regression tests verify independent
 connection dispatch, aggregate admission caps, byte-correct interleaved chunks
 and the unchanged single-read memory bound. Chromium checks exercise this reader
 on the existing real-association and checksum transfer paths.
+
+## Actual file timeline (.56)
+
+`distribution.fileTimeline:true` enables local `distributionTimeline` events.
+Share enables it and adds a separate `fileTimeline` section to the existing
+Support & logs export. There is no new page, probe payload, wire message,
+network setting, scheduler change or timer. SDK users leave it off by default.
+
+Each chunk is keyed by the actual job UUID, batch number and chunk index, under
+the authorized asset ID. These identifiers survive export without each device's
+diagnostic aliasing. Source stages record request reception, preparation start,
+read/hash completion and submission start/completion. Receiver stages record
+request submission, binary delivery to the file handler, successful verification
+and storage start/completion. Retries retain up to four timestamps per stage.
+Submission completion means handed to the channel, not acknowledged remotely.
+
+Queue observations come from the existing distribution maintenance tick. They
+include `bufferedAmount`, cumulative submitted bytes and the existing derived
+drain count. The count includes protocol headers/control bytes; drain is not a
+remote-delivery acknowledgment. A zero queue does not prove the native transport
+has no data in flight. Delayed/throttled ticks leave sampling gaps visible in
+the recorded local timestamps; no replacement sampling timer is introduced.
+
+Times are monotonic within the endpoint's performance clock origin, retained
+with job metadata. Join source and receiver records by job/batch/index, then
+compare durations within each clock. Never subtract raw timestamps between
+devices or origins or claim one-way latency from them. These observations do
+not expose SCTP congestion windows or distinguish all causes of network stalls.
+
+Share retains the latest two assets, at most 65,536 chunk records, 32,768 queue
+samples and 1,024 jobs per asset. Queue storage is a ring; stage/chunk/job loss
+and asset eviction are explicit counters. Routine diagnostics rotation cannot
+remove this section. It records metadata only, not file contents or addresses.
+Persistence is attempted once all recorded jobs for an asset close, when the
+page becomes hidden, and on pagehide. No per-chunk JSON serialization occurs.
+Session-storage errors are reported and the in-memory export stays available;
+this does not promise recovery after a tab/process is destroyed.
+
+Tests check local stage ordering, byte integrity, bounded retention, reload and
+visible storage failures. Chromium checks verify matching stable source/receiver
+chunk identities in both SDK events and Share's retained timeline after a
+checksum-matching transfer. This validates observation plumbing, not WAN cause.

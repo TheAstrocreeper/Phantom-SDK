@@ -99,7 +99,18 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
       (receiving?l.job.receiver:l.job.source)===self()&&l.dc?.readyState==='open'&&
       (payload.file?.index===undefined||l.job.indexes.includes(payload.file.index)));
   }
-  const transport={getFileSendScope(to,file){return fileLink('SEND_FILE_BIN_CHUNK',{to,file})?.dc??null;},onEvent(fn){listeners.add(fn);return()=>listeners.delete(fn);},command(type,payload){
+  function timeline(link,stage,details={},context){
+    if(options.fileTimeline!==true)return;
+    const identity=context??{jobId:link.job.id,batch:batchOf(link.job),asset:link.job.asset,peer:link.peer,role:link.job.source===self()?'source':'receiver'};
+    try{emit('distributionTimeline',{...identity,stage,atMs:performance.now(),originMs:performance.timeOrigin,...details});}catch{} // Observers cannot interrupt a file job.
+  }
+  const transport={createFileTrace(to,file,scope,receiving=false){
+    if(options.fileTimeline!==true)return undefined;
+    const link=fileLink(receiving?'SEND_DM':'SEND_FILE_BIN_CHUNK',{to,file,...(receiving?{sys:'PHANTOM_FILE_REQUEST'}:{})});
+    if(!link||(scope&&scope!==link.dc))return undefined;
+    const context={jobId:link.job.id,batch:batchOf(link.job),asset:link.job.asset,peer:link.peer,role:receiving?'receiver':'source',index:file.index};
+    return (stage,details={})=>timeline(link,stage,details,context);
+  },getFileSendScope(to,file){return fileLink('SEND_FILE_BIN_CHUNK',{to,file})?.dc??null;},onEvent(fn){listeners.add(fn);return()=>listeners.delete(fn);},command(type,payload){
     const link=fileLink(type,payload);
     if(type==='SEND_FILE_BIN_CHUNK'||type==='SEND_DM'&&['PHANTOM_FILE_REQUEST','PHANTOM_FILE_MISSING'].includes(payload.sys))traceChunk({direction:'send',kind:type==='SEND_FILE_BIN_CHUNK'?'binary':payload.sys,jobId:link?.job.id??null,peer:payload.to,index:payload.file?.index,available:!!link});
     if(!link||(type==='SEND_FILE_BIN_CHUNK'&&payload.sendScope&&payload.sendScope!==link.dc)){
@@ -147,13 +158,14 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
     if(!link.dc)return;
     const drained=Math.min(link.payloadEnd??0,Math.max(0,(link.submittedBytes??0)-link.dc.bufferedAmount));
     if(drained>(link.drainedBytes??0)){link.drainedBytes=drained;progress(link);}
+    timeline(link,'queue',{bufferedBytes:link.dc.bufferedAmount,submittedBytes:link.submittedBytes??0,drainedBytes:link.drainedBytes??0});
     if((link.activity??0)!==(link.announcedActivity??0)&&Date.now()-(link.lastAnnouncement??0)>=Math.min(1000,jobTimeoutMs/3)){
       link.lastAnnouncement=Date.now();link.announcedActivity=link.activity;
       frame(leader(),{type:'progress',jobId:link.job.id,batch:link.job.batch??0,sequence:link.activity});
     }
   }
   function payloadSend(link,data){link.dc.send(data);link.payloadEnd=link.submittedBytes;}
-  function closeLink(id){pendingSignals.delete(id);closedJobs.set(id,Date.now());const link=links.get(id);if(!link)return;scout(link,'closing');links.delete(id);link.sendController.abort();link.receiveController?.abort();files.flushTimings(link.peer,link.job.asset);if(link.readyTimer)clearTimeout(link.readyTimer);link.readyTimer=null;link.pc.onicecandidate=null;link.pc.onconnectionstatechange=null;link.pc.ondatachannel=null;if(link.dc){link.dc.onopen=null;link.dc.onmessage=null;link.dc.onclose=null;try{link.dc.close();}catch{}}try{link.pc.close();}catch{}link.pendingIce.length=0;link.binary=null;emit('distributionConnectionClosed',{jobId:id,peer:link.peer});}
+  function closeLink(id){pendingSignals.delete(id);closedJobs.set(id,Date.now());const link=links.get(id);if(!link)return;scout(link,'closing');timeline(link,'close',{bufferedBytes:link.dc?.bufferedAmount??null});links.delete(id);link.sendController.abort();link.receiveController?.abort();files.flushTimings(link.peer,link.job.asset);if(link.readyTimer)clearTimeout(link.readyTimer);link.readyTimer=null;link.pc.onicecandidate=null;link.pc.onconnectionstatechange=null;link.pc.ondatachannel=null;if(link.dc){link.dc.onopen=null;link.dc.onmessage=null;link.dc.onclose=null;try{link.dc.close();}catch{}}try{link.pc.close();}catch{}link.pendingIce.length=0;link.binary=null;emit('distributionConnectionClosed',{jobId:id,peer:link.peer});}
   async function receive(link){const job=link.job,startedAt=performance.now();let succeeded=false;
     emit('distributionBatchStarted',{jobId:job.id,batch:job.batch??0,total:job.indexes.length,peer:link.peer});try{
     await files.request(job.asset,{peers:[link.peer],indexes:job.indexes,signal:link.receiveController.signal,concurrentRanges:job.assigned===true});
@@ -192,7 +204,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
   }
   function bind(link,dc){if(dc.label!=='phantom-distribution'){dc.close();return;}link.dc=dc;dc.binaryType='arraybuffer';link.submittedBytes=0;link.payloadEnd=0;link.drainedBytes=0;link.manifestOffsets=new Set();link.requestedIndexes=new Set();
     const nativeSend=dc.send.bind(dc);dc.send=data=>{const result=nativeSend(data);link.submittedBytes+=typeof data==='string'?new TextEncoder().encode(data).byteLength:data.byteLength;return result;};
-    dc.onopen=()=>{if(links.get(link.job.id)!==link||link.opened)return;link.opened=true;scout(link,'open');emit('distributionConnectionOpened',{jobId:link.job.id,peer:link.peer});
+    dc.onopen=()=>{if(links.get(link.job.id)!==link||link.opened)return;link.opened=true;scout(link,'open');timeline(link,'open');emit('distributionConnectionOpened',{jobId:link.job.id,peer:link.peer});
       if(link.job.source===self()&&!link.requireReady&&link.job.needsManifest)void files.share(link.peer,link.job.asset).catch(error);
       if(link.job.receiver===self()){if(link.requireReady)probeSource(link);startReceiver(link);}
     };

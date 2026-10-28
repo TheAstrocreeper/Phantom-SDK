@@ -32,7 +32,7 @@ try{
     runtime:{crypto,performance:(mode==='pair'||mode==='early')?clocks[i]:performance,RTCPeerConnection:RTC},lifecycle:{issue:(action,target,fields)=>admin.sign({networkId:'worm-browser',action,target,...fields,operationId:crypto.randomUUID()})},
     core:{getState:()=>({peerId:id,leader,mirror:ids[1],role:i===2?'syscon1':i===1?'syscon2':'peer',state:'admitted',admitted:true}),
      onEvent(fn){callbacks.set(id,fn);return()=>callbacks.delete(id);},command(type,{to,frame}){if(type==='PHANTOM_DIST_SEND')queueMicrotask(()=>callbacks.get(to)?.({type:'PHANTOM_DIST',payload:{from:id,frame}}));}},
-    options:{intervalMs:10,batchSize:2,requestWindow:8,maxChunkBytes:262144,assignedRanges:true,transferLanes:3,capabilityExchange:true,transferScout:true,scoutBeforeSend:mode==='send',rtcConfiguration:{iceServers:[]}},
+    options:{intervalMs:10,batchSize:2,requestWindow:8,maxChunkBytes:262144,assignedRanges:true,transferLanes:3,capabilityExchange:true,transferScout:true,fileTimeline:true,scoutBeforeSend:mode==='send',rtcConfiguration:{iceServers:[]}},
     emit(type,data){if(type==='distributionScout')clocks[i].report(data);events.push({i,type,data});if(i===2&&type==='distributionJob')peak=Math.max(peak,services[2].snapshot().jobs.length);}}));
    for(const fn of callbacks.values())fn({type:'PRESENCE_ROSTER',payload:{list:ids.map(hKey=>({hKey}))}});
    const wait=async predicate=>{const end=performance.now()+45000;while(!predicate()){const error=events.find(e=>e.type==='distributionError');if(error)throw Error(JSON.stringify(error));if(performance.now()>end)throw Error('browser test deadline: '+JSON.stringify(events.slice(-6)));await new Promise(r=>setTimeout(r,10));}};
@@ -51,7 +51,10 @@ try{
     const blob=events.find(e=>e.i===target&&e.type==='distributionComplete').data.blob,received=new Uint8Array(await blob.arrayBuffer());
     if(mode==='cancel')await wait(()=>scoutPCs.every(pc=>pc.connectionState==='closed'));
     const applied=events.find(e=>e.i===source&&e.type==='distributionScout'&&e.data.phase==='preflight-applied');
-    return {mode,clock:(mode==='pair'||mode==='early')?'synthetic_selection_only':'native',selection,peak,handoffs:events.filter(e=>e.i===source&&e.data.phase==='preflight-handoff'&&e.data.status==='claimed').map(e=>e.data.lane),fileAssociations:filePCs.size,allFileAssociationsScouted:[...filePCs].every(pc=>scouted.has(pc)),scoutAssociations:scoutPCs.length,scoutClosed:scoutPCs.every(pc=>pc.connectionState==='closed'),
+    const timeline=events.filter(e=>e.type==='distributionTimeline');
+    const sourceStages=timeline.filter(e=>e.i===source&&e.data.index===0),receiverStages=timeline.filter(e=>e.i===target&&e.data.index===0);
+    const traced=sourceStages.some(e=>e.data.stage==='submit-complete')&&receiverStages.some(e=>e.data.stage==='write-complete')&&sourceStages.some(s=>receiverStages.some(r=>s.data.jobId===r.data.jobId&&s.data.batch===r.data.batch));
+    return {mode,traced,clock:(mode==='pair'||mode==='early')?'synthetic_selection_only':'native',selection,peak,handoffs:events.filter(e=>e.i===source&&e.data.phase==='preflight-handoff'&&e.data.status==='claimed').map(e=>e.data.lane),fileAssociations:filePCs.size,allFileAssociationsScouted:[...filePCs].every(pc=>scouted.has(pc)),scoutAssociations:scoutPCs.length,scoutClosed:scoutPCs.every(pc=>pc.connectionState==='closed'),
      applied:applied?.data??null,samples:events.filter(e=>e.type==='distributionScout'&&e.data.phase==='preflight-sample').length,
      incoming:events.filter(e=>e.type==='distributionScout'&&e.data.phase==='preflight-receive-sample').map(e=>e.data),
      cancelled:events.some(e=>e.type==='distributionScout'&&e.data.status==='cancelled'),
@@ -59,7 +62,7 @@ try{
      coordinatorReceivedFile:events.some(e=>e.i===2&&e.type==='distributionComplete')};
    }finally{services.forEach(s=>s.close());if(pcs.some(pc=>pc.connectionState!=='closed'))throw Error('RTC association leaked after session close');}
   },mode);
-  assert.equal(result.identical,true);assert.equal(result.coordinatorReceivedFile,false);if(mode==='cancel')assert.equal(result.scoutClosed,true);else{assert.equal(result.allFileAssociationsScouted,true);assert.ok(result.fileAssociations>=2);}
+  assert.equal(result.identical,true);assert.equal(result.traced,true);assert.equal(result.coordinatorReceivedFile,false);if(mode==='cancel')assert.equal(result.scoutClosed,true);else{assert.equal(result.allFileAssociationsScouted,true);assert.ok(result.fileAssociations>=2);}
   if(mode==='complete'||mode==='pair'||mode==='early'){assert.ok(result.incoming.length>=14&&result.incoming.length<=42);assert.equal(result.incoming.length,result.samples);assert.ok(result.incoming.every(s=>s.complete&&s.lanes.length===s.connections&&s.lanes.reduce((n,l)=>n+l.bytes,0)===s.bytes));assert.ok(result.selection.samples.every(s=>s.queues.reduce((n,q)=>n+q.payloadBytes,0)===s.bytes));assert.equal(result.scoutAssociations,6);assert.ok(result.samples<=42);assert.ok(result.selection.samples.length<=20);assert.ok(result.selection.samples.filter(s=>s.stage==='confirm').every(s=>s.bytes===3145728&&s.delivery.length>=3&&s.peakBufferedBytes.every(n=>n<=786432)));assert.ok(result.applied);assert.equal(result.applied.connections,result.selection.connections);assert.ok(result.peak<=result.selection.connections);}
   else if(mode==='cancel')assert.equal(result.cancelled,true);
   else{assert.equal(result.selection.version,5);assert.ok(result.selection.samples.length<=20);assert.equal(result.selection.payloadBudgetBytes,39*786432);assert.ok(result.applied);assert.equal(result.applied.connections,result.selection.connections);}
