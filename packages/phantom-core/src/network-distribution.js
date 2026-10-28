@@ -74,19 +74,19 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
   }
   const capabilityExchange=options.capabilityExchange===true?createCapabilityExchange({send:frame,allowed:peerAllowed,localReport:localCapability,onReport:(peer,report)=>{emit('distributionCapability',{peer,report});if(report.protocols.includes(TRANSFER_SCOUT_PROTOCOL))preflight?.start(peer);}}):null;
   const agreement=capabilityExchange?createPlanAgreement({send:frame,allowed:peerAllowed,localReport:localCapability,remoteReport:peer=>capabilityExchange.get(peer),newId:()=>crypto.randomUUID(),onDecision:result=>emit('distributionPlanDecision',result)}):null;
-  const preflight=scoutEnabled?createTransferScout({self,allowed:peerAllowed,send:frame,runtime,configuration:options.rtcConfiguration,sampleBytes:options.scoutSampleBytes,busy:()=>links.size>0,onReport:report=>emit('distributionScout',report)}):null;
+  const preflight=scoutEnabled?createTransferScout({self,allowed:peerAllowed,send:frame,runtime,configuration:options.rtcConfiguration,comparison:options.scoutComparison,sampleBytes:options.scoutSampleBytes,busy:()=>links.size>0,onReport:report=>emit('distributionScout',report)}):null;
   function clearPeerSetup(peer){
     preflight?.drop(peer);
     for(const asset of assets.values()){
       for(const key of asset.sourceLimits?.keys()??[])if(key.startsWith(peer+':')||key.endsWith(':'+peer))asset.sourceLimits.delete(key);
-      if(asset.outgoingSetup?.receiver===peer){delete asset.outgoingSetup;delete asset.outgoingQueuePolicy;asset.setupAcknowledged=false;reported.delete(asset.id);}
+      if(asset.outgoingSetup?.receiver===peer){delete asset.outgoingSetup;delete asset.outgoingQueuePolicy;delete asset.outgoingMessagePolicy;asset.setupAcknowledged=false;reported.delete(asset.id);}
     }
   }
   function selectedSetup(peer){
     const result=preflight?.get(peer);if(!result?.transportAvailable)return null;
     const plan=result.connectionPlan;
     return {...result,senderSelection:{status:result.status,reason:result.reason,connections:result.connections,lanes:result.lanes},
-      ...(plan?{status:plan.laneDecision.status==='measured'?'measured':'inconclusive',reason:plan.laneDecision.reason,connections:plan.connections,lanes:[...plan.lanes],queuePolicy:plan.queuePolicy}:{}),
+      ...(plan?{status:plan.laneDecision.status==='measured'?'measured':'inconclusive',reason:plan.laneDecision.reason,connections:plan.connections,lanes:[...plan.lanes],queuePolicy:plan.queuePolicy,messagePolicy:plan.messagePolicy}:{}),
       enforcement:scoutCoordinator===2?'coordinator_supported':'default_coordinator_unconfirmed',
       effectiveConnections:scoutCoordinator===2?(plan?.connections??result.connections):Math.min(3,maxConnections)};
   }
@@ -138,10 +138,11 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
   async function sendBinary(link,payload){let ok=false,reason='Distribution connection unavailable',bufferWaitMs=0;try{
     const striped=Array.isArray(link.pc?.pcs),pcs=striped?link.pc.pcs:[link.pc],overhead=striped?9:0;
     const header=JSON.stringify({kind:'binary',file:payload.file}),headerBytes=new TextEncoder().encode(header).byteLength;
-    const direct=fitsMessageLimits({connections:pcs,payloadBytes:payload.bytes.byteLength,headerBytes,wrapperBytes:overhead});
+    const selectedMessageBytes=link.messagePolicy?.maxPayloadBytes??null;
+    const direct=(!selectedMessageBytes||payload.bytes.byteLength<=selectedMessageBytes)&&fitsMessageLimits({connections:pcs,payloadBytes:payload.bytes.byteLength,headerBytes,wrapperBytes:overhead});
     const peerSupportsFragments=capabilityExchange?.get(link.peer)?.protocols.includes('phantom-file-fragments-v1')===true;
     if(!direct&&!peerSupportsFragments)throw Error('File message exceeds the connection message limit');
-    const maxPayload=direct?payload.bytes.byteLength:maxMessagePayload(pcs,overhead);
+    const maxPayload=direct?payload.bytes.byteLength:Math.min(maxMessagePayload(pcs,overhead),selectedMessageBytes??Infinity);
     if(!direct&&maxPayload<1024)throw Error('Connection message limit is too small');
     for(let offset=0;offset<payload.bytes.byteLength;){
       const length=Math.min(maxPayload,payload.bytes.byteLength-offset);
@@ -272,6 +273,10 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
     if(retained&&asset.outgoingQueuePolicy){
       link.queuePolicy={...asset.outgoingQueuePolicy};
       emit('distributionScout',{phase:'preflight-queue-applied',id:retained.id,peer,asset:job.asset,lane:retained.lane,jobId:job.id,policy:link.queuePolicy,enforcement:'retained_source_channel'});
+    }
+    if(retained&&asset.outgoingMessagePolicy){
+      link.messagePolicy={...asset.outgoingMessagePolicy};
+      emit('distributionScout',{phase:'preflight-message-applied',id:retained.id,peer,asset:job.asset,lane:retained.lane,jobId:job.id,policy:link.messagePolicy,enforcement:'retained_source_channel'});
     }
     configureLink(link);
     if(retained){
@@ -424,7 +429,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
     }
   }
   function syncLeadership(){const token=leader()+':'+state().mirror;
-    if(token!==leaderToken){leaderToken=token;checkedToken='';receivedSequence=-1;rangePeers.clear();scoutCoordinator=false;preflight?.clear();for(const a of assets.values()){a.sourceLimits?.clear();delete a.outgoingSetup;delete a.outgoingQueuePolicy;a.setupAcknowledged=false;}controlObservations.clear();controlGenerations.clear();controlPending.clear();capabilityExchange?.clear();agreement?.clear();rangeAdvertisement='';reported.clear();mirrored.clear();mirrorJobs.clear();for(const job of [...jobs.values()])finishJob(job);for(const id of [...links.keys()]){const link=links.get(id);closeLink(id);}dirty=true;lastReport=0;}
+    if(token!==leaderToken){leaderToken=token;checkedToken='';receivedSequence=-1;rangePeers.clear();scoutCoordinator=false;preflight?.clear();for(const a of assets.values()){a.sourceLimits?.clear();delete a.outgoingSetup;delete a.outgoingQueuePolicy;delete a.outgoingMessagePolicy;a.setupAcknowledged=false;}controlObservations.clear();controlGenerations.clear();controlPending.clear();capabilityExchange?.clear();agreement?.clear();rangeAdvertisement='';reported.clear();mirrored.clear();mirrorJobs.clear();for(const job of [...jobs.values()])finishJob(job);for(const id of [...links.keys()]){const link=links.get(id);closeLink(id);}dirty=true;lastReport=0;}
   }
   function restore(){
     if(restoration)return restoration;
@@ -494,10 +499,12 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
       if(recipients!==undefined&&JSON.stringify(recipients)!==JSON.stringify(verified.recipients))throw Error('Recipients do not match admin publish authorization');
       if(existing&&JSON.stringify(existing.proof.recipients)!==JSON.stringify(verified.recipients))throw Error('Publication recipients are immutable; use a different distributionId');
       const asset=await acceptAsset({...manifest,proof:verified});if(!asset)throw Error('Distribution unavailable');
-      delete asset.outgoingQueuePolicy;
+      delete asset.outgoingQueuePolicy;delete asset.outgoingMessagePolicy;
       if(setup&&recipients?.length===1&&scoutCoordinator===2){
         if(setup.queuePolicy?.status==='measured'&&setup.queuePolicy.highWaterMark===1024*1024&&setup.queuePolicy.lowWaterMark===512*1024)
           asset.outgoingQueuePolicy={highWaterMark:1024*1024,lowWaterMark:512*1024};
+        if(setup.messagePolicy?.status==='measured'&&Number.isSafeInteger(setup.messagePolicy.maxPayloadBytes)&&setup.messagePolicy.maxPayloadBytes>=1024&&setup.messagePolicy.maxPayloadBytes<=262144&&capabilityExchange?.get(recipients[0])?.protocols.includes('phantom-file-fragments-v1'))
+          asset.outgoingMessagePolicy={maxPayloadBytes:setup.messagePolicy.maxPayloadBytes};
         asset.outgoingSetup={version:2,receiver:recipients[0],connections:setup.connections,lanes:[...setup.lanes],scoutId:setup.id};
         emit('distributionScout',{phase:'preflight-selected',id:setup.id,peer:recipients[0],asset:asset.id,selection:setup,enforcement:'awaiting_coordinator_acknowledgment'});
       }
