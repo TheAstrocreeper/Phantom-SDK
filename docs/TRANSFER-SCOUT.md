@@ -152,3 +152,29 @@ plumbing; improvement on the user's network remains unproven.
 The Chromium runner also checks a forced pair with a synthetic selection clock.
 That case verifies exact `[1,2]` association binding and the two-job cap over real
 RTC, not a measured performance advantage. Other browser cases use native clocks.
+
+## Source pipeline (.55)
+
+The scout and its selection rules are unchanged. File preparation remains capped
+at eight active tasks, 32 admitted chunks per peer and 64 overall. Dispatch
+ordering is scoped to the actual source data channel, while those admission
+caps remain shared per peer. Sources without a channel-scope adapter retain
+the previous peer ordering. A prepared send carries its original channel identity;
+a retired channel cannot silently migrate that send to a replacement job.
+
+The source reader still retains or loads at most one block of at most 4 MiB.
+It batches same-turn demand with a microtask, preserving full block read-ahead
+for a single local range. When queued demand spans different blocks or sources,
+it reads the queued span within the first block rather than always fetching
+4 MiB. This reduces repeated byte reads under range interleaving without adding
+cache capacity. More, smaller native read calls can cost extra on sources with
+fixed per-call latency; a WAN improvement is not established by byte counts.
+Hash verification and file framing remain in use. No timers or retries are added.
+
+The controlled 24 MiB reproduction originally read 104 MiB in 26 calls. With the
+revised reader and connection scopes it read 27.75 MiB in 38 calls; sequential
+access stayed at 24 MiB in six calls. This is a scheduling/byte-amplification
+check, not a phone throughput measurement. Regression tests verify independent
+connection dispatch, aggregate admission caps, byte-correct interleaved chunks
+and the unchanged single-read memory bound. Chromium checks exercise this reader
+on the existing real-association and checksum transfer paths.

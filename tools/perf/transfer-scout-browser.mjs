@@ -44,7 +44,7 @@ try{
     services[source].proposePlan(ids[target],{maxPayloadBytes:262144,allowFragmentation:true});await wait(()=>services[source].getPlan(ids[target]));
     const scoutPCs=[...pcs];
     const bytes=Uint8Array.from({length:4*1024*1024+17},(_,i)=>i%251),file=new File([bytes],'worm-fixture.bin');
-    const prepared=await services[source].prepareAgreed(file,ids[target]);
+    const prepared=await services[source].prepareAgreed(file,ids[target],{sourceReadBlockBytes:4*1024*1024});
     selection=services[source].getScout(ids[target]);
     await services[source].publish(file,{prepared,recipients:[ids[target]]});
     await wait(()=>events.some(e=>e.i===target&&e.type==='distributionComplete'));

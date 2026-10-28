@@ -1,16 +1,17 @@
-/** Bounded asynchronous preparation with ordered dispatch per peer. */
+/** Bounded asynchronous preparation with ordered dispatch per peer and connection; admission limits remain per peer. */
 export function createPreparedSendQueue({concurrency=8,maxPending=64,maxPerPeer=16}={}) {
  let active=0,pending=0,closed=false;const waiting=[],counts=new Map(),tails=new Map();
  function pump(){while(!closed&&active<concurrency&&waiting.length){const task=waiting.shift();active++;Promise.resolve().then(task.prepare).then(value=>task.resolve({value}),error=>task.resolve({error})).finally(()=>{active--;pump();});}}
  return {
-  enqueue(peer,prepare,send){
+  enqueue(peer,prepare,send,scope=peer){
    if(closed||pending>=maxPending||(counts.get(peer)||0)>=maxPerPeer)return null;
    pending++;counts.set(peer,(counts.get(peer)||0)+1);
    const prepared=new Promise(resolve=>waiting.push({prepare,resolve}));pump();
-   const previous=tails.get(peer)||Promise.resolve();
+   let scopes=tails.get(peer);if(!scopes){scopes=new Map();tails.set(peer,scopes);}
+   const previous=scopes.get(scope)||Promise.resolve();
    const next=previous.catch(()=>{}).then(async()=>{const result=await prepared;if(closed)throw Error('File service closed');if(result.error)throw result.error;return send(result.value);});
-   tails.set(peer,next);
-   const release=()=>{pending--;counts.set(peer,(counts.get(peer)||1)-1);if(!counts.get(peer))counts.delete(peer);if(tails.get(peer)===next)tails.delete(peer);};
+   scopes.set(scope,next);
+   const release=()=>{pending--;counts.set(peer,(counts.get(peer)||1)-1);if(!counts.get(peer))counts.delete(peer);if(scopes.get(scope)===next)scopes.delete(scope);if(!scopes.size&&tails.get(peer)===scopes)tails.delete(peer);};
    next.then(release,release);return next;
   },
   close(){closed=true;for(const task of waiting.splice(0))task.resolve({error:Error('File service closed')});},

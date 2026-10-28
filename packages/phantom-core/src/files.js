@@ -64,23 +64,24 @@ export function createFileDistribution({core,crypto=globalThis.crypto,emit=()=>{
  async function share(to,id){peerAllowed(to);const m=check(id);const {hashes,...header}=m;packet(to,'FILE_OFFER',{id,name:m.name,size:m.size,type:m.type,phantom:header});for(let offset=0;offset<hashes.length;offset+=64){check(id);packet(to,'PHANTOM_FILE_MANIFEST',{id,offset,hashes:hashes.slice(offset,offset+64)});}return publicManifest(m);}
  async function finishManifest(from,row){const m=row.m;if(row.hashes.size!==m.total)return;const hashes=Array.from({length:m.total},(_,i)=>row.hashes.get(i));if(await digest(new TextEncoder().encode(hashes.join('')),crypto)!==m.hashRoot)throw new Error('Manifest hash mismatch');if('sha256:'+await digest(new TextEncoder().encode(JSON.stringify(descriptor(m))),crypto)!==m.id)throw new Error('Manifest identity mismatch');if(closed)throw new Error('File service closed');checkAllowed(m);const verified={...m,hashes};if(typeof chunkStore.begin==='function')await chunkStore.begin(m.id,publicManifest(verified));if(closed)throw new Error('File service closed');checkAllowed(m);manifests.set(m.id,verified);if(from!==null){offers.delete(from+':'+m.id);emit('fileOffer',{from,manifest:publicManifest(manifests.get(m.id))});}}
  async function sendChunk(to,id,index,generation,prepared){peerAllowed(to);if((peerGenerations.get(to)||0)!==generation)return;const m=check(id);
-  const {bytes,timings}=prepared;
+  const {bytes,timings,sendScope}=prepared;
   if(!bytes){packet(to,'PHANTOM_FILE_MISSING',{id,index});return;}
   const row=senderMetrics(to,id);for(const [stage,ms]of Object.entries(timings))row.timings.add(stage,ms);
   const submitAt=now();
-  await new Promise((resolve,reject)=>{const cancel=()=>finish(new Error('File service closed'));const finish=error=>{clearTimeout(timer);off();activeSends.delete(cancel);error?reject(error):resolve();};const timer=setTimeout(()=>finish(new Error('Chunk send timed out')),requestTimeoutMs);const off=core.onEvent(e=>{const f=e.payload?.file;if(e.type!=='FILE_BIN_CHUNK_SENT'||e.payload.to!==to||f?.id!==id||f.index!==index)return;if(e.payload.ok&&Number.isFinite(e.payload.bufferWaitMs))row.timings.add('bufferWaitMs',e.payload.bufferWaitMs);finish(e.payload.ok?null:new Error(e.payload.error));});cancel.peer=to;activeSends.add(cancel);core.command('SEND_FILE_BIN_CHUNK',{to,file:{...m,hashes:undefined,index,bytes:bytes.byteLength},bytes});});
+  await new Promise((resolve,reject)=>{const cancel=()=>finish(new Error('File service closed'));const finish=error=>{clearTimeout(timer);off();activeSends.delete(cancel);error?reject(error):resolve();};const timer=setTimeout(()=>finish(new Error('Chunk send timed out')),requestTimeoutMs);const off=core.onEvent(e=>{const f=e.payload?.file;if(e.type!=='FILE_BIN_CHUNK_SENT'||e.payload.to!==to||f?.id!==id||f.index!==index)return;if(e.payload.ok&&Number.isFinite(e.payload.bufferWaitMs))row.timings.add('bufferWaitMs',e.payload.bufferWaitMs);finish(e.payload.ok?null:new Error(e.payload.error));});cancel.peer=to;activeSends.add(cancel);core.command('SEND_FILE_BIN_CHUNK',{to,...(sendScope?{sendScope}:{}),file:{...m,hashes:undefined,index,bytes:bytes.byteLength},bytes});});
   row.timings.add('submitMs',now()-submitAt);row.total++;if(row.total>=32)flushTimings(to,id);
  }
  function queueChunk(to,id,index){
   const m=check(id);if(!Number.isInteger(index)||index<0||index>=m.total)return;
-  const generation=peerGenerations.get(to)||0,queuedAt=now();
+  const generation=peerGenerations.get(to)||0,queuedAt=now(),sendScope=core.getFileSendScope?.(to,{id,index});
+  if(sendScope===null)return; // Its authenticated distribution channel has already retired.
   const next=sendQueue.enqueue(to,async()=>{
    check(id);peerAllowed(to);if((peerGenerations.get(to)||0)!==generation)throw Error('Peer membership inactive');
    const timings={},queueMs=now()-queuedAt;
    const recorder={add:(key,ms)=>timings[key]=ms};const bytes=await readChunk(m,index,true,recorder);
    check(id);peerAllowed(to);if((peerGenerations.get(to)||0)!==generation)throw Error('Peer membership inactive');
-   return {bytes,timings:{...timings,queueMs}};
-  },prepared=>sendChunk(to,id,index,generation,prepared));
+   return {bytes,sendScope,timings:{...timings,queueMs}};
+  },prepared=>sendChunk(to,id,index,generation,prepared),sendScope??to);
   next?.catch(error=>{if(!closed)emit('fileError',{id,from:to,error:error.message});});
  }
  function receiveSlots(){return queuedWrites+[...downloads.values()].reduce((n,d)=>n+d.pending.size,0);}

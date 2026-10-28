@@ -91,15 +91,18 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
     const rows=table();for(const a of rows.assets)for(const h of a.holders){const key=a.id+':'+h.peer,sent=mirrored.get(key)??new Set();if(mirrored.has(key)&&sent.size===h.indexes.length)continue;const indexes=h.indexes.filter(i=>!sent.has(i));for(let offset=0;offset<Math.max(1,indexes.length);offset+=128)frame(mirror,{type:'mirror',sequence,asset:{...a,holders:undefined},peer:h.peer,indexes:indexes.slice(offset,offset+128)});for(const i of indexes)sent.add(i);mirrored.set(key,sent);}
     frame(mirror,{type:'mirrorJobs',sequence,reset:true});for(const job of jobs.values())frame(mirror,{type:'mirrorJobs',sequence,job});
   }}
-  const transport={onEvent(fn){listeners.add(fn);return()=>listeners.delete(fn);},command(type,payload){
+  function fileLink(type,payload){
     // Opposite-direction jobs for the same asset can share a peer pair.
     // Requests belong to our receiving job; replies belong to our source job.
     const receiving=type==='SEND_DM'&&payload.sys==='PHANTOM_FILE_REQUEST';
-    const link=[...links.values()].find(l=>canUsePeer(l.peer)&&l.peer===payload.to&&l.job.asset===payload.file?.id&&
+    return [...links.values()].find(l=>canUsePeer(l.peer)&&l.peer===payload.to&&l.job.asset===payload.file?.id&&
       (receiving?l.job.receiver:l.job.source)===self()&&l.dc?.readyState==='open'&&
       (payload.file?.index===undefined||l.job.indexes.includes(payload.file.index)));
+  }
+  const transport={getFileSendScope(to,file){return fileLink('SEND_FILE_BIN_CHUNK',{to,file})?.dc??null;},onEvent(fn){listeners.add(fn);return()=>listeners.delete(fn);},command(type,payload){
+    const link=fileLink(type,payload);
     if(type==='SEND_FILE_BIN_CHUNK'||type==='SEND_DM'&&['PHANTOM_FILE_REQUEST','PHANTOM_FILE_MISSING'].includes(payload.sys))traceChunk({direction:'send',kind:type==='SEND_FILE_BIN_CHUNK'?'binary':payload.sys,jobId:link?.job.id??null,peer:payload.to,index:payload.file?.index,available:!!link});
-    if(!link){
+    if(!link||(type==='SEND_FILE_BIN_CHUNK'&&payload.sendScope&&payload.sendScope!==link.dc)){
       // A source read may finish after its job/channel was retired. Settle the
       // file service's send immediately so its per-peer queue can keep moving.
       if(type==='SEND_FILE_BIN_CHUNK')fire('FILE_BIN_CHUNK_SENT',{...payload,ok:false,error:'Distribution job retired before chunk send'});

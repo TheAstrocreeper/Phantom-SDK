@@ -18,3 +18,13 @@ test('closing preparation queue prevents prepared and waiting jobs from dispatch
  const results=Promise.allSettled([a,b]);await tick();queue.close();release(0);
  assert.ok((await results).every(r=>r.status==='rejected'));assert.equal(sent,0);assert.equal(queue.enqueue('peer',()=>1,()=>sent++),null);
 });
+test('connection scopes dispatch independently while sharing the same peer admission budget',async()=>{
+ const queue=createPreparedSendQueue({maxPerPeer:3}),sent=[],a={},b={};let release;
+ try{
+  const first=queue.enqueue('peer',()=>new Promise(r=>release=r),v=>sent.push(v),a);
+  const independent=queue.enqueue('peer',()=>2,v=>sent.push(v),b);
+  const ordered=queue.enqueue('peer',()=>3,v=>sent.push(v),a);
+  assert.equal(queue.enqueue('peer',()=>4,()=>{},{}),null,'adding scopes cannot bypass the peer budget');
+  await independent;assert.deepEqual(sent,[2]);release(1);await Promise.all([first,ordered]);assert.deepEqual(sent,[2,1,3]);
+ }finally{queue.close();}
+});

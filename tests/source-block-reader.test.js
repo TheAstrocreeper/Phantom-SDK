@@ -35,3 +35,14 @@ test('failed block reads reject coalesced callers without poisoning future reads
  try{const results=await Promise.allSettled([reader.read(source,0,65536),reader.read(source,0,65536)]);assert.ok(results.every(r=>r.status==='rejected'));fail=false;assert.equal((await reader.read(source,0,65536)).byteLength,65536);}
  finally{reader.close();}
 });
+test('interleaved distribution ranges avoid repeatedly fetching full blocks within the same reader budget',async()=>{
+ const {createPreparedSendQueue}=await import('../packages/phantom-core/src/file-pipeline.js');
+ const size=24*1024*1024,chunk=262144,data=new Uint8Array(size);
+ for(let i=0;i<96;i++)data.fill(i,i*chunk,(i+1)*chunk);
+ const blob=new Blob([data]),requests=[];let active=0,peak=0;
+ const source={size,slice(start,end){requests.push({start,end});assert.ok(end-start<=4194304);return {async arrayBuffer(){active++;peak=Math.max(peak,active);await tick();try{return await blob.slice(start,end).arrayBuffer();}finally{active--;}}};}};
+ const reader=createSourceBlockReader(),queue=createPreparedSendQueue({maxPerPeer:32}),order=Array.from({length:32},(_,i)=>[i,32+i,64+i]).flat(),tasks=new Set(),sent=new Set();let cursor=0;
+ function admit(){while(cursor<order.length&&tasks.size<32){const index=order[cursor++],task=queue.enqueue('peer',()=>reader.read(source,index,chunk),bytes=>{const view=new Uint8Array(bytes);assert.equal(view.length,chunk);assert.equal(view[0],index);assert.equal(view.at(-1),index);sent.add(index);},Math.floor(index/32));tasks.add(task);task.then(()=>{tasks.delete(task);admit();},()=>tasks.delete(task));}}
+ try{admit();while(tasks.size)await Promise.all([...tasks]);assert.equal(sent.size,96);assert.equal(peak,1);assert.ok(requests.reduce((n,r)=>n+r.end-r.start,0)<=size+8*1024*1024,'interleaved reads stay close to useful data rather than the old 104 MiB');}
+ finally{queue.close();reader.close();}
+});
