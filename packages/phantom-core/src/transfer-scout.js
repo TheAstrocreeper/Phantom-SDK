@@ -48,6 +48,7 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
       try{lane.pc.close();}catch{}
     }
     if(reason!=='complete') {results.delete(s.peer);notify(s,{phase:'preflight',status:'cancelled',reason,samples:s.samples});}
+    else notify(s,{phase:'preflight',status:'complete'});
   }
   function fail(s,error){retire(s,error?.message==='Invalid probe data'?'invalid_probe_data':'probe_failed');}
   function snapshot(s,phase,round) {

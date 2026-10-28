@@ -21,7 +21,7 @@ async function fixture({thirdLeader=false,legacyLeader=false,legacyReceiver=fals
    emit:(type,data)=>events.push({i,type,data})});
  });
  for(const fn of callbacks.values())fn({type:'PRESENCE_ROSTER',payload:{list:members.map(hKey=>({hKey}))}});
- return {nodes,events,frames,pcs,async scout(){nodes[0].requestCapabilities(ids[1]);nodes[1].requestCapabilities(ids[0]);await until(()=>nodes[0].getCapabilities(ids[1])&&nodes[1].getCapabilities(ids[0]));await until(()=>members.filter(id=>id!==leader).every(id=>frames.some(f=>f.from===id&&f.body.type==='rangeCapability'))&&nodes[thirdLeader?2:0].snapshot().adminChecked);},
+ return {nodes,events,frames,pcs,disconnectAtSource(){callbacks.get(ids[0])({type:'PEER_CONNECTION_STATE',payload:{peerId:ids[1],state:'connecting'}});},async scout(){nodes[0].requestCapabilities(ids[1]);nodes[1].requestCapabilities(ids[0]);await until(()=>nodes[0].getCapabilities(ids[1])&&nodes[1].getCapabilities(ids[0]));await until(()=>members.filter(id=>id!==leader).every(id=>frames.some(f=>f.from===id&&f.body.type==='rangeCapability'))&&nodes[thirdLeader?2:0].snapshot().adminChecked);},
   publish:()=>nodes[0].publish(new Blob([new Uint8Array(65536)]),{chunkSize:1024,recipients:[ids[1]]}),close:()=>nodes.forEach(n=>n.close())};
 }
 for(const thirdLeader of [false,true])test(`a measured single-connection choice constrains the actual scheduler (independent coordinator: ${thirdLeader})`,async()=>{
@@ -53,5 +53,14 @@ test('selecting a file during a stalled scout cancels it before file association
   await f.scout();await until(()=>f.pcs.some(pc=>pc.channels.some(ch=>ch.label==='phantom-distribution-scout'&&ch.readyState==='open')));
   await f.publish();await until(()=>f.nodes[0].snapshot().jobs.length===3);
   assert.equal(f.nodes[0].getScout(ids[1]),null);assert.ok(f.pcs.filter(pc=>pc.channels.some(ch=>ch.label==='phantom-distribution-scout')).every(pc=>pc.connectionState==='closed'));
+ }finally{f.close();}
+});
+
+test('a changed peer connection invalidates evidence and removes its scheduling restriction',async()=>{
+ const f=await fixture({thirdLeader:true});try{
+  await f.scout();await until(()=>f.events.filter(e=>e.type==='distributionScout'&&e.data.phase==='preflight-result').length===2);
+  await f.publish();await until(()=>f.nodes[2].snapshot().jobs.length===1);
+  f.disconnectAtSource();assert.equal(f.nodes[0].getScout(ids[1]),null);
+  await until(()=>f.nodes[2].snapshot().jobs.length===3);
  }finally{f.close();}
 });
