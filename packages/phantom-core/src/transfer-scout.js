@@ -80,6 +80,7 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
     if(!live(s))return;
     if(s.finishing&&['channel_closed','connection_closed','connection_failed'].includes(reason))reason='complete';
     if(notifyPeer)wire(s,{action:'cancel',reason});
+    const partial=partialSample(s);
     s.stopped=true;active=null;s.controller.abort();
     s.ack?.reject(Error(reason));s.ack=null;
     for(const lane of s.lanes){
@@ -87,8 +88,22 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
       if(lane.dc){lane.dc.onopen=null;lane.dc.onclose=null;lane.dc.onerror=null;lane.dc.onmessage=null;try{lane.dc.close();}catch{}}
       try{lane.pc.close();}catch{}
     }
-    if(reason!=='complete') {results.delete(s.peer);notify(s,{phase:'preflight',status:'cancelled',reason,samples:s.samples});}
-    else notify(s,{phase:'preflight',status:'complete'});
+    if(reason!=='complete') {results.delete(s.peer);notify(s,{phase:'preflight',status:'cancelled',reason,samples:s.samples,incomingSamples:s.incomingSamples,partial});}
+    else notify(s,{phase:'preflight',status:'complete',incomingSamples:s.incomingSamples});
+  }
+  // Receiver times describe local arrival only; they never subtract clocks
+  // from the sender. Keep summaries bounded even when a round is interrupted.
+  function incomingSample(receiving,complete=false) {
+    return {round:receiving.round,...receiving.spec,complete,
+      elapsedMs:now()-receiving.startedAt,clock:'receiver_monotonic',
+      lanes:[...receiving.arrivals.values()].map(row=>({...row}))};
+  }
+  function partialSample(s) {
+    const outgoing=s.outgoing?{...s.outgoing,elapsedMs:now()-s.outgoing.startedAt,
+      delivery:s.ack?.delivery??s.outgoing.delivery,
+      bufferedNow:s.lanes.map(row=>row.dc?.bufferedAmount??null)}:null;
+    return outgoing||s.receiving?structuredClone({outgoing,
+      incoming:s.receiving?incomingSample(s.receiving):null}):null;
   }
   function fail(s,error){retire(s,error?.message==='Invalid probe data'?'invalid_probe_data':'probe_failed');}
   function snapshot(s,phase,round) {
@@ -97,7 +112,7 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
   }
   function create(peer,id,initiator,bytes,reverse) {
     const s={peer,id,initiator,bytes,reverse,lanes:[],ready:new Set(),started:false,stopped:false,
-      receiving:null,nextReceive:initiator?ROUNDS:0,controller:new AbortController(),samples:[],ack:null,running:false,receivedRounds:0,payload:new Uint8Array(65536)};
+      receiving:null,nextReceive:initiator?ROUNDS:0,controller:new AbortController(),samples:[],incomingSamples:[],outgoing:null,ack:null,running:false,receivedRounds:0,payload:new Uint8Array(65536)};
     active=s;attempted.add(peer);results.delete(peer);
     crypto.getRandomValues(s.payload);
     for(let lane=0;lane<LANES;lane++) {
@@ -139,9 +154,9 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
         if(body.round!==s.nextReceive||!Number.isInteger(body.round)||body.round<0||body.round>=2*ROUNDS)throw Error('Invalid probe data');
         const spec=specification(s,body.round);
         if(lane>=spec.connections||body.bytes!==spec.perLane)throw Error('Invalid probe data');
-        s.receiving??={round:body.round,counts:new Map(),spec,nextCheckpoint:spec.bytes/4};
+        s.receiving??={round:body.round,counts:new Map(),arrivals:new Map(),startedAt:now(),spec,nextCheckpoint:spec.bytes/4};
         if(s.receiving.counts.has(lane))throw Error('Invalid probe data');
-        s.receiving.counts.set(lane,0);return;
+        s.receiving.counts.set(lane,0);s.receiving.arrivals.set(lane,{lane,bytes:0,messages:0,firstAtMs:null,lastAtMs:null,maxGapMs:0,largestGaps:[],completeAtMs:null});return;
       }
       if(lane!==0)throw Error('Invalid probe data');
       if(body.action==='progress'&&s.ack?.round===body.round){const ack=s.ack;if(!Number.isSafeInteger(body.bytes)||body.bytes<=ack.delivery.at(-1).bytes||body.bytes>=ack.bytes||ack.delivery.length>=4)throw Error('Invalid probe data');ack.delivery.push({bytes:body.bytes,elapsedMs:now()-ack.startedAt});return;}
@@ -156,12 +171,21 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
     const count=receiving.counts.get(lane)+data.byteLength;
     if(count>receiving.spec.perLane)throw Error('Invalid probe data');
     receiving.counts.set(lane,count);
+    const arrival=receiving.arrivals.get(lane),atMs=now()-receiving.startedAt;
+    if(arrival.lastAtMs!==null){
+      const gap={fromMs:arrival.lastAtMs,toMs:atMs,gapMs:atMs-arrival.lastAtMs,afterBytes:arrival.bytes};
+      arrival.maxGapMs=Math.max(arrival.maxGapMs,gap.gapMs);
+      arrival.largestGaps.push(gap);arrival.largestGaps.sort((a,b)=>b.gapMs-a.gapMs);arrival.largestGaps.length=Math.min(4,arrival.largestGaps.length);
+    }
+    arrival.firstAtMs??=atMs;arrival.lastAtMs=atMs;arrival.messages++;arrival.bytes=count;
+    if(count===receiving.spec.perLane)arrival.completeAtMs=atMs;
     const total=[...receiving.counts.values()].reduce((sum,n)=>sum+n,0);
     if(total<receiving.spec.bytes&&total>=receiving.nextCheckpoint){
       rowSend(s,0,{action:'progress',round:receiving.round,bytes:total});
       receiving.nextCheckpoint=(Math.floor(total/(receiving.spec.bytes/4))+1)*receiving.spec.bytes/4;
     }
     if(receiving.counts.size===receiving.spec.connections&&[...receiving.counts.values()].every(n=>n===receiving.spec.perLane)) {
+      const observed=incomingSample(receiving,true);s.incomingSamples.push(observed);notify(s,{phase:'preflight-receive-sample',direction:'incoming',...observed});
       s.nextReceive++;s.receivedRounds++;s.receiving=null;rowSend(s,0,{action:'ack',round:receiving.round});
     }
   }
@@ -185,22 +209,31 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
       const messageBytes=payloads.map(p=>p.byteLength);
       const before=s.lanes.map(r=>r.dc.bufferedAmount),startedAt=now();s.ack.startedAt=startedAt;
       const peak=s.lanes.map(r=>r.dc.bufferedAmount);
+      const queues=payloads.map((_,lane)=>({lane,payloadBytes:0,waitCount:0,waitMs:0,maxWaitMs:0,waitingSinceMs:null,enqueuedAtMs:null}));
+      s.outgoing={round,stage,connections,bytes,startedAt,delivery,queues,peakBufferedBytes:peak};
       await Promise.all(payloads.map(async(payload,lane)=>{
         const size=payload.byteLength;rowSend(s,lane,{action:'sample',round,bytes:perLane});
         for(let offset=0;offset<perLane;offset+=size){
           const part=offset+size<=perLane?payload:payload.slice(0,perLane-offset);
-          if(s.lanes[lane].dc.bufferedAmount+part.byteLength>QUEUE_BYTES)await queueCapacity(s.lanes[lane].dc,part.byteLength,s.controller.signal);
+          const queue=queues[lane];
+          if(s.lanes[lane].dc.bufferedAmount+part.byteLength>QUEUE_BYTES){
+            const waitingAt=now();queue.waitCount++;queue.waitingSinceMs=waitingAt-startedAt;
+            try{await queueCapacity(s.lanes[lane].dc,part.byteLength,s.controller.signal);}
+            finally{const waited=now()-waitingAt;queue.waitMs+=waited;queue.maxWaitMs=Math.max(queue.maxWaitMs,waited);queue.waitingSinceMs=null;}
+          }
           if(!live(s))throw Error('Probe stopped');
-          s.lanes[lane].dc.send(part);peak[lane]=Math.max(peak[lane],s.lanes[lane].dc.bufferedAmount);
+          s.lanes[lane].dc.send(part);queue.payloadBytes+=part.byteLength;peak[lane]=Math.max(peak[lane],s.lanes[lane].dc.bufferedAmount);
         }
+        queues[lane].enqueuedAtMs=now()-startedAt;
       }));
       const queued=s.lanes.map(r=>r.dc.bufferedAmount);
       await ack;
       if(!live(s))return;
       const elapsedMs=now()-startedAt;
       delivery.push({bytes,elapsedMs});
-      const sample={round,stage,connections,bytes,elapsedMs,delivery,queueHighBytes:QUEUE_BYTES,peakBufferedBytes:peak,messageBytes,bufferedBefore:before,bufferedAfterEnqueue:queued,
+      const sample={round,stage,connections,bytes,elapsedMs,delivery,queues,clock:'sender_monotonic',queueHighBytes:QUEUE_BYTES,peakBufferedBytes:peak,messageBytes,bufferedBefore:before,bufferedAfterEnqueue:queued,
         bufferedAfterAck:s.lanes.map(r=>r.dc.bufferedAmount),bytesPerSecond:elapsedMs>0?bytes*1000/elapsedMs:null,warmup:stage==='warmup'};
+      s.outgoing=null;
       if(!sample.warmup)s.samples.push(sample);
       notify(s,{phase:'preflight-sample',direction:'outgoing',...sample});snapshot(s,'preflight-sample-stats',round);
     }

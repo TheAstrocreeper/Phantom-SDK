@@ -109,3 +109,43 @@ test('a peer that already selected a file declines explicitly without a hanging 
   assert.equal(f.nodes[0].start(ids[1]),false);
  }finally{f.close();}
 });
+
+test('receiver summaries preserve each lane and bounded local arrival gaps in retained completion',async()=>{
+ const f=fixture({maxMessageSize:4096});try{
+  f.nodes[0].start(ids[1]);await settle(()=>f.frames.some(f=>f.body.action==='complete'));
+  for(const i of [0,1]){
+   const completed=f.reports.find(r=>r.i===i&&r.phase==='preflight'&&r.status==='complete');
+   assert.equal(completed.incomingSamples.length,9);
+   for(const sample of completed.incomingSamples){
+    assert.equal(sample.clock,'receiver_monotonic');assert.equal(sample.complete,true);
+    assert.equal(sample.lanes.length,sample.connections);
+    assert.equal(sample.lanes.reduce((n,l)=>n+l.bytes,0),sample.bytes);
+    for(const lane of sample.lanes){
+     assert.equal(lane.bytes,sample.perLane);assert.equal(lane.messages,sample.perLane/4096);
+     assert.equal(lane.completeAtMs,lane.lastAtMs);assert.ok(lane.firstAtMs<=lane.lastAtMs);
+     assert.ok(lane.largestGaps.length<=4);assert.equal(lane.maxGapMs,lane.largestGaps[0].gapMs);
+     assert.ok(lane.largestGaps.every(g=>g.gapMs===g.toMs-g.fromMs&&g.afterBytes>0));
+    }
+   }
+   const result=f.nodes[i].get(ids[1-i]);
+   for(const sample of result.samples){
+    assert.equal(sample.clock,'sender_monotonic');assert.equal(sample.queues.length,sample.connections);
+    assert.equal(sample.queues.reduce((n,q)=>n+q.payloadBytes,0),sample.bytes);
+    assert.ok(sample.queues.every(q=>q.enqueuedAtMs<=sample.elapsedMs&&q.waitingSinceMs===null));
+   }
+  }
+ }finally{f.close();}
+});
+test('cancelling preserves unfinished send and receive evidence without promoting it to a selection',async()=>{
+ const f=fixture({drop:true});try{
+  f.nodes[0].start(ids[1]);await settle(()=>f.payloads.length>0);f.nodes[0].suspend();
+  await settle(()=>f.reports.some(r=>r.i===1&&r.phase==='preflight'&&r.status==='cancelled'));
+  const outgoing=f.reports.find(r=>r.i===0&&r.reason==='file_selected');
+  const incoming=f.reports.find(r=>r.i===1&&r.phase==='preflight'&&r.status==='cancelled');
+  assert.equal(outgoing.partial.outgoing.round,0);assert.equal(outgoing.samples.length,0);
+  assert.ok(outgoing.partial.outgoing.queues.some(q=>q.payloadBytes>0));
+  assert.equal(incoming.partial.incoming.complete,false);assert.equal(incoming.partial.incoming.lanes.reduce((n,l)=>n+l.bytes,0),0);
+  assert.equal(f.nodes[0].get(ids[1]),null);
+  const captured=structuredClone(outgoing.partial);await Promise.resolve();assert.deepEqual(outgoing.partial,captured);
+ }finally{f.close();}
+});

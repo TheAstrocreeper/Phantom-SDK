@@ -46,13 +46,14 @@ try{
     const applied=events.find(e=>e.i===0&&e.type==='distributionScout'&&e.data.phase==='preflight-applied');
     return {mode,selection,peak,scoutAssociations:scoutPCs.length,scoutClosed:scoutPCs.every(pc=>pc.connectionState==='closed'),
      applied:applied?.data??null,samples:events.filter(e=>e.type==='distributionScout'&&e.data.phase==='preflight-sample').length,
+     incoming:events.filter(e=>e.type==='distributionScout'&&e.data.phase==='preflight-receive-sample').map(e=>e.data),
      cancelled:events.some(e=>e.type==='distributionScout'&&e.data.status==='cancelled'),
      identical:received.length===bytes.length&&received.every((v,i)=>v===bytes[i]),receivedBytes:received.length,
      coordinatorReceivedFile:events.some(e=>e.i===2&&e.type==='distributionComplete')};
    }finally{services.forEach(s=>s.close());}
   },mode);
   assert.equal(result.identical,true);assert.equal(result.coordinatorReceivedFile,false);assert.equal(result.scoutClosed,true);
-  if(mode==='complete'){assert.equal(result.scoutAssociations,6);assert.equal(result.samples,18);assert.equal(result.selection.samples.length,8);assert.ok(result.selection.samples.filter(s=>s.stage==='confirm').every(s=>s.bytes===3145728&&s.delivery.length>=3&&s.peakBufferedBytes.every(n=>n<=786432)));assert.ok(result.applied);assert.equal(result.applied.connections,result.selection.connections);assert.ok(result.peak<=result.selection.connections);}
+  if(mode==='complete'){assert.equal(result.incoming.length,18);assert.ok(result.incoming.every(s=>s.complete&&s.lanes.length===s.connections&&s.lanes.reduce((n,l)=>n+l.bytes,0)===s.bytes));assert.ok(result.selection.samples.every(s=>s.queues.reduce((n,q)=>n+q.payloadBytes,0)===s.bytes));assert.equal(result.scoutAssociations,6);assert.equal(result.samples,18);assert.equal(result.selection.samples.length,8);assert.ok(result.selection.samples.filter(s=>s.stage==='confirm').every(s=>s.bytes===3145728&&s.delivery.length>=3&&s.peakBufferedBytes.every(n=>n<=786432)));assert.ok(result.applied);assert.equal(result.applied.connections,result.selection.connections);assert.ok(result.peak<=result.selection.connections);}
   else assert.equal(result.cancelled,true);
   console.log(JSON.stringify(result));
  }

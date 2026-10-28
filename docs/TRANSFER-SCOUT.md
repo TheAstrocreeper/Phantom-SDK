@@ -27,7 +27,21 @@ pump all active associations concurrently. No retries or new timers are added.
 A silent native queue remains cancellable through the existing lifecycle.
 
 The scout records message sizes, delivery progress, queue peaks and bounded
-local browser stats. A short-run winner is only provisional. To replace the
+local browser stats. Each sender sample also retains per-lane submitted payload,
+queue wait count, cumulative/maximum queue wait, and enqueue completion time.
+The receiver independently retains each lane's byte/message count, first/last
+arrival, completion time, maximum gap and four largest gap intervals. These
+arrival times share the receiver's monotonic clock, so intervals across lanes
+of the same round can be compared. They are JavaScript delivery observations,
+not packet timestamps or proof of network loss. Sender queue times use the
+sender's clock and must not be subtracted from receiver times.
+
+Completion and cancellation lifecycle reports retain the bounded incoming
+round summaries, even if raw stats reports rotate out of Share's export.
+Cancellation also captures unfinished outgoing enqueue/progress/queue state
+and unfinished incoming lane state. Partial observations never qualify as a
+completed measurement or override the fallback. This adds no probe payload,
+control frames, timers, or automatic retries. A short-run winner is only provisional. To replace the
 fallback, both repeated timings must beat both timings of the alternative at
 each payload size, the winner must agree between sizes, and the later portion
 of both confirmations must also beat the alternative. Missing, contradictory
