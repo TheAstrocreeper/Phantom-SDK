@@ -3,10 +3,10 @@ import assert from 'node:assert/strict';
 import {createPhantomEntry} from '../packages/phantom-core/src/entry.js';
 import {createInvite} from '../packages/phantom-core/src/invite.js';
 const tick=()=>new Promise(setImmediate);
-function fixture(rtcDiagnostics){
+function fixture(rtcDiagnostics,scoutPeer){
  let state={state:'recovering',role:'peer',reason:'waiting_for_system_connection'},disposed=0;
  const listeners=new Set(),events=new Set();
- const core={getState:()=>state,snapshot:()=>({rtcDiagnostics}),onState(fn){listeners.add(fn);return()=>listeners.delete(fn);},onEvent(fn){events.add(fn);return()=>events.delete(fn);},async join(){},command(){},dispose(){disposed++;listeners.clear();events.clear();}};
+ const core={scoutPeer,getState:()=>state,snapshot:()=>({rtcDiagnostics}),onState(fn){listeners.add(fn);return()=>listeners.delete(fn);},onEvent(fn){events.add(fn);return()=>events.delete(fn);},async join(){},command(){},dispose(){disposed++;listeners.clear();events.clear();}};
  const sdk=createPhantomEntry({relays:['wss://relay.example'],openContext:async()=>({}),coreFactory:()=>core});
  const invite=createInvite({relays:['wss://relay.example']});
  return {sdk,invite,get disposed(){return disposed},get listeners(){return listeners.size},update(next){state=next;for(const fn of [...listeners])fn(state);}};
@@ -90,4 +90,11 @@ test('throwing cleanup owner cannot prevent core disposal or listener cleanup',a
  const network=await sdk.join(createInvite({relays:['wss://relay.example']}),{onEvent:e=>reports.push(e)});
  network.close();assert.equal(disposed,1);assert.equal(states.size,0);assert.equal(events.size,0);
  assert.ok(reports.some(e=>e.type==='CONNECTION_CLEANUP_ERROR'));network.close();assert.equal(disposed,1);
+});
+
+test('public network forwards read-only scout observations and suppresses results after close',async()=>{
+ const observed={route:{protocol:'udp'}},calls=[];let finish;
+ const f=fixture(undefined,peer=>{calls.push(peer);return calls.length===1?Promise.resolve(observed):new Promise(resolve=>finish=resolve);});
+ const joining=f.sdk.join(f.invite);await tick();f.update({state:'admitted',role:'peer'});const network=await joining;
+ assert.equal(await network.scoutPeer('peer'),observed);const pending=network.scoutPeer('peer');network.close();finish(observed);assert.equal(await pending,null);assert.equal(await network.scoutPeer('peer'),null);assert.deepEqual(calls,['peer','peer']);
 });

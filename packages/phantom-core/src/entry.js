@@ -76,6 +76,7 @@ export function createPhantomEntry({openContext, relays, doorways, adminPublicKe
       isRevoked:target=>lifecycle?.isRevoked(target)??false,
       on(type,fn){if(closed)throw new Error('Network closed');if(typeof fn!=='function')throw new TypeError('Listener required');if(!handlers.has(type))handlers.set(type,new Set());handlers.get(type).add(fn);return()=>handlers.get(type)?.delete(fn);},
       getState:()=>retired?{...core.getState(),state:'retired',reason:'signed_network_retirement',nextAction:'none'}:core.getState(),snapshot:()=>core.snapshot(),getPeers:()=>structuredClone(peers),getPeerConnections:()=>core.getPeerConnections(),
+      scoutPeer:async peer=>{if(closed||retired)return null;const observation=await core.scoutPeer?.(peer);return closed||retired?null:observation??null;},
       invitePeer:id=>{active();return core.invite(id);},acceptPeer:id=>{active();return core.accept(id);},send:(id,text)=>{active();return core.send(id,text);},
       leave:()=>{active();if(!config.leaveMembership)throw new Error('Configure membership leave before using leave');return config.leaveMembership();},
       refreshMembership:()=>{active();if(!config.refreshMembership)throw new Error('Membership refresh is not configured');return config.refreshMembership();},
