@@ -66,9 +66,12 @@ export function createFileDistribution({core,crypto=globalThis.crypto,emit=()=>{
  async function sendChunk(to,id,index,generation,prepared){peerAllowed(to);if((peerGenerations.get(to)||0)!==generation)return;const m=check(id);
   const {bytes,timings,sendScope}=prepared;
   if(!bytes){packet(to,'PHANTOM_FILE_MISSING',{id,index});return;}
+  let bufferWaitMs;const submitAt=now();
+  await new Promise((resolve,reject)=>{const cancel=()=>finish(new Error('File service closed'));const finish=error=>{clearTimeout(timer);off();activeSends.delete(cancel);error?reject(error):resolve();};const timer=setTimeout(()=>finish(new Error('Chunk send timed out')),requestTimeoutMs);const off=core.onEvent(e=>{const f=e.payload?.file;if(e.type!=='FILE_BIN_CHUNK_SENT'||e.payload.to!==to||f?.id!==id||f.index!==index)return;if(e.payload.ok&&Number.isFinite(e.payload.bufferWaitMs))bufferWaitMs=e.payload.bufferWaitMs;finish(e.payload.ok?null:new Error(e.payload.error));});cancel.peer=to;activeSends.add(cancel);core.command('SEND_FILE_BIN_CHUNK',{to,...(sendScope?{sendScope}:{}),file:{...m,hashes:undefined,index,bytes:bytes.byteLength},bytes});});
+  // Acquire the aggregate after this submission settles: another connection
+  // may have flushed the previous aggregate while this send was in flight.
   const row=senderMetrics(to,id);for(const [stage,ms]of Object.entries(timings))row.timings.add(stage,ms);
-  const submitAt=now();
-  await new Promise((resolve,reject)=>{const cancel=()=>finish(new Error('File service closed'));const finish=error=>{clearTimeout(timer);off();activeSends.delete(cancel);error?reject(error):resolve();};const timer=setTimeout(()=>finish(new Error('Chunk send timed out')),requestTimeoutMs);const off=core.onEvent(e=>{const f=e.payload?.file;if(e.type!=='FILE_BIN_CHUNK_SENT'||e.payload.to!==to||f?.id!==id||f.index!==index)return;if(e.payload.ok&&Number.isFinite(e.payload.bufferWaitMs))row.timings.add('bufferWaitMs',e.payload.bufferWaitMs);finish(e.payload.ok?null:new Error(e.payload.error));});cancel.peer=to;activeSends.add(cancel);core.command('SEND_FILE_BIN_CHUNK',{to,...(sendScope?{sendScope}:{}),file:{...m,hashes:undefined,index,bytes:bytes.byteLength},bytes});});
+  if(Number.isFinite(bufferWaitMs))row.timings.add('bufferWaitMs',bufferWaitMs);
   row.timings.add('submitMs',now()-submitAt);row.total++;if(row.total>=32)flushTimings(to,id);
  }
  function queueChunk(to,id,index){

@@ -2,11 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createMemoryChunkStore,createFileDistribution} from '../packages/phantom-core/src/files.js';
 const tick=()=>new Promise(r=>setImmediate(r));
-async function fixture({window=8,sourceWindow=window,delay=0,timeout=1000,drop=()=>false,readDelay=0,sourceReadBlockBytes=0,corruptSource=false,receiverStore,receiverCrypto,receiverAllowed=()=>true,length=32*1024,onProgress=()=>{},chunkSize=1024,maxChunkBytes=65536}={}){
+async function fixture({window=8,sourceWindow=window,delay=0,timeout=1000,drop=()=>false,readDelay=0,sourceReadBlockBytes=0,corruptSource=false,receiverStore,receiverCrypto,receiverAllowed=()=>true,length=32*1024,onProgress=()=>{},chunkSize=1024,maxChunkBytes=65536,scoped=false}={}){
  const ids=['a'.repeat(16),'b'.repeat(16)],listeners=[new Set(),new Set()],requests=[],events=[],timers=new Set(),sent=[],timings=[];let offered,reading=0,peakReads=0,sourceReadCalls=0,prepared=false;
  const offer=new Promise(r=>offered=r);
  const schedule=fn=>{if(!delay)return queueMicrotask(fn);const t=setTimeout(()=>{timers.delete(t);fn();},delay);timers.add(t);};
  const cores=ids.map((id,i)=>({onEvent(fn){listeners[i].add(fn);return()=>listeners[i].delete(fn);},command(type,p){const j=ids.indexOf(p.to),deliver=e=>{for(const f of listeners[j])f(e);};if(type==='SEND_DM'){if(p.sys==='PHANTOM_FILE_REQUEST')requests.push(p.file.index);schedule(()=>deliver({type:'INCOMING_MSG',payload:{from:id,...p}}));}else{sent.push(p.file.index);if(!drop(p.file.index,requests.filter(x=>x===p.file.index).length))schedule(()=>deliver({type:'FILE_BIN_CHUNK',payload:{from:id,file:p.file,bytes:p.bytes}}));queueMicrotask(()=>{for(const f of listeners[i])f({type:'FILE_BIN_CHUNK_SENT',payload:{to:p.to,file:p.file,ok:true}});});}}}));
+ if(scoped){const lanes=[{},{},{}];cores[0].getFileSendScope=(_to,file)=>lanes[file.index%3];}
  const services=cores.map((core,i)=>createFileDistribution({core,maxChunkBytes,canUsePeer:i===1?receiverAllowed:()=>true,requestWindow:i===0?sourceWindow:window,requestTimeoutMs:timeout,...(i===1&&receiverStore?{chunkStore:receiverStore}:{}),...(i===1&&receiverCrypto?{crypto:receiverCrypto}:{}),emit:(type,data)=>{if(type==='fileTransferTiming')timings.push({side:i,...data});if(i===1){events.push({type,data});if(type==='fileProgress')onProgress(data);if(type==='fileOffer')offered(data);}}}));
  const bytes=new Uint8Array(length);for(let i=0;i<length;i+=65536)crypto.getRandomValues(bytes.subarray(i,i+65536));const blob=new Blob([bytes]),source={size:blob.size,slice(...args){const part=blob.slice(...args);return {async arrayBuffer(){if(prepared)sourceReadCalls++;const read=async()=>{const bytes=await part.arrayBuffer();if(prepared&&corruptSource)new Uint8Array(bytes)[0]^=1;return bytes;};if(!prepared||!readDelay)return read();reading++;peakReads=Math.max(peakReads,reading);try{await new Promise(r=>setTimeout(r,readDelay));return await read();}finally{reading--;}}};}};const m=await services[0].publish(source,{chunkSize,sourceReadBlockBytes});prepared=true;await services[0].share(ids[1],m.id);await offer;
  return {requests,events,timings,sent,get sourceReadCalls(){return sourceReadCalls;},get peakReads(){return peakReads;},cancel:()=>services[1].cancel(m.id),m,bytes,download:(options={})=>services[1].request(m.id,{peers:[ids[0]],...options}),close(){services.forEach(s=>s.close());for(const t of timers)clearTimeout(t);}};
@@ -200,4 +201,12 @@ test('verified immutable storage skips redundant completion reads and accepts a 
 test('verified storage rejects invalid committed indexes',async()=>{
  const f=await fixture({receiverStore:{get:async()=>null,put:async()=>{},getVerifiedIndexes:()=>[-1]}});
  try{await assert.rejects(f.download(),/Invalid verified storage inventory/);}finally{f.close();}
+});
+test('concurrent connection submissions preserve every timing count across aggregate flushes',async()=>{
+ const f=await fixture({scoped:true,window:32,length:96*1024});try{
+  const blob=await f.download();assert.deepEqual(new Uint8Array(await blob.arrayBuffer()),f.bytes);await tick();
+  const sends=f.timings.filter(row=>row.side===0&&row.phase==='send');assert.equal(sends.length,3);
+  assert.equal(sends.reduce((n,row)=>n+row.total,0),96);
+  for(const stage of ['readMs','hashMs','queueMs','submitMs'])assert.equal(sends.reduce((n,row)=>n+row.metrics[stage].count,0),96,stage);
+ }finally{f.close();}
 });
