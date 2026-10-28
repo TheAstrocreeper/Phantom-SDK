@@ -62,6 +62,7 @@ test('a changed peer connection invalidates evidence and removes its scheduling 
  const f=await fixture({thirdLeader:true});try{
   await f.scout();await until(()=>f.events.filter(e=>e.type==='distributionScout'&&e.data.phase==='preflight-result').length===2);
   await f.publish();await until(()=>f.nodes[2].snapshot().jobs.length===1);
+  await until(()=>f.events.some(e=>e.data.phase==='preflight-handoff'&&e.data.status==='bound'));
   f.disconnectAtSource();assert.equal(f.nodes[0].getScout(ids[1]),null);
   await until(()=>f.nodes[2].snapshot().jobs.length===3);
  }finally{f.close();}
