@@ -82,7 +82,14 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
       if(asset.outgoingSetup?.receiver===peer){delete asset.outgoingSetup;delete asset.outgoingQueuePolicy;asset.setupAcknowledged=false;reported.delete(asset.id);}
     }
   }
-  function selectedSetup(peer){const result=preflight?.get(peer);if(!result?.transportAvailable)return null;const plan=result.connectionPlan;return {...result,...(plan?{connections:plan.connections,lanes:[...plan.lanes],queuePolicy:plan.queuePolicy}:{}),enforcement:scoutCoordinator===2?'coordinator_supported':'default_coordinator_unconfirmed',effectiveConnections:scoutCoordinator===2?(plan?.connections??result.connections):Math.min(3,maxConnections)};}
+  function selectedSetup(peer){
+    const result=preflight?.get(peer);if(!result?.transportAvailable)return null;
+    const plan=result.connectionPlan;
+    return {...result,senderSelection:{status:result.status,reason:result.reason,connections:result.connections,lanes:result.lanes},
+      ...(plan?{status:plan.laneDecision.status==='measured'?'measured':'inconclusive',reason:plan.laneDecision.reason,connections:plan.connections,lanes:[...plan.lanes],queuePolicy:plan.queuePolicy}:{}),
+      enforcement:scoutCoordinator===2?'coordinator_supported':'default_coordinator_unconfirmed',
+      effectiveConnections:scoutCoordinator===2?(plan?.connections??result.connections):Math.min(3,maxConnections)};
+  }
   function setRoster(rows){const next=rows.map(r=>r.hKey).filter(k=>/^[0-9a-f]{16}$/.test(k)&&canUsePeer(k));for(const peer of roster)if(!next.includes(peer)){controlObservations.delete(peer);controlGenerations.delete(peer);controlPending.delete(peer);clearPeerSetup(peer);capabilityExchange?.drop(peer);agreement?.drop(peer);}roster=next;for(const peer of rangePeers)if(!roster.includes(peer))rangePeers.delete(peer);}
   function report(){if(assignedRanges&&self()&&leader()&&canUsePeer(leader())&&rangeAdvertisement!==leaderToken){rangeAdvertisement=leaderToken;frame(leader(),{type:'rangeCapability',version:1});}for(const asset of assets.values())if(allowed(asset.id,asset.distributionId)&&asset.holders.has(self())){const sent=reported.get(asset.id)??new Set(),have=asset.holders.get(self());if(reported.has(asset.id)&&sent.size===have.size)continue;const indexes=[...have].filter(i=>!sent.has(i)).sort((a,b)=>a-b);for(let offset=0;offset<Math.max(1,indexes.length);offset+=128)frame(leader(),{type:'inventory',id:asset.id,total:asset.total,distributionId:asset.distributionId,proof:asset.proof,indexes:indexes.slice(offset,offset+128),...(asset.outgoingSetup&&scoutCoordinator?{setup:asset.outgoingSetup}:{})});reported.set(asset.id,sent);}lastReport=Date.now();}
   function table(){return {sequence,leader:self(),assets:[...assets.values()].map(a=>({id:a.id,total:a.total,distributionId:a.distributionId,proof:a.proof,holders:[...a.holders].map(([peer,indexes])=>({peer,indexes:[...indexes].sort((a,b)=>a-b)}))}))};}

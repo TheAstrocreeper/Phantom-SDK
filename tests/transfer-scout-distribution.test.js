@@ -7,7 +7,7 @@ import {scoutClock} from './fixtures/scout-clock.js';
 import {modelReceiverEvidence} from './fixtures/scout-receiver-model.js';
 const ids=['1111111111111111','2222222222222222','3333333333333333'];
 async function until(predicate){const end=Date.now()+2500;while(!predicate()&&Date.now()<end)await new Promise(r=>setTimeout(r,5));assert.ok(predicate(),'expected state did not arrive');}
-async function fixture({thirdLeader=false,legacyLeader=false,legacyReceiver=false,dropScout=false,winner=[0],legacyLaneCoordinator=false,queueWinner=false}={}) {
+async function fixture({thirdLeader=false,legacyLeader=false,legacyReceiver=false,dropScout=false,winner=[0],legacyLaneCoordinator=false,queueWinner=false,missingEvidence=false}={}) {
  const members=ids.slice(0,thirdLeader?3:2),leader=thirdLeader?ids[2]:ids[0],admin=await createAdminIdentity();
  const callbacks=new Map(),events=[],frames=[],pcs=[];
  const Base=memoryRTC({onSend(data,ch){if(queueWinner){
@@ -21,7 +21,7 @@ async function fixture({thirdLeader=false,legacyLeader=false,legacyReceiver=fals
   const runtimeCrypto={subtle:crypto.subtle,getRandomValues:crypto.getRandomValues.bind(crypto),randomUUID:()=>`probe-${i}-${serial++}0`};
   return createNetworkDistribution({networkId:'scout-distribution',adminPublicKey:admin.publicKey,runtime:{crypto:runtimeCrypto,RTCPeerConnection:RTC,performance:clock},
    core:{getState:()=>({peerId:id,leader,mirror:ids[1],role:id===leader?'syscon1':i===1?'syscon2':'peer',state:'admitted',admitted:true}),
-    onEvent(fn){callbacks.set(id,fn);return()=>callbacks.delete(id);},command(type,{to,frame}){if(type!=='PHANTOM_DIST_SEND')return;frame=modelReceiverEvidence(frame,{winner,queueWinner});frames.push(frame);if(legacyLeader&&frame.body.type==='rangeCapabilityAck')return;if(legacyLaneCoordinator&&frame.body.type==='rangeCapabilityAck')delete frame.body.scoutLaneScheduling;queueMicrotask(()=>callbacks.get(to)?.({type:'PHANTOM_DIST',payload:{from:id,frame}}));}},
+    onEvent(fn){callbacks.set(id,fn);return()=>callbacks.delete(id);},command(type,{to,frame}){if(type!=='PHANTOM_DIST_SEND')return;if(missingEvidence&&frame.body.action==='receiverEvidence')return;frame=modelReceiverEvidence(frame,{winner,queueWinner});frames.push(frame);if(legacyLeader&&frame.body.type==='rangeCapabilityAck')return;if(legacyLaneCoordinator&&frame.body.type==='rangeCapabilityAck')delete frame.body.scoutLaneScheduling;queueMicrotask(()=>callbacks.get(to)?.({type:'PHANTOM_DIST',payload:{from:id,frame}}));}},
    lifecycle:{issue:(action,target,fields)=>admin.sign({networkId:'scout-distribution',action,target,...fields,operationId:crypto.randomUUID()})},
    options:{intervalMs:10,jobTimeoutMs:5000,requestTimeoutMs:4000,batchSize:8,requestWindow:8,assignedRanges:true,transferLanes:3,capabilityExchange:true,transferScout:!(legacyReceiver&&i===1),scoutSampleBytes:98304},
    emit:(type,data)=>{if(type==='distributionScout')clock.report(data);events.push({i,type,data});}});
@@ -108,5 +108,16 @@ test('an unconfirmed coordinator cannot apply the measured queue policy to a dif
   await f.scout();await until(()=>f.nodes[0].getScout(ids[1])&&f.nodes[1].getScout(ids[0]));assert.equal(f.nodes[0].getScout(ids[1]).queuePolicy.status,'measured');
   await f.publish();await until(()=>f.nodes[2].snapshot().jobs.length===3);await until(()=>f.events.some(e=>e.data.phase==='preflight-handoff'));
   assert.equal(f.events.some(e=>e.data.phase==='preflight-queue-applied'),false);
+ }finally{f.close();}
+});
+
+
+test('a sender-only winner without receiver confirmation enforces usable fallback lanes',async()=>{
+ const f=await fixture({missingEvidence:true});try{
+  await f.scout();await until(()=>f.events.filter(e=>e.type==='distributionScout'&&e.data.phase==='preflight-result').length===2);
+  const choice=f.nodes[0].getScout(ids[1]);assert.equal(choice.senderSelection.status,'measured');assert.equal(choice.senderSelection.connections,1);
+  assert.equal(choice.status,'inconclusive');assert.equal(choice.connections,3);assert.equal(choice.reason,'receiver_confirmation_unavailable');
+  await f.publish();await until(()=>f.events.some(e=>e.data.phase==='preflight-applied'));
+  const applied=f.events.find(e=>e.data.phase==='preflight-applied').data;assert.deepEqual(applied.lanes,[0,1,2]);assert.equal(applied.connections,3);
  }finally{f.close();}
 });
