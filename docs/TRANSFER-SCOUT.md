@@ -3,18 +3,29 @@
 Opt in with `distribution: {capabilityExchange:true, assignedRanges:true,
 transferScout:true, maxConnections:3}`. Add `scoutBeforeSend:true` to wait for
 outgoing scouting during single-recipient agreed preparation. Phantom Share
-uses both. Both endpoints advertise `phantom-transfer-scout-v3`; v1/v2 peers
-keep their compatible file path without v3 scouting or handoff. Native WebRTC
+uses both. Both endpoints advertise `phantom-transfer-scout-v4`; v1/v2/v3 peers
+keep their compatible file path without v4 scouting or handoff. Native WebRTC
 is not involved.
 
 The smaller peer ID starts background exploration over three independent RTC
 associations using the file RTC configuration and reliable ordered channels.
-Each direction gets a warm-up, four screening deliveries, and four larger
-confirmations. Screening uses balanced 1/3/3/1 or 3/1/1/3 order; confirmation
-uses the opposite order. Directions run consecutively. Payloads are random
-bytes counted and discarded by the receiver. Three bounded intermediate
-acknowledgments report cumulative bytes; the final acknowledgment confirms
-completion. Sender durations use its monotonic clock, never device clock
+Each direction gets a warm-up, fourteen screening deliveries, and six larger
+confirmations. Screening covers all seven lane sets: each singleton, each pair,
+and all three. A balanced order followed by its reverse repeats every candidate
+with equal payload. Each lane participates equally across the full screen.
+
+Screening nominates one finalist per connection count, ranked by its slower
+repetition, then its faster repetition, with lane identity breaking exact ties.
+A nomination is exploration, not a confirmed selection. The sender announces
+these three lane sets, and waits for an explicit acknowledgment before starting
+larger samples. Confirmation compares them in 1/2/3/3/2/1 count order, twice per
+finalist. This keeps repeated 3 MiB confirmations without testing all seven at
+that size. It can miss a candidate that screens poorly but improves at scale;
+the result is not an exhaustive steady-state optimum.
+
+Directions run consecutively. Random bytes are counted and discarded by the
+receiver. Bounded intermediate acknowledgments report cumulative bytes; a final
+acknowledgment confirms completion. Sender durations use its monotonic clock, never device clock
 subtraction.
 
 If a file is selected before background exploration completes, agreed
@@ -29,18 +40,26 @@ or leave. There is no new timeout, polling loop or retry queue. Opt-in callers
 must provide cancellation access. Unsupported peers are never awaited.
 
 The base sample defaults to 768 KiB; each confirmation carries 3 MiB. Background
-exploration is capped at 31.5 MiB of payload, and a replacement outgoing pass
-at 15.75 MiB, plus signaling/framing. At most one replacement is attempted per
+exploration is capped at 58.5 MiB of payload, and a replacement outgoing pass
+at 29.25 MiB, plus signaling/framing. At most one replacement is attempted per
 peer and generation. `scoutSampleBytes` configures the base between 3 KiB and
-3 MiB, divisible by three; budgets scale with it. Each association's probe
+3 MiB, divisible by six; budgets scale with it. Each association's probe
 queue is bounded at 768 KiB, resuming on native drain events below 384 KiB.
 Active lanes pump concurrently. These queue bounds do not tune the file
 sender's watermarks.
 
-A short-run winner is provisional. Both repeated timings must beat both of
-the alternative at each size, agree between sizes, and also win in the later
-confirmation delivery windows. Missing or overlapping evidence explicitly
-keeps the fallback of three connections. These are acknowledged-delivery
+A selected lane set must have both screening timings beat both repetitions of
+all other screened sets. The same exact set must win both larger repetitions
+against the other finalists, and win the late-delivery comparison. Overlapping,
+missing or contradictory evidence explicitly retains the fallback of three,
+lanes `[0,1,2]`. A tie-breaking finalist nomination never becomes a measured
+winner by itself. Reports retain every lane set, the finalists, ranges, winning
+lane IDs and fallback reason.
+
+All candidates at a stage send the same total payload. Sample acknowledgments
+use the first lane in that candidate, so excluding lane 0 does not force its
+sample completion to wait on lane 0's transport. Finalist agreement and lifecycle
+control still use lane 0 between timed samples. These are acknowledged-delivery
 rates, not NIC timestamps, link capacity or steady-state guarantees. Probe
 payload omits file reading, hashing, framing and storage.
 
@@ -57,7 +76,7 @@ traffic is required for these summaries.
 
 After the completion handshake, both endpoints retain the three associations.
 File preparation does not destroy a completed pool. Assigned file jobs claim
-lanes from that pool and create file channels on the **same SCTP/DTLS/ICE
+the selected lane IDs from that pool and create file channels on the **same SCTP/DTLS/ICE
 associations**, preserving the routes that were measured. Existing file
 readiness, framing, verification and coordinator leases remain in use.
 
@@ -78,12 +97,14 @@ cleanup. Once consumed, a pool is not presented as an available measured setup
 for a different file. Later sends may therefore use the compatible fallback;
 there is no automatic re-probing loop.
 
-Only outgoing evidence selects outgoing setup. The source's selected limit
-travels with its authenticated inventory for that asset and recipient. The
+Only outgoing evidence selects outgoing setup. The source's selected count and lane IDs
+travel with its authenticated inventory for that asset and recipient. The
 coordinator caps assigned jobs for that exact pair, including when a third
 peer coordinates. `preflight-selected` and `preflight-applied` distinguish a
 request from coordinator acknowledgment; handoff events establish transport
-reuse separately. Old/unconfirmed coordinators retain their previous limits.
+reuse separately. Lane-aware policy is advertised separately from the previous scheduling
+capability. Old/unconfirmed coordinators retain their previous limits and never
+acknowledge a two-lane selection as applied.
 Multi-recipient sends keep the compatible path.
 
 `network.getTransferScout(peer)` and `network.getTransferPlan(peer).setup`
@@ -92,9 +113,14 @@ existing export, with completed/cancelled summaries and bounded handoff records
 preserved independently of raw report rotation. Nothing is uploaded.
 
 Validation: `node --test tests/transfer-scout*.test.js` covers policy, quotas,
-sender intent, cancellation, one-time lane/asset binding, cleanup and scheduler
+sender intent, all seven candidates, two-lane enforcement, cancellation,
+one-time lane/asset binding, cleanup and scheduler
 enforcement with an independent coordinator. The deterministic transport fixture
 is a protocol model, not a performance model. `tools/perf/transfer-scout-browser.mjs`
 checks real Chromium association identity through both background and outgoing
 scouts, a byte-for-byte 4 MiB file, cleanup and cancellation. Loopback checks
 plumbing; improvement on the user's network remains unproven.
+
+The Chromium runner also checks a forced pair with a synthetic selection clock.
+That case verifies exact `[1,2]` association binding and the two-job cap over real
+RTC, not a measured performance advantage. Other browser cases use native clocks.

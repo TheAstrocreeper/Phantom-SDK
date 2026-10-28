@@ -6,17 +6,17 @@ import {memoryRTC} from './fixtures/memory-rtc.js';
 import {scoutClock} from './fixtures/scout-clock.js';
 const ids=['1111111111111111','2222222222222222','3333333333333333'];
 async function until(predicate){const end=Date.now()+2500;while(!predicate()&&Date.now()<end)await new Promise(r=>setTimeout(r,5));assert.ok(predicate(),'expected state did not arrive');}
-async function fixture({thirdLeader=false,legacyLeader=false,legacyReceiver=false,dropScout=false}={}) {
+async function fixture({thirdLeader=false,legacyLeader=false,legacyReceiver=false,dropScout=false,winner=[0],legacyLaneCoordinator=false}={}) {
  const members=ids.slice(0,thirdLeader?3:2),leader=thirdLeader?ids[2]:ids[0],admin=await createAdminIdentity();
  const callbacks=new Map(),events=[],frames=[],pcs=[];
  const Base=memoryRTC({onSend(data,ch){if(typeof data==='string'&&ch.label==='phantom-distribution'&&JSON.parse(data).sys==='PHANTOM_FILE_REQUEST')return false;if(dropScout&&data instanceof ArrayBuffer&&ch.label==='phantom-distribution-scout')return false;return true;}});
  class RTC extends Base{constructor(){super();pcs.push(this);}}
  const nodes=members.map((id,i)=>{
-  let serial=0;const clock=scoutClock();
+  let serial=0;const clock=scoutClock({winner});
   const runtimeCrypto={subtle:crypto.subtle,getRandomValues:crypto.getRandomValues.bind(crypto),randomUUID:()=>`probe-${i}-${serial++}0`};
   return createNetworkDistribution({networkId:'scout-distribution',adminPublicKey:admin.publicKey,runtime:{crypto:runtimeCrypto,RTCPeerConnection:RTC,performance:clock},
    core:{getState:()=>({peerId:id,leader,mirror:ids[1],role:id===leader?'syscon1':i===1?'syscon2':'peer',state:'admitted',admitted:true}),
-    onEvent(fn){callbacks.set(id,fn);return()=>callbacks.delete(id);},command(type,{to,frame}){if(type!=='PHANTOM_DIST_SEND')return;frames.push(frame);if(legacyLeader&&frame.body.type==='rangeCapabilityAck')return;queueMicrotask(()=>callbacks.get(to)?.({type:'PHANTOM_DIST',payload:{from:id,frame}}));}},
+    onEvent(fn){callbacks.set(id,fn);return()=>callbacks.delete(id);},command(type,{to,frame}){if(type!=='PHANTOM_DIST_SEND')return;frames.push(frame);if(legacyLeader&&frame.body.type==='rangeCapabilityAck')return;if(legacyLaneCoordinator&&frame.body.type==='rangeCapabilityAck')delete frame.body.scoutLaneScheduling;queueMicrotask(()=>callbacks.get(to)?.({type:'PHANTOM_DIST',payload:{from:id,frame}}));}},
    lifecycle:{issue:(action,target,fields)=>admin.sign({networkId:'scout-distribution',action,target,...fields,operationId:crypto.randomUUID()})},
    options:{intervalMs:10,jobTimeoutMs:5000,requestTimeoutMs:4000,batchSize:8,requestWindow:8,assignedRanges:true,transferLanes:3,capabilityExchange:true,transferScout:!(legacyReceiver&&i===1),scoutSampleBytes:98304},
    emit:(type,data)=>{if(type==='distributionScout')clock.report(data);events.push({i,type,data});}});
@@ -64,5 +64,26 @@ test('a changed peer connection invalidates evidence and removes its scheduling 
   await f.publish();await until(()=>f.nodes[2].snapshot().jobs.length===1);
   f.disconnectAtSource();assert.equal(f.nodes[0].getScout(ids[1]),null);
   await until(()=>f.nodes[2].snapshot().jobs.length===3);
+ }finally{f.close();}
+});
+for(const thirdLeader of [false,true])test(`a measured pair claims exactly lanes 1 and 2 and caps jobs at two (third leader: ${thirdLeader})`,async()=>{
+ const f=await fixture({thirdLeader,winner:[1,2]});try{
+  await f.scout();await until(()=>f.nodes[0].getScout(ids[1])&&f.nodes[1].getScout(ids[0]));
+  const selection=f.nodes[0].getScout(ids[1]);assert.equal(selection.status,'measured');assert.equal(selection.connections,2);assert.deepEqual(selection.lanes,[1,2]);
+  await f.publish();const coordinator=f.nodes[thirdLeader?2:0];await until(()=>coordinator.snapshot().jobs.length===2);
+  await until(()=>f.events.filter(e=>e.type==='distributionScout'&&e.data.phase==='preflight-handoff'&&e.data.status==='bound').length===2);
+  await new Promise(r=>setTimeout(r,100));assert.equal(coordinator.snapshot().jobs.length,2);
+  assert.deepEqual([...new Map(f.frames.filter(frame=>frame.body.type==='signal'&&frame.body.scoutTransport).map(frame=>[frame.body.jobId,frame.body.scoutTransport.lane])).values()].sort(),[1,2]);
+  assert.equal(f.frames.some(frame=>frame.body.type==='signal'&&frame.body.description),false);
+  const applied=f.events.find(e=>e.data.phase==='preflight-applied').data;assert.equal(applied.connections,2);assert.deepEqual(applied.lanes,[1,2]);
+ }finally{f.close();assert.ok(f.pcs.every(pc=>pc.connectionState==='closed'));}
+});
+test('a coordinator without lane-policy support retains three jobs and never acknowledges a two-lane selection',async()=>{
+ const f=await fixture({thirdLeader:true,winner:[1,2],legacyLaneCoordinator:true});try{
+  await f.scout();await until(()=>f.nodes[0].getScout(ids[1])&&f.nodes[1].getScout(ids[0]));
+  assert.equal(f.nodes[0].getScout(ids[1]).connections,2);assert.equal(f.nodes[0].getScout(ids[1]).effectiveConnections,3);
+  await f.publish();await until(()=>f.nodes[2].snapshot().jobs.length===3);
+  assert.equal(f.frames.some(frame=>frame.body.type==='inventory'&&frame.body.setup),false);
+  assert.equal(f.events.some(e=>e.data.phase==='preflight-applied'),false);
  }finally{f.close();}
 });

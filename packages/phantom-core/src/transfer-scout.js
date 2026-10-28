@@ -1,9 +1,12 @@
 import {defaultRTCConfiguration} from './rtc-configuration.js';
 import {scoutConnection} from './connection-scout.js';
 
-export const TRANSFER_SCOUT_PROTOCOL = 'phantom-transfer-scout-v3';
+export const TRANSFER_SCOUT_PROTOCOL = 'phantom-transfer-scout-v4';
 const LANES = 3, MAX_BYTES = 3 * 1024 * 1024, DEFAULT_BYTES = 768 * 1024;
-const CONFIRM_SCALE = 4, ROUNDS = 9, QUEUE_BYTES = 768 * 1024;
+const CONFIRM_SCALE = 4, SCREEN_ROUNDS = 14, CONFIRM_ROUNDS = 6, ROUNDS = 21, QUEUE_BYTES = 768 * 1024;
+const CANDIDATES=[[0],[1,2],[0,1,2],[1],[0,2],[2],[0,1]], FINAL_ORDER=[1,2,3,3,2,1];
+const laneKey=lanes=>lanes.join(',');
+const validLanes=lanes=>Array.isArray(lanes)&&lanes.length>=1&&lanes.length<=3&&lanes.every((lane,i)=>Number.isInteger(lane)&&lane>=0&&lane<3&&(i===0||lane>lanes[i-1]));
 const validId = id => typeof id === 'string' && /^[a-zA-Z0-9-]{1,64}$/.test(id);
 
 function lateRate(sample) {
@@ -15,32 +18,52 @@ function lateRate(sample) {
   return (last.bytes-middle.bytes)*1000/(last.elapsedMs-middle.elapsedMs);
 }
 
-/** A burst winner is only provisional. Require repeated confirmation at four
- * times the payload, including a matching winner in the later delivery windows.
- * Still a bounded synthetic experiment, not a claim of steady-state capacity.
+function sampleRanges(rows,field='elapsedMs') {
+  return CANDIDATES.filter(lanes=>rows.some(s=>laneKey(s.lanes)===laneKey(lanes))).map(lanes=>{
+    const values=rows.filter(s=>laneKey(s.lanes)===laneKey(lanes)).map(s=>field==='elapsedMs'?s.elapsedMs:lateRate(s));
+    return {lanes:[...lanes],connections:lanes.length,min:Math.min(...values),max:Math.max(...values)};
+  });
+}
+function clearWinner(ranges,higher=false){
+  return ranges.find(candidate=>ranges.every(other=>other===candidate||(higher?candidate.min>other.max:candidate.max<other.min)))??null;
+}
+/** Screening is exploration, not a confirmed selection. Rank by the slower
+ * repetition, then the faster repetition, then lane identity for stable ties.
+ * Confirmation still needs independent repeated evidence and a clear winner.
+ */
+export function screenTransferCandidates(samples) {
+  if(!Array.isArray(samples)||samples.length!==SCREEN_ROUNDS||samples.some(s=>!s||s.stage!=='screen'||!validLanes(s.lanes)||s.connections!==s.lanes.length||!Number.isSafeInteger(s.bytes)||s.bytes<1||!Number.isFinite(s.elapsedMs)||s.elapsedMs<=0)||new Set(samples.map(s=>s.bytes)).size!==1)return null;
+  const ranges=sampleRanges(samples);
+  if(ranges.length!==7||ranges.some(r=>samples.filter(s=>laneKey(s.lanes)===laneKey(r.lanes)).length!==2))return null;
+  return [1,2,3].map(count=>ranges.filter(r=>r.connections===count).sort((a,b)=>a.max-b.max||a.min-b.min||laneKey(a.lanes).localeCompare(laneKey(b.lanes)))[0].lanes);
+}
+
+/** Compare exact lane sets. Ambiguous screening, reversed larger results or
+ * missing late-delivery confirmation retain the explicit fallback profile.
  */
 export function selectTransferSetup(samples, fallback = 3) {
-  const inconclusive=reason=>({status:'inconclusive',connections:fallback,reason});
-  if(![1,3].includes(fallback)||!Array.isArray(samples)||samples.length!==8||samples.some(s=>!s||![1,3].includes(s.connections)||!['screen','confirm'].includes(s.stage)||!Number.isSafeInteger(s.bytes)||s.bytes<1||!Number.isFinite(s.elapsedMs)||s.elapsedMs<=0))return inconclusive('insufficient_comparable_samples');
-  const stages=['screen','confirm'].map(stage=>samples.filter(s=>s.stage===stage));
-  if(stages.some(rows=>rows.length!==4||new Set(rows.map(s=>s.bytes)).size!==1||[1,3].some(c=>rows.filter(s=>s.connections===c).length!==2))||stages[1][0].bytes!==stages[0][0].bytes*CONFIRM_SCALE)return inconclusive('insufficient_comparable_samples');
-  const evidence=stages.map((rows,i)=>{
-    const ranges=[1,3].map(connections=>{const times=rows.filter(s=>s.connections===connections).map(s=>s.elapsedMs);return {connections,min:Math.min(...times),max:Math.max(...times)};});
-    const winner=ranges[0].max<ranges[1].min?1:ranges[1].max<ranges[0].min?3:null;
-    return {stage:i?'confirm':'screen',bytes:rows[0].bytes,winner,ranges};
+  const fallbackLanes=Array.from({length:[1,2,3].includes(fallback)?fallback:3},(_,i)=>i);
+  const inconclusive=reason=>({status:'inconclusive',connections:fallbackLanes.length,lanes:fallbackLanes,reason});
+  if(![1,2,3].includes(fallback)||!Array.isArray(samples)||samples.length!==SCREEN_ROUNDS+CONFIRM_ROUNDS||samples.some(s=>!s||!validLanes(s.lanes)||s.connections!==s.lanes.length||!['screen','confirm'].includes(s.stage)||!Number.isSafeInteger(s.bytes)||s.bytes<1||!Number.isFinite(s.elapsedMs)||s.elapsedMs<=0))return inconclusive('insufficient_comparable_samples');
+  const screen=samples.filter(s=>s.stage==='screen'),confirm=samples.filter(s=>s.stage==='confirm'),finalists=screenTransferCandidates(screen);
+  if(!finalists||confirm.length!==CONFIRM_ROUNDS||new Set(confirm.map(s=>s.bytes)).size!==1||confirm[0].bytes!==screen[0].bytes*CONFIRM_SCALE||finalists.some(lanes=>confirm.filter(s=>laneKey(s.lanes)===laneKey(lanes)).length!==2))return inconclusive('insufficient_comparable_samples');
+  const evidence=[screen,confirm].map((rows,i)=>{
+    const ranges=sampleRanges(rows),winner=clearWinner(ranges);
+    return {stage:i?'confirm':'screen',bytes:rows[0].bytes,winner:winner?.connections??null,winningLanes:winner?.lanes??null,ranges};
   });
-  const provisional=evidence[0].winner,confirmed=evidence[1].winner;
-  let reason=!provisional?'screen_ranges_overlap':!confirmed?'confirmation_ranges_overlap':provisional!==confirmed?'winner_changed_with_sample_size':null;
-  const tails=stages[1].map(s=>({connections:s.connections,bytesPerSecond:lateRate(s)}));
+  const provisional=evidence[0],confirmed=evidence[1];
+  let reason=!provisional.winningLanes?'screen_ranges_overlap':!confirmed.winningLanes?'confirmation_ranges_overlap':laneKey(provisional.winningLanes)!==laneKey(confirmed.winningLanes)?'winner_changed_with_sample_size':null;
   let lateWinner=null,lateRanges=null;
-  if(tails.every(s=>Number.isFinite(s.bytesPerSecond)&&s.bytesPerSecond>0)){
-    lateRanges=[1,3].map(connections=>{const rates=tails.filter(s=>s.connections===connections).map(s=>s.bytesPerSecond);return {connections,min:Math.min(...rates),max:Math.max(...rates)};});
-    lateWinner=lateRanges[0].min>lateRanges[1].max?1:lateRanges[1].min>lateRanges[0].max?3:null;
+  if(confirm.every(s=>Number.isFinite(lateRate(s))&&lateRate(s)>0)){
+    lateRanges=sampleRanges(confirm,'lateRate');lateWinner=clearWinner(lateRanges,true);
   }
-  if(!reason&&(!lateRanges||lateWinner!==confirmed))reason=lateRanges?'late_delivery_does_not_confirm_winner':'late_delivery_unavailable';
-  return {status:reason?'inconclusive':'measured',connections:reason?fallback:confirmed,
-    reason:reason??'confirmed_across_payload_sizes_and_late_delivery',provisionalConnections:provisional,
-    evidence,lateDelivery:{winner:lateWinner,ranges:lateRanges}};
+  if(!reason&&(!lateRanges||!lateWinner||laneKey(lateWinner.lanes)!==laneKey(confirmed.winningLanes)))reason=lateRanges?'late_delivery_does_not_confirm_winner':'late_delivery_unavailable';
+  return {status:reason?'inconclusive':'measured',connections:reason?fallback:confirmed.winner,
+    lanes:reason?fallbackLanes:[...confirmed.winningLanes],
+    reason:reason??'confirmed_lane_set_across_payload_sizes_and_late_delivery',
+    provisionalConnections:provisional.winner,provisionalLanes:provisional.winningLanes,
+    finalists:finalists.map(lanes=>[...lanes]),evidence,
+    lateDelivery:{winner:lateWinner?.connections??null,lanes:lateWinner?.lanes??null,ranges:lateRanges}};
 }
 
 /** Native drain events, not polling. The byte cap bounds each live association;
@@ -66,8 +89,8 @@ function queueCapacity(dc,bytes,signal) {
 export function createTransferScout({self,allowed,send,runtime=globalThis,configuration,
   onReport=()=>{},busy=()=>false,sampleBytes=DEFAULT_BYTES,fallback=3,newId=()=>(runtime.crypto??globalThis.crypto).randomUUID()}) {
   if (![self,allowed,send,onReport,busy,newId].every(f => typeof f === 'function') ||
-      !Number.isInteger(sampleBytes) || sampleBytes < 3 * 1024 || sampleBytes > MAX_BYTES || sampleBytes % 3 ||
-      ![1,3].includes(fallback)) throw TypeError('Invalid transfer scout configuration');
+      !Number.isInteger(sampleBytes) || sampleBytes < 3 * 1024 || sampleBytes > MAX_BYTES || sampleBytes % 6 ||
+      ![1,2,3].includes(fallback)) throw TypeError('Invalid transfer scout configuration');
   let active=null,parked=null,closed=false,suspended=false;
   const demanded=new Set(),waiters=new Map();
   const attempted=new Set(),results=new Map(),crypto=runtime.crypto??globalThis.crypto;
@@ -76,10 +99,10 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
   const permitted=peer=>!suspended&&trusted(peer);
   const live=s=>active===s&&!closed&&!s.stopped;
   const notify=(s,report)=>onReport({peer:s.peer,id:s.id,scope:'synthetic_transfer_connections',...report});
-  function wire(s,body){if(live(s))send(s.peer,{type:'transferScout',version:3,id:s.id,...body});}
+  function wire(s,body){if(live(s))send(s.peer,{type:'transferScout',version:4,id:s.id,...body});}
   function releasePool(reason='pool_released',notifyPeer=true) {
     const pool=parked;if(!pool)return;parked=null;
-    if(notifyPeer&&trusted(pool.peer))send(pool.peer,{type:'transferScout',version:3,id:pool.id,action:'release'});
+    if(notifyPeer&&trusted(pool.peer))send(pool.peer,{type:'transferScout',version:4,id:pool.id,action:'release'});
     for(const row of pool.lanes)if(row&&!row.claimed){
       row.pc.ondatachannel=null;row.pc.onconnectionstatechange=null;row.pc.onicecandidate=null;
       if(row.pending){row.pending.onmessage=null;row.pending.close();}
@@ -94,7 +117,7 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
     if(notifyPeer)wire(s,{action:'cancel',reason});
     const partial=partialSample(s);
     s.stopped=true;active=null;s.controller.abort();
-    s.ack?.reject(Error(reason));s.ack=null;
+    s.ack?.reject(Error(reason));s.ack=null;s.planAck?.reject(Error(reason));s.planAck=null;
     if(reason==='complete'){
       releasePool();parked=s;
       for(const row of s.lanes){
@@ -147,16 +170,20 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
       pc.onconnectionstatechange=()=>{if(['failed','closed','disconnected'].includes(pc.connectionState))retire(s,'connection_'+pc.connectionState);};
       pc.ondatachannel=e=>bind(s,lane,e.channel);
     }
-    notify(s,{phase:'preflight',status:'started',sampleBytes:bytes,candidates:[1,3],roundsPerDirection:8,confirmationBytes:CONFIRM_SCALE*bytes,
-      intent:oneWay?'send':'explore',direction:initiator?'outgoing':'incoming',payloadBudgetBytes:(oneWay?1:2)*(5+4*CONFIRM_SCALE)*bytes,order:order(s),messageCeilingBytes:65536,queueHighBytes:QUEUE_BYTES});
+    notify(s,{phase:'preflight',status:'started',sampleBytes:bytes,candidates:[1,2,3],laneCandidates:CANDIDATES.map(lanes=>[...lanes]),roundsPerDirection:20,confirmationBytes:CONFIRM_SCALE*bytes,
+      intent:oneWay?'send':'explore',direction:initiator?'outgoing':'incoming',payloadBudgetBytes:(oneWay?1:2)*(1+SCREEN_ROUNDS+CONFIRM_ROUNDS*CONFIRM_SCALE)*bytes,order:order(s),messageCeilingBytes:65536,queueHighBytes:QUEUE_BYTES});
     return s;
   }
-  const order=s=>s.reverse?[3,1,1,3]:[1,3,3,1];
-  function specification(s,round) {
-    const phase=round%ROUNDS,stage=phase===0?'warmup':phase<=4?'screen':'confirm';
-    const connections=phase===0?3:phase<=4?order(s)[phase-1]:order(s).map(c=>4-c)[phase-5];
+  const order=s=>{
+    const first=s.reverse?[...CANDIDATES].reverse():CANDIDATES;
+    return [...first,...[...first].reverse()].map(lanes=>[...lanes]);
+  };
+  function specification(s,round,finalists=s.outgoingFinalists) {
+    const phase=round%ROUNDS,stage=phase===0?'warmup':phase<=SCREEN_ROUNDS?'screen':'confirm';
+    const lanes=phase===0?[0,1,2]:stage==='screen'?order(s)[phase-1]:finalists?.find(lanes=>lanes.length===FINAL_ORDER[phase-SCREEN_ROUNDS-1]);
+    if(!validLanes(lanes))throw Error('Invalid probe data');
     const bytes=s.bytes*(stage==='confirm'?CONFIRM_SCALE:1);
-    return {stage,connections,bytes,perLane:bytes/connections};
+    return {stage,connections:lanes.length,lanes:[...lanes],bytes,perLane:bytes/lanes.length};
   }
   function maybeStart(s) {
     if(!live(s)||!s.initiator||s.started||s.ready.size!==LANES||s.lanes.some(r=>r.dc?.readyState!=='open'))return;
@@ -176,20 +203,26 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
       if(data.length>512)throw Error('Invalid probe data');
       const body=JSON.parse(data);
       if(body.action==='sample') {
-        if(s.initiator?(s.oneWay||s.samples.length!==8):s.started)throw Error('Invalid probe data');
+        if(s.initiator?(s.oneWay||s.samples.length!==20):s.started)throw Error('Invalid probe data');
         if(body.round!==s.nextReceive||!Number.isInteger(body.round)||body.round<0||body.round>=2*ROUNDS)throw Error('Invalid probe data');
-        const spec=specification(s,body.round);
-        if(lane>=spec.connections||body.bytes!==spec.perLane)throw Error('Invalid probe data');
+        const spec=specification(s,body.round,s.incomingFinalists);
+        if(!spec.lanes.includes(lane)||body.bytes!==spec.perLane)throw Error('Invalid probe data');
         s.receiving??={round:body.round,counts:new Map(),arrivals:new Map(),startedAt:now(),spec,nextCheckpoint:spec.bytes/4};
         if(s.receiving.counts.has(lane))throw Error('Invalid probe data');
         s.receiving.counts.set(lane,0);s.receiving.arrivals.set(lane,{lane,bytes:0,messages:0,firstAtMs:null,lastAtMs:null,maxGapMs:0,largestGaps:[],completeAtMs:null});return;
       }
-      if(lane!==0)throw Error('Invalid probe data');
-      if(body.action==='progress'&&s.ack?.round===body.round){const ack=s.ack;if(!Number.isSafeInteger(body.bytes)||body.bytes<=ack.delivery.at(-1).bytes||body.bytes>=ack.bytes||ack.delivery.length>=4)throw Error('Invalid probe data');ack.delivery.push({bytes:body.bytes,elapsedMs:now()-ack.startedAt});return;}
-      if(body.action==='ack'&&s.ack?.round===body.round){const ack=s.ack;s.ack=null;ack.resolve();return;}
+      if(lane!==0&&!(['progress','ack'].includes(body.action)&&s.ack?.controlLane===lane))throw Error('Invalid probe data');
+      if(body.action==='finalists'){
+        const expected=s.initiator?ROUNDS+SCREEN_ROUNDS+1:SCREEN_ROUNDS+1;
+        if((s.initiator&&(s.oneWay||s.samples.length!==20))||(!s.initiator&&s.started)||s.nextReceive!==expected||s.incomingFinalists||!Array.isArray(body.lanes)||body.lanes.length!==3||body.lanes.some((lanes,i)=>!validLanes(lanes)||lanes.length!==i+1))throw Error('Invalid probe data');
+        s.incomingFinalists=body.lanes.map(lanes=>[...lanes]);rowSend(s,0,{action:'finalistsAck'});return;
+      }
+      if(body.action==='finalistsAck'&&s.planAck){const ack=s.planAck;s.planAck=null;ack.resolve();return;}
+      if(body.action==='progress'&&s.ack?.round===body.round&&s.ack.controlLane===lane){const ack=s.ack;if(!Number.isSafeInteger(body.bytes)||body.bytes<=ack.delivery.at(-1).bytes||body.bytes>=ack.bytes||ack.delivery.length>=4)throw Error('Invalid probe data');ack.delivery.push({bytes:body.bytes,elapsedMs:now()-ack.startedAt});return;}
+      if(body.action==='ack'&&s.ack?.round===body.round&&s.ack.controlLane===lane){const ack=s.ack;s.ack=null;ack.resolve();return;}
       if(body.action==='turn'&&!s.oneWay&&!s.initiator&&s.nextReceive===ROUNDS&&!s.started){s.started=true;void run(s,ROUNDS).catch(e=>fail(s,e));return;}
       if(body.action==='finished'&&(s.oneWay?!s.initiator&&s.nextReceive===ROUNDS:s.initiator&&s.nextReceive===2*ROUNDS)){s.finishing=true;rowSend(s,0,{action:'finishAck'});return;}
-      if(body.action==='finishAck'&&(s.oneWay?s.initiator:!s.initiator)&&s.running===false&&s.samples.length===8){wire(s,{action:'complete'});retire(s,'complete',false);return;}
+      if(body.action==='finishAck'&&(s.oneWay?s.initiator:!s.initiator)&&s.running===false&&s.samples.length===20){wire(s,{action:'complete'});retire(s,'complete',false);return;}
       throw Error('Invalid probe data');
     }
     const receiving=s.receiving;
@@ -207,12 +240,12 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
     if(count===receiving.spec.perLane)arrival.completeAtMs=atMs;
     const total=[...receiving.counts.values()].reduce((sum,n)=>sum+n,0);
     if(total<receiving.spec.bytes&&total>=receiving.nextCheckpoint){
-      rowSend(s,0,{action:'progress',round:receiving.round,bytes:total});
+      rowSend(s,receiving.spec.lanes[0],{action:'progress',round:receiving.round,bytes:total});
       receiving.nextCheckpoint=(Math.floor(total/(receiving.spec.bytes/4))+1)*receiving.spec.bytes/4;
     }
     if(receiving.counts.size===receiving.spec.connections&&[...receiving.counts.values()].every(n=>n===receiving.spec.perLane)) {
       const observed=incomingSample(receiving,true);s.incomingSamples.push(observed);notify(s,{phase:'preflight-receive-sample',direction:'incoming',...observed});
-      s.nextReceive++;s.receivedRounds++;s.receiving=null;rowSend(s,0,{action:'ack',round:receiving.round});
+      s.nextReceive++;s.receivedRounds++;s.receiving=null;rowSend(s,receiving.spec.lanes[0],{action:'ack',round:receiving.round});
     }
   }
   function rowSend(s,lane,body){if(!live(s)||s.lanes[lane].dc?.readyState!=='open')throw Error('Probe channel unavailable');s.lanes[lane].dc.send(JSON.stringify(body));}
@@ -220,13 +253,19 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
     s.running=true;
     for(let round=base;round<base+ROUNDS;round++) {
       if(!live(s)||busy())throw Error('Probe superseded');
-      const {stage,connections,perLane,bytes}=specification(s,round);
+      if(round%ROUNDS===SCREEN_ROUNDS+1){
+        s.outgoingFinalists=screenTransferCandidates(s.samples);if(!s.outgoingFinalists)throw Error('Invalid screening data');
+        const agreed=new Promise((resolve,reject)=>{s.planAck={resolve,reject};});void agreed.catch(()=>{});
+        rowSend(s,0,{action:'finalists',lanes:s.outgoingFinalists});await agreed;if(!live(s))return;
+      }
+      const {stage,connections,lanes,perLane,bytes}=specification(s,round);
       const delivery=[{bytes:0,elapsedMs:0}];
-      const ack=new Promise((resolve,reject)=>{s.ack={round,resolve,reject,bytes,delivery,startedAt:null};});
+      const ack=new Promise((resolve,reject)=>{s.ack={round,resolve,reject,bytes,delivery,controlLane:lanes[0],startedAt:null};});
       void ack.catch(()=>{}); // Cancellation may happen while send() itself throws.
       // Larger confirmations are streamed through bounded queues, not dumped
       // into the native SCTP send buffer as one oversized burst.
-      const payloads=s.lanes.slice(0,connections).map(row=>{
+      const payloads=lanes.map(lane=>{
+        const row=s.lanes[lane];
         const limit=row.pc.sctp?.maxMessageSize;
         const size=Number.isFinite(limit)&&limit>0?Math.min(65536,Math.floor(limit)):65536;
         if(size<1024)throw Error('Probe message limit too small');
@@ -235,13 +274,14 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
       const messageBytes=payloads.map(p=>p.byteLength);
       const before=s.lanes.map(r=>r.dc.bufferedAmount),startedAt=now();s.ack.startedAt=startedAt;
       const peak=s.lanes.map(r=>r.dc.bufferedAmount);
-      const queues=payloads.map((_,lane)=>({lane,payloadBytes:0,waitCount:0,waitMs:0,maxWaitMs:0,waitingSinceMs:null,enqueuedAtMs:null}));
-      s.outgoing={round,stage,connections,bytes,startedAt,delivery,queues,peakBufferedBytes:peak};
-      await Promise.all(payloads.map(async(payload,lane)=>{
+      const queues=lanes.map(lane=>({lane,payloadBytes:0,waitCount:0,waitMs:0,maxWaitMs:0,waitingSinceMs:null,enqueuedAtMs:null}));
+      s.outgoing={round,stage,connections,lanes,bytes,startedAt,delivery,queues,peakBufferedBytes:peak};
+      await Promise.all(payloads.map(async(payload,position)=>{
+        const lane=lanes[position];
         const size=payload.byteLength;rowSend(s,lane,{action:'sample',round,bytes:perLane});
         for(let offset=0;offset<perLane;offset+=size){
           const part=offset+size<=perLane?payload:payload.slice(0,perLane-offset);
-          const queue=queues[lane];
+          const queue=queues[position];
           if(s.lanes[lane].dc.bufferedAmount+part.byteLength>QUEUE_BYTES){
             const waitingAt=now();queue.waitCount++;queue.waitingSinceMs=waitingAt-startedAt;
             try{await queueCapacity(s.lanes[lane].dc,part.byteLength,s.controller.signal);}
@@ -250,14 +290,14 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
           if(!live(s))throw Error('Probe stopped');
           s.lanes[lane].dc.send(part);queue.payloadBytes+=part.byteLength;peak[lane]=Math.max(peak[lane],s.lanes[lane].dc.bufferedAmount);
         }
-        queues[lane].enqueuedAtMs=now()-startedAt;
+        queues[position].enqueuedAtMs=now()-startedAt;
       }));
       const queued=s.lanes.map(r=>r.dc.bufferedAmount);
       await ack;
       if(!live(s))return;
       const elapsedMs=now()-startedAt;
       delivery.push({bytes,elapsedMs});
-      const sample={round,stage,connections,bytes,elapsedMs,delivery,queues,clock:'sender_monotonic',queueHighBytes:QUEUE_BYTES,peakBufferedBytes:peak,messageBytes,bufferedBefore:before,bufferedAfterEnqueue:queued,
+      const sample={round,stage,connections,lanes,bytes,elapsedMs,delivery,queues,clock:'sender_monotonic',queueHighBytes:QUEUE_BYTES,peakBufferedBytes:peak,messageBytes,bufferedBefore:before,bufferedAfterEnqueue:queued,
         bufferedAfterAck:s.lanes.map(r=>r.dc.bufferedAmount),bytesPerSecond:elapsedMs>0?bytes*1000/elapsedMs:null,warmup:stage==='warmup'};
       s.outgoing=null;
       if(!sample.warmup)s.samples.push(sample);
@@ -265,8 +305,8 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
     }
     s.running=false;
     const selection=selectTransferSetup(s.samples,fallback);
-    const result={version:3,id:s.id,scope:'synthetic_transfer_connections',direction:'outgoing',...selection,
-      sampleBytes:s.bytes,confirmationBytes:s.bytes*CONFIRM_SCALE,payloadBudgetBytes:(s.oneWay?1:2)*(5+4*CONFIRM_SCALE)*s.bytes,queueHighBytes:QUEUE_BYTES,samples:structuredClone(s.samples),validFor:'current_peer_connection_generation',
+    const result={version:4,id:s.id,scope:'synthetic_transfer_connections',direction:'outgoing',...selection,
+      sampleBytes:s.bytes,confirmationBytes:s.bytes*CONFIRM_SCALE,payloadBudgetBytes:(s.oneWay?1:2)*(1+SCREEN_ROUNDS+CONFIRM_ROUNDS*CONFIRM_SCALE)*s.bytes,queueHighBytes:QUEUE_BYTES,samples:structuredClone(s.samples),validFor:'current_peer_connection_generation',
       limitations:['bounded_samples_include_ack_latency','per_association_probe_queue_cap','file_handoff_requires_retained_associations','does_not_measure_disk_or_hashing','does_not_establish_link_capacity']};
     results.set(s.peer,result);notify(s,{phase:'preflight-result',...result});
     if(base===0&&!s.oneWay)rowSend(s,0,{action:'turn'});else rowSend(s,0,{action:'finished'});
@@ -302,14 +342,14 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
       }catch(e){if(active)retire(active,'setup_failed');return false;}
     },
     receive(peer,body) {
-      if(!trusted(peer)||body?.type!=='transferScout'||body.version!==3||!validId(body.id))return false;
+      if(!trusted(peer)||body?.type!=='transferScout'||body.version!==4||!validId(body.id))return false;
       if(body.action==='release'&&parked?.peer===peer&&parked.id===body.id){releasePool('peer_released',false);return true;}
       if(body.action==='init') {
         if(active?.peer===peer&&active.id===body.id)return true;
         const oneWay=body.oneWay===true;
-        const invalid=typeof body.oneWay!=='boolean'||(!oneWay&&self()<peer)||!Number.isInteger(body.sampleBytes)||body.sampleBytes<3072||body.sampleBytes>sampleBytes||body.sampleBytes%3||typeof body.reverse!=='boolean';
+        const invalid=typeof body.oneWay!=='boolean'||(!oneWay&&self()<peer)||!Number.isInteger(body.sampleBytes)||body.sampleBytes<3072||body.sampleBytes>sampleBytes||body.sampleBytes%6||typeof body.reverse!=='boolean';
         if(!invalid&&oneWay&&!demanded.has(peer)&&active?.peer===peer&&!active.oneWay)retire(active,'sender_intent',false);
-        if(invalid||suspended||active||parked||busy()||(oneWay?demanded.has(peer):attempted.has(peer))||attempted.size>=128){send(peer,{type:'transferScout',version:3,id:body.id,action:'cancel',reason:invalid?'profile_not_supported':'busy'});return false;}
+        if(invalid||suspended||active||parked||busy()||(oneWay?demanded.has(peer):attempted.has(peer))||attempted.size>=128){send(peer,{type:'transferScout',version:4,id:body.id,action:'cancel',reason:invalid?'profile_not_supported':'busy'});return false;}
         try{if(oneWay)demanded.add(peer);create(peer,body.id,false,body.sampleBytes,body.reverse,oneWay);}catch{if(active)retire(active,'setup_failed');}return true;
       }
       const s=active;if(!s||s.peer!==peer||s.id!==body.id)return false;
@@ -333,9 +373,10 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
       if(!this.start(peer,true))settleSend(peer);
       return completed;
     },
-    take(peer,id,lane,asset,jobId){
+    take(peer,id,lane,asset,jobId,preferredLanes=[0,1,2]){
       const pool=parked;if(!pool||pool.peer!==peer||(id&&pool.id!==id)||!trusted(peer)||(pool.asset&&pool.asset!==asset))return null;
-      const index=lane===undefined?pool.lanes.findIndex(row=>!row.claimed):lane;
+      if(!validLanes(preferredLanes))return null;
+      const index=lane===undefined?preferredLanes.find(index=>!pool.lanes[index].claimed):lane;
       if(!Number.isInteger(index)||index<0||index>=LANES)return null;
       const row=pool.lanes[index];if(row.claimed||row.pc.connectionState!=='connected')return null;
       pool.asset=asset;row.claimed=true;row.pc.onicecandidate=null;row.pc.onconnectionstatechange=null;row.pc.ondatachannel=null;
