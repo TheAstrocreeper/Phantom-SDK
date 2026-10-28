@@ -57,6 +57,7 @@ try{
     return {mode,traced,clock:(mode==='pair'||mode==='early'||mode==='queue')?'synthetic_selection_only':'native',selection,peak,fileQueuePeak,queueApplications:events.filter(e=>e.i===source&&e.data.phase==='preflight-queue-applied').map(e=>e.data),handoffs:events.filter(e=>e.i===source&&e.data.phase==='preflight-handoff'&&e.data.status==='claimed').map(e=>e.data.lane),fileAssociations:filePCs.size,allFileAssociationsScouted:[...filePCs].every(pc=>scouted.has(pc)),scoutAssociations:scoutPCs.length,scoutClosed:scoutPCs.every(pc=>pc.connectionState==='closed'),
      applied:applied?.data??null,samples:events.filter(e=>e.type==='distributionScout'&&e.data.phase==='preflight-sample').length,
      incoming:events.filter(e=>e.type==='distributionScout'&&e.data.phase==='preflight-receive-sample').map(e=>e.data),
+     transportEvidence:events.filter(e=>e.type==='distributionScout'&&e.data.transport).map(e=>({endpoint:e.i,phase:e.data.phase,...e.data.transport})),
      cancelled:events.some(e=>e.type==='distributionScout'&&e.data.status==='cancelled'),
      identical:received.length===bytes.length&&received.every((v,i)=>v===bytes[i]),receivedBytes:received.length,
      coordinatorReceivedFile:events.some(e=>e.i===2&&e.type==='distributionComplete')};
@@ -70,6 +71,11 @@ try{
   if(mode==='pair'){assert.equal(result.selection.samples.length,20);assert.equal(result.selection.stoppedEarly,false);assert.equal(result.selection.connections,2);assert.deepEqual(result.selection.lanes,[1,2]);assert.deepEqual(result.handoffs.sort(),[1,2]);assert.equal(result.fileAssociations,4);assert.equal(result.peak,2);}
   if(mode==='early'){assert.equal(result.selection.stoppedEarly,true);assert.equal(result.selection.status,'inconclusive');assert.equal(result.selection.samples.some(s=>s.stage==='confirm'),false);assert.ok(result.selection.directionPayloadAvoidedBytes>0);}
   if(mode!=='cancel'){assert.equal(result.selection.queueSamples.length,4);assert.equal(result.selection.queueComparisonPayloadBytes,36*1024*1024);assert.ok(result.selection.queueSamples.every(s=>s.bytes===9437184&&s.lanes.join(',')===result.selection.lanes.join(',')));}
+  if(mode!=='cancel'){
+   assert.ok(result.transportEvidence.some(r=>r.phase==='preflight-receive-stats'));
+   for(const endpoint of [0,1])assert.ok(result.transportEvidence.some(r=>r.endpoint===endpoint&&r.current?.packetsReceived!==null&&r.current?.packetsReceived!==undefined));
+   assert.ok(result.transportEvidence.every(r=>r.change.kernelReceiveDrops.status==='unavailable'));
+  }
   console.log(JSON.stringify(result));
  }
  assert.deepEqual(errors,[]);
