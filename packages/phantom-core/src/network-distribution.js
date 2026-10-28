@@ -6,6 +6,7 @@ import {fitsMessageLimits,maxMessagePayload} from './message-size-guard.js';
 import {createCapabilityExchange} from './capability-exchange.js';
 import {createCapabilityReport} from './connection-planner.js';
 import {createPlanAgreement} from './plan-agreement.js';
+import {createTransferScout,TRANSFER_SCOUT_PROTOCOL} from './transfer-scout.js';
 import {createFileDistribution,createMemoryChunkStore} from './files.js';
 import {createAdminAuthorization} from './authorization.js';
 
@@ -30,7 +31,8 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
   const policy=adminPublicKey?createAdminAuthorization({networkId,adminPublicKey,crypto}):null;
   const preparedFiles=new WeakMap(),continuationSelections=new WeakMap(),progressIndexes=new Map();
   const assets=new Map(),jobs=new Map(),links=new Map(),listeners=new Set(),finished=new Set(),blockedUntil=new Map(),setupFailures=new Map(),pendingSignals=new Map(),reported=new Map(),mirrored=new Map(),mirrorJobs=new Map(),closedJobs=new Map();
-  const rangePeers=new Set();let rangeAdvertisement='';
+  const rangePeers=new Set();let rangeAdvertisement='',scoutCoordinator=false;
+  const scoutEnabled=options.transferScout===true&&options.capabilityExchange===true&&assignedRanges&&maxConnections>=3;
   let closed=false,sequence=0,leaderToken='',checkedToken='',checking=false,dirty=false,lastReport=0,receivedSequence=-1;
   const state=()=>core.getState(),self=()=>state().peerId,leader=()=>state().leader;
   const isLeader=()=>state().role==='syscon1'&&leader()===self();
@@ -53,7 +55,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
   // The facade supplies the committed roster projection. Reading it never changes it.
   let roster=[];
   const controlObservations=new Map(),controlGenerations=new Map(),controlPending=new Map();let controlSequence=0;
-  const localCapability=peer=>createCapabilityReport(controlObservations.get(peer)??{version:1,messageLimit:{status:'unknown',bytes:null}},{protocols:['phantom-file-v1','phantom-file-fragments-v1'],maxChunkBytes:options.maxChunkBytes??65536});
+  const localCapability=peer=>createCapabilityReport(controlObservations.get(peer)??{version:1,messageLimit:{status:'unknown',bytes:null}},{protocols:['phantom-file-v1','phantom-file-fragments-v1',...(scoutEnabled?[TRANSFER_SCOUT_PROTOCOL]:[])],maxChunkBytes:options.maxChunkBytes??65536});
   const peerAllowed=peer=>roster.includes(peer)&&canUsePeer(peer);
   function observeControl(peer){
     if(controlPending.has(peer))return controlPending.get(peer);
@@ -70,10 +72,12 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
     void pending.then(release,release);
     return pending;
   }
-  const capabilityExchange=options.capabilityExchange===true?createCapabilityExchange({send:frame,allowed:peerAllowed,localReport:localCapability,onReport:(peer,report)=>emit('distributionCapability',{peer,report})}):null;
+  const capabilityExchange=options.capabilityExchange===true?createCapabilityExchange({send:frame,allowed:peerAllowed,localReport:localCapability,onReport:(peer,report)=>{emit('distributionCapability',{peer,report});if(report.protocols.includes(TRANSFER_SCOUT_PROTOCOL))preflight?.start(peer);}}):null;
   const agreement=capabilityExchange?createPlanAgreement({send:frame,allowed:peerAllowed,localReport:localCapability,remoteReport:peer=>capabilityExchange.get(peer),newId:()=>crypto.randomUUID(),onDecision:result=>emit('distributionPlanDecision',result)}):null;
-  function setRoster(rows){const next=rows.map(r=>r.hKey).filter(k=>/^[0-9a-f]{16}$/.test(k)&&canUsePeer(k));for(const peer of roster)if(!next.includes(peer)){controlObservations.delete(peer);controlGenerations.delete(peer);controlPending.delete(peer);capabilityExchange?.drop(peer);agreement?.drop(peer);}roster=next;for(const peer of rangePeers)if(!roster.includes(peer))rangePeers.delete(peer);}
-  function report(){if(assignedRanges&&self()&&leader()&&canUsePeer(leader())&&rangeAdvertisement!==leaderToken){rangeAdvertisement=leaderToken;frame(leader(),{type:'rangeCapability',version:1});}for(const asset of assets.values())if(allowed(asset.id,asset.distributionId)&&asset.holders.has(self())){const sent=reported.get(asset.id)??new Set(),have=asset.holders.get(self());if(reported.has(asset.id)&&sent.size===have.size)continue;const indexes=[...have].filter(i=>!sent.has(i)).sort((a,b)=>a-b);for(let offset=0;offset<Math.max(1,indexes.length);offset+=128)frame(leader(),{type:'inventory',id:asset.id,total:asset.total,distributionId:asset.distributionId,proof:asset.proof,indexes:indexes.slice(offset,offset+128)});reported.set(asset.id,sent);}lastReport=Date.now();}
+  const preflight=scoutEnabled?createTransferScout({self,allowed:peerAllowed,send:frame,runtime,configuration:options.rtcConfiguration,sampleBytes:options.scoutSampleBytes,busy:()=>links.size>0,onReport:report=>emit('distributionScout',report)}):null;
+  function selectedSetup(peer){const result=preflight?.get(peer);return result?{...result,enforcement:scoutCoordinator?'coordinator_supported':'default_coordinator_unconfirmed',effectiveConnections:scoutCoordinator?result.connections:Math.min(3,maxConnections)}:null;}
+  function setRoster(rows){const next=rows.map(r=>r.hKey).filter(k=>/^[0-9a-f]{16}$/.test(k)&&canUsePeer(k));for(const peer of roster)if(!next.includes(peer)){controlObservations.delete(peer);controlGenerations.delete(peer);controlPending.delete(peer);preflight?.drop(peer);capabilityExchange?.drop(peer);agreement?.drop(peer);}roster=next;for(const peer of rangePeers)if(!roster.includes(peer))rangePeers.delete(peer);}
+  function report(){if(assignedRanges&&self()&&leader()&&canUsePeer(leader())&&rangeAdvertisement!==leaderToken){rangeAdvertisement=leaderToken;frame(leader(),{type:'rangeCapability',version:1});}for(const asset of assets.values())if(allowed(asset.id,asset.distributionId)&&asset.holders.has(self())){const sent=reported.get(asset.id)??new Set(),have=asset.holders.get(self());if(reported.has(asset.id)&&sent.size===have.size)continue;const indexes=[...have].filter(i=>!sent.has(i)).sort((a,b)=>a-b);for(let offset=0;offset<Math.max(1,indexes.length);offset+=128)frame(leader(),{type:'inventory',id:asset.id,total:asset.total,distributionId:asset.distributionId,proof:asset.proof,indexes:indexes.slice(offset,offset+128),...(asset.outgoingSetup&&scoutCoordinator?{setup:asset.outgoingSetup}:{})});reported.set(asset.id,sent);}lastReport=Date.now();}
   function table(){return {sequence,leader:self(),assets:[...assets.values()].map(a=>({id:a.id,total:a.total,distributionId:a.distributionId,proof:a.proof,holders:[...a.holders].map(([peer,indexes])=>({peer,indexes:[...indexes].sort((a,b)=>a-b)}))}))};}
   function mirror(){if(!isLeader()||!dirty)return;dirty=false;sequence++;const mirror=state().mirror;if(mirror&&mirror!==self()){
     // Page by holder; large piece inventories stay bounded to the control frame limit.
@@ -217,6 +221,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
   }
   async function open(job){if(links.has(job.id)||closedJobs.has(job.id))return;const used=[...links.values()].reduce((n,link)=>n+(link.job.assigned?1:transferLanes),0);if(links.size>=maxJobs||used+(job.assigned?1:transferLanes)>maxConnections){frame(leader(),{type:'failed',jobId:job.id,batch:batchOf(job)});return;}
     const asset=assets.get(job.asset);if(!asset||!allowed(asset.id,asset.distributionId))return;
+    preflight?.suspend('file_job_started');
     const peer=job.source===self()?job.receiver:job.source;
     let link;
     try{
@@ -254,14 +259,18 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
     }
     if(packet.from!==from&&from!==leader())return;
     const body=packet.body,sender=packet.from;
+    if(body.type==='transferScout'){preflight?.receive(sender,body);return;}
     if(['capabilityRequest','capabilityReport'].includes(body.type)){if(body.type==='capabilityRequest'&&!await observeControl(sender))return;if(!closed)capabilityExchange?.receive(sender,body);return;}
     if(['planProposal','planDecision'].includes(body.type)){agreement?.receive(sender,body);return;}
-    if(body.type==='rangeCapability'&&isLeader()&&roster.includes(sender)&&body.version===1){rangePeers.add(sender);return;}
+    if(body.type==='rangeCapability'&&isLeader()&&roster.includes(sender)&&body.version===1){rangePeers.add(sender);frame(sender,{type:'rangeCapabilityAck',version:1,scoutScheduling:1});return;}
+    if(body.type==='rangeCapabilityAck'&&sender===leader()&&body.version===1&&body.scoutScheduling===1){if(!scoutCoordinator)reported.clear();scoutCoordinator=true;return;}
     if(body.type==='inventory'&&isLeader()&&roster.includes(sender)){
       const asset=await acceptAsset(body);if(!asset||!Array.isArray(body.indexes)||body.indexes.length>128||body.indexes.some(i=>!Number.isInteger(i)||i<0||i>=asset.total))return;
-      const have=asset.holders.get(sender)??new Set(),old=have.size;for(const i of body.indexes)have.add(i);asset.holders.set(sender,have);if(have.size!==old)dirty=true;frame(sender,{type:'inventoryAck',id:asset.id,indexes:body.indexes});return;
+      const setup=body.setup;
+      if(setup&&setup.version===1&&typeof setup.receiver==='string'&&roster.includes(setup.receiver)&&setup.receiver!==sender&&(!asset.proof.recipients||asset.proof.recipients.includes(setup.receiver))&&[1,3].includes(setup.connections)&&typeof setup.scoutId==='string'&&/^[a-zA-Z0-9-]{1,64}$/.test(setup.scoutId)){asset.sourceLimits??=new Map();asset.sourceLimits.set(sender+':'+setup.receiver,setup.connections);}
+      const have=asset.holders.get(sender)??new Set(),old=have.size;for(const i of body.indexes)have.add(i);asset.holders.set(sender,have);if(have.size!==old)dirty=true;frame(sender,{type:'inventoryAck',id:asset.id,indexes:body.indexes,...(setup&&asset.sourceLimits?.get(sender+':'+setup.receiver)===setup.connections?{setup}:{})});return;
     }
-    if(body.type==='inventoryAck'&&sender===leader()){const have=assets.get(body.id)?.holders.get(self());if(!have||!Array.isArray(body.indexes)||body.indexes.length>128)return;const sent=reported.get(body.id)??new Set();for(const i of body.indexes)if(have.has(i))sent.add(i);reported.set(body.id,sent);return;}
+    if(body.type==='inventoryAck'&&sender===leader()){const localAsset=assets.get(body.id);if(body.setup&&localAsset?.outgoingSetup&&JSON.stringify(body.setup)===JSON.stringify(localAsset.outgoingSetup)&&!localAsset.setupAcknowledged){localAsset.setupAcknowledged=true;emit('distributionScout',{phase:'preflight-applied',peer:body.setup.receiver,id:body.setup.scoutId,asset:body.id,connections:body.setup.connections,enforcement:'coordinator_acknowledged'});}const have=localAsset?.holders.get(self());if(!have||!Array.isArray(body.indexes)||body.indexes.length>128)return;const sent=reported.get(body.id)??new Set();for(const i of body.indexes)if(have.has(i))sent.add(i);reported.set(body.id,sent);return;}
     if(body.type==='mirrorJobs'&&sender===leader()&&state().role==='syscon2'){if(!Number.isInteger(body.sequence)||body.sequence<receivedSequence)return;receivedSequence=body.sequence;if(body.reset)mirrorJobs.clear();else if(body.job&&mirrorJobs.size<1024)mirrorJobs.set(body.job.id,body.job);return;}
     if(body.type==='mirror'&&sender===leader()&&state().role==='syscon2'){
       if(!Number.isInteger(body.sequence)||body.sequence<receivedSequence)return;receivedSequence=body.sequence;
@@ -349,7 +358,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
       for(const receiver of receivers){
         if(!canReceive(receiver))continue;
         const have=asset.holders.get(receiver)??new Set();
-        const candidates=[...asset.holders].filter(([peer,indexes])=>{const useAssigned=assignedRanges&&rangePeers.has(receiver)&&rangePeers.has(peer),cost=useAssigned?1:transferLanes;return peer!==receiver&&live.has(peer)&&counts(peer)+cost<=maxConnections&&counts(receiver)+cost<=maxConnections&&(![...jobs.values()].some(j=>j.receiver===receiver)||useAssigned)&&(blockedUntil.get(peer+':'+receiver)??0)<=now&&(asset.total===0||[...indexes].some(i=>!have.has(i)));}).sort((a,b)=>counts(a[0])-counts(b[0])||a[1].size-b[1].size||a[0].localeCompare(b[0]));
+        const candidates=[...asset.holders].filter(([peer,indexes])=>{const useAssigned=assignedRanges&&rangePeers.has(receiver)&&rangePeers.has(peer),cost=useAssigned?1:transferLanes;const pairLimit=asset.sourceLimits?.get(peer+':'+receiver)??maxConnections,pairCount=[...jobs.values()].filter(j=>j.asset===asset.id&&j.source===peer&&j.receiver===receiver).length;return peer!==receiver&&live.has(peer)&&pairCount<pairLimit&&counts(peer)+cost<=maxConnections&&counts(receiver)+cost<=maxConnections&&(![...jobs.values()].some(j=>j.receiver===receiver)||useAssigned)&&(blockedUntil.get(peer+':'+receiver)??0)<=now&&(asset.total===0||[...indexes].some(i=>!have.has(i)));}).sort((a,b)=>counts(a[0])-counts(b[0])||a[1].size-b[1].size||a[0].localeCompare(b[0]));
         const reserved=new Set([...jobs.values()].filter(j=>j.asset===asset.id&&j.receiver===receiver).flatMap(j=>j.indexes));
         const candidate=candidates.find(([,indexes])=>asset.total===0||[...indexes].some(i=>!have.has(i)&&!reserved.has(i)));
         if(!candidate)continue;const [source,indexes]=candidate,wanted=[...indexes].filter(i=>!have.has(i)&&!reserved.has(i)).sort((a,b)=>rarity(a)-rarity(b)||a-b).slice(0,batchSize);
@@ -361,7 +370,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
     }
   }
   function syncLeadership(){const token=leader()+':'+state().mirror;
-    if(token!==leaderToken){leaderToken=token;checkedToken='';receivedSequence=-1;rangePeers.clear();controlObservations.clear();controlGenerations.clear();controlPending.clear();capabilityExchange?.clear();agreement?.clear();rangeAdvertisement='';reported.clear();mirrored.clear();mirrorJobs.clear();for(const job of [...jobs.values()])finishJob(job);for(const id of [...links.keys()]){const link=links.get(id);closeLink(id);}dirty=true;lastReport=0;}
+    if(token!==leaderToken){leaderToken=token;checkedToken='';receivedSequence=-1;rangePeers.clear();scoutCoordinator=false;preflight?.clear();for(const a of assets.values()){a.sourceLimits?.clear();a.setupAcknowledged=false;}controlObservations.clear();controlGenerations.clear();controlPending.clear();capabilityExchange?.clear();agreement?.clear();rangeAdvertisement='';reported.clear();mirrored.clear();mirrorJobs.clear();for(const job of [...jobs.values()])finishJob(job);for(const id of [...links.keys()]){const link=links.get(id);closeLink(id);}dirty=true;lastReport=0;}
   }
   function restore(){
     if(restoration)return restoration;
@@ -399,29 +408,30 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
     if(Date.now()-lastReport>1000){if(state().role==='peer'&&state().state!=='admitted')core.command('PHANTOM_DIST_RECOVER_SYS',{});report();}schedule();mirror();
     for(const [id,link]of links)if(Date.now()>link.job.deadline){closeLink(id);frame(leader(),{type:'failed',jobId:id,batch:batchOf(link.job)});}
   }
-  const off=core.onEvent(event=>{if(event.type==='PRESENCE_ROSTER')setRoster(event.payload?.list??[]);if(event.type==='PEER_CONNECTION_STATE'&&event.payload?.state!=='ready'){const peer=event.payload?.peerId;if(peer){controlObservations.delete(peer);controlGenerations.delete(peer);controlPending.delete(peer);capabilityExchange?.drop(peer);agreement?.drop(peer);}}if(event.type==='PHANTOM_ADMIN_LINK_READY'){rangeAdvertisement='';reported.clear();mirrored.clear();dirty=true;lastReport=0;}if(event.type==='PHANTOM_DIST')void handle(event.payload.from,event.payload.frame).catch(error);});
+  const off=core.onEvent(event=>{if(event.type==='PRESENCE_ROSTER')setRoster(event.payload?.list??[]);if(event.type==='PEER_CONNECTION_STATE'&&event.payload?.state!=='ready'){const peer=event.payload?.peerId;if(peer){controlObservations.delete(peer);controlGenerations.delete(peer);controlPending.delete(peer);preflight?.drop(peer);capabilityExchange?.drop(peer);agreement?.drop(peer);}}if(event.type==='PHANTOM_ADMIN_LINK_READY'){rangeAdvertisement='';reported.clear();mirrored.clear();dirty=true;lastReport=0;}if(event.type==='PHANTOM_DIST')void handle(event.payload.from,event.payload.frame).catch(error);});
   const timer=setInterval(()=>{void tick().catch(error);},intervalMs);
   return {
-    dropPeer(peer){files.dropPeer(peer);controlObservations.delete(peer);controlGenerations.delete(peer);controlPending.delete(peer);capabilityExchange?.drop(peer);agreement?.drop(peer);rangePeers.delete(peer);roster=roster.filter(p=>p!==peer);for(const asset of assets.values())asset.holders.delete(peer);for(const job of [...jobs.values()])if(job.source===peer||job.receiver===peer)finishJob(job);for(const [id,link]of [...links])if(link.peer===peer){closeLink(id);}for(const [id,job]of mirrorJobs)if(job.source===peer||job.receiver===peer)mirrorJobs.delete(id);dirty=true;},
+    dropPeer(peer){files.dropPeer(peer);controlObservations.delete(peer);controlGenerations.delete(peer);controlPending.delete(peer);preflight?.drop(peer);capabilityExchange?.drop(peer);agreement?.drop(peer);rangePeers.delete(peer);roster=roster.filter(p=>p!==peer);for(const asset of assets.values())asset.holders.delete(peer);for(const job of [...jobs.values()])if(job.source===peer||job.receiver===peer)finishJob(job);for(const [id,link]of [...links])if(link.peer===peer){closeLink(id);}for(const [id,job]of mirrorJobs)if(job.source===peer||job.receiver===peer)mirrorJobs.delete(id);dirty=true;},
     requestCapabilities(peer){if(!capabilityExchange)throw Error('Capability exchange is disabled');if(!peerAllowed(peer))throw Error('Peer unavailable');syncLeadership();void observeControl(peer).then(valid=>{if(valid&&!closed&&peerAllowed(peer))capabilityExchange.request(peer);}).catch(error);},
     getCapabilities(peer){return capabilityExchange?.get(peer)??null;},
     proposePlan(peer,settings={}){if(!agreement)throw Error('Capability exchange is disabled');return agreement.propose(peer,{...settings,protocolPreference:['phantom-file-v1']});},
-    getPlan(peer){return agreement?.get(peer)??null;},
+    getPlan(peer){const plan=agreement?.get(peer);return plan?{...plan,setup:selectedSetup(peer)}:null;},
+    getScout(peer){return selectedSetup(peer);},
     restore,
     async getFile(id){await restore();const asset=assets.get(id);if(closed||!asset||asset.holders.get(self())?.size!==asset.total)throw Error('No complete local distribution copy');return files.getFile(id);},
-    async prepare(file,settings={}){if(closed)throw Error('Distribution closed');await restore();const manifest=await files.publish(file,settings);preparedFiles.set(manifest,{file,id:manifest.id});return manifest;},
-    async prepareAgreed(file,peer,settings={}){if(closed||!peerAllowed(peer))throw Error('Peer unavailable');const agreed=agreement?.get(peer);if(!agreed)throw Error('No agreed plan');if('chunkSize' in settings)throw TypeError('Chunk size comes from the agreed plan');await restore();const manifest=await files.publish(file,{...settings,chunkSize:agreed.plan.payloadBytes});if(closed||!peerAllowed(peer)||agreement.get(peer)?.id!==agreed.id)throw Error('Agreed plan no longer valid');preparedFiles.set(manifest,{file,id:manifest.id,peer,planId:agreed.id});return manifest;},
+    async prepare(file,settings={}){preflight?.suspend();if(closed)throw Error('Distribution closed');await restore();const manifest=await files.publish(file,settings);preparedFiles.set(manifest,{file,id:manifest.id});return manifest;},
+    async prepareAgreed(file,peer,settings={}){const setup=selectedSetup(peer);preflight?.suspend();if(closed||!peerAllowed(peer))throw Error('Peer unavailable');const agreed=agreement?.get(peer);if(!agreed)throw Error('No agreed plan');if('chunkSize' in settings)throw TypeError('Chunk size comes from the agreed plan');await restore();const manifest=await files.publish(file,{...settings,chunkSize:agreed.plan.payloadBytes});if(closed||!peerAllowed(peer)||agreement.get(peer)?.id!==agreed.id)throw Error('Agreed plan no longer valid');preparedFiles.set(manifest,{file,id:manifest.id,peer,planId:agreed.id,setup});return manifest;},
     async publish(file,{authorization,recipients,prepared,...settings}={}){if(closed)throw Error('Distribution closed');if(!state().admitted)throw Error('Wait for network admission before distributing');if(!policy)throw Error('Distribution requires an admin authority');await restore();if(closed)throw Error('Distribution closed');
       if(recipients!==undefined){
         if(!Array.isArray(recipients)||recipients.length>128||recipients.some(id=>typeof id!=='string'||! /^[0-9a-f]{16}$/.test(id)))throw new TypeError('Invalid publication recipients');
         recipients=[...new Set(recipients)].sort();
       }
-      let manifest;
+      let manifest,setup=recipients?.length===1?selectedSetup(recipients[0]):null;preflight?.suspend();
       if(prepared!==undefined){
         const record=preparedFiles.get(prepared);
         if(!record||record.file!==file||Object.keys(settings).length)throw new TypeError('Use an unchanged preparation from this distribution session without file settings');
         if(record.peer&&(!recipients||recipients.length!==1||recipients[0]!==record.peer||!peerAllowed(record.peer)||agreement?.get(record.peer)?.id!==record.planId))throw Error('Agreed plan no longer matches the recipient');
-        manifest=files.getManifest(record.id);
+        manifest=files.getManifest(record.id);setup=record.setup??null;
       }else manifest=await files.publish(file,settings);
       const existing=assets.get(manifest.id);
       if(!authorization&&existing&&JSON.stringify(existing.proof.recipients)!==JSON.stringify(recipients))throw Error('Publication recipients are immutable; use a different distributionId');
@@ -429,11 +439,12 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
       if(recipients!==undefined&&JSON.stringify(recipients)!==JSON.stringify(verified.recipients))throw Error('Recipients do not match admin publish authorization');
       if(existing&&JSON.stringify(existing.proof.recipients)!==JSON.stringify(verified.recipients))throw Error('Publication recipients are immutable; use a different distributionId');
       const asset=await acceptAsset({...manifest,proof:verified});if(!asset)throw Error('Distribution unavailable');
+      if(setup&&recipients?.length===1&&scoutCoordinator){asset.outgoingSetup={version:1,receiver:recipients[0],connections:setup.connections,scoutId:setup.id};emit('distributionScout',{phase:'preflight-selected',peer:recipients[0],asset:asset.id,selection:setup,enforcement:'awaiting_coordinator_acknowledgment'});}
       if(chunkStore.save)await chunkStore.save(networkId,{manifest,proof:asset.proof});
       if(closed||!allowed(asset.id,asset.distributionId))throw Error('Distribution unavailable');asset.holders.set(self(),new Set(Array.from({length:manifest.total},(_,i)=>i)));finished.add(manifest.id);dirty=true;report();return manifest;
     },
     snapshot:()=>({restoration:restorationState,restoreResults:structuredClone(restoreResults),leader:leader(),adminChecked:isLeader()&&checkedToken===leaderToken,assets:table().assets,jobs:[...(isLeader()?jobs:mirrorJobs).values()].map(j=>({...j,indexes:[...j.indexes]})),connections:[...links.values()].map(l=>({jobId:l.job.id,peer:l.peer,state:l.dc?.readyState??'connecting'}))}),
     stop(target){files.stop(target);for(const job of [...jobs.values()])if(job.asset===target||assets.get(job.asset)?.distributionId===target)finishJob(job);for(const [id,link]of [...links])if(link.job.asset===target||assets.get(link.job.asset)?.distributionId===target)closeLink(id);},
-    close(){if(closed)return;closed=true;controlObservations.clear();controlGenerations.clear();controlPending.clear();agreement?.close();capabilityExchange?.close();clearInterval(timer);off();files.close();for(const id of [...links.keys()])closeLink(id);jobs.clear();assets.clear();progressIndexes.clear();reported.clear();mirrored.clear();mirrorJobs.clear();pendingSignals.clear();closedJobs.clear();blockedUntil.clear();setupFailures.clear();finished.clear();listeners.clear();}
+    close(){if(closed)return;closed=true;preflight?.close();controlObservations.clear();controlGenerations.clear();controlPending.clear();agreement?.close();capabilityExchange?.close();clearInterval(timer);off();files.close();for(const id of [...links.keys()])closeLink(id);jobs.clear();assets.clear();progressIndexes.clear();reported.clear();mirrored.clear();mirrorJobs.clear();pendingSignals.clear();closedJobs.clear();blockedUntil.clear();setupFailures.clear();finished.clear();listeners.clear();}
   };
 }

@@ -1,0 +1,28 @@
+name: Transfer worm validation
+on:
+  push:
+    branches: ['codex/worm-validation']
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci
+      - run: npm test
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix tools/swarm
+      - run: PHANTOM_CHROMIUM_EXECUTABLE="$(command -v google-chrome)" node tools/perf/transfer-scout-browser.mjs
+      - run: PHANTOM_SCOUT_AGREED=1 PHANTOM_CHROMIUM_EXECUTABLE="$(command -v google-chrome)" node tools/perf/scout-preflight-browser.mjs
