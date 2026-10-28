@@ -3,13 +3,13 @@
 Opt in with `distribution: {capabilityExchange:true, assignedRanges:true,
 transferScout:true, maxConnections:3}`. Add `scoutBeforeSend:true` to wait for
 outgoing scouting during single-recipient agreed preparation. Phantom Share
-uses both. Both endpoints advertise `phantom-transfer-scout-v4`; v1/v2/v3 peers
-keep their compatible file path without v4 scouting or handoff. Native WebRTC
+uses both. Both endpoints advertise `phantom-transfer-scout-v5`; v1/v2/v3/v4 peers
+keep their compatible file path without v5 scouting or handoff. Native WebRTC
 is not involved.
 
 The smaller peer ID starts background exploration over three independent RTC
 associations using the file RTC configuration and reliable ordered channels.
-Each direction gets a warm-up, fourteen screening deliveries, and six larger
+Each direction allows a warm-up, up to fourteen screening deliveries, and up to six larger
 confirmations. Screening covers all seven lane sets: each singleton, each pair,
 and all three. A balanced order followed by its reverse repeats every candidate
 with equal payload. Each lane participates equally across the full screen.
@@ -62,6 +62,34 @@ sample completion to wait on lane 0's transport. Finalist agreement and lifecycl
 control still use lane 0 between timed samples. These are acknowledged-delivery
 rates, not NIC timestamps, link capacity or steady-state guarantees. Probe
 payload omits file reading, hashing, framing and storage.
+
+## Stop when more samples cannot improve the policy
+
+After every completed delivery, the scout checks the existing selection rule.
+Each candidate's observed minimum can only decrease, and its maximum can only
+increase. A candidate whose maximum already overlaps another candidate's minimum
+cannot later become the strictly separated winner. Unseen candidates remain
+possible. If none remain possible, stop. If only the fallback can still qualify,
+stop without trying to certify the already-default setup. A still-viable smaller
+profile keeps its full confirmation budget.
+
+During confirmation, stop if observed total-time or late-delivery envelopes
+already prevent the screened winner from qualifying, or required late-delivery
+progress is missing. These stops do not relax the rule or promote incomplete
+samples to measured evidence. The result explicitly remains inconclusive, with
+reason, possible lane sets and observed ranges retained.
+
+An acknowledged `endDirection` message advances the receiver's bounded round
+cursor to the normal direction boundary. The existing turn/completion handshakes
+then retain the same associations for file use. No timer, polling or retry is
+added. Cancellation releases this acknowledgment wait too. v5 peers alone use
+this shortened schedule; older peers retain the compatible file path.
+
+Results record `stoppedEarly`, completed/unrun sample counts,
+`directionPayloadBytes`, and `directionPayloadAvoidedBytes`. These are counts,
+not predictions of saved elapsed time or link capacity. Maximum budgets above
+remain caps; actual traffic can be much smaller. The browser checks both a full
+pair confirmation and an early fallback, followed by verified file handoff.
 
 The receiver retains each lane's byte/message count, first/last arrival,
 completion time, maximum gap and four largest gap intervals on a common local

@@ -1,7 +1,7 @@
 import {defaultRTCConfiguration} from './rtc-configuration.js';
 import {scoutConnection} from './connection-scout.js';
 
-export const TRANSFER_SCOUT_PROTOCOL = 'phantom-transfer-scout-v4';
+export const TRANSFER_SCOUT_PROTOCOL = 'phantom-transfer-scout-v5';
 const LANES = 3, MAX_BYTES = 3 * 1024 * 1024, DEFAULT_BYTES = 768 * 1024;
 const CONFIRM_SCALE = 4, SCREEN_ROUNDS = 14, CONFIRM_ROUNDS = 6, ROUNDS = 21, QUEUE_BYTES = 768 * 1024;
 const CANDIDATES=[[0],[1,2],[0,1,2],[1],[0,2],[2],[0,1]], FINAL_ORDER=[1,2,3,3,2,1];
@@ -66,6 +66,33 @@ export function selectTransferSetup(samples, fallback = 3) {
     lateDelivery:{winner:lateWinner?.connections??null,lanes:lateWinner?.lanes??null,ranges:lateRanges}};
 }
 
+/** Observed timing envelopes can only widen as repetitions arrive. If even
+ * the current envelopes cannot satisfy the existing selection rule, another
+ * repetition cannot repair them. Unseen candidates remain possible.
+ */
+export function scoutStopDecision(samples,fallback=3) {
+  if(!Array.isArray(samples)||!samples.length||samples.some(s=>!s||!validLanes(s.lanes)||s.connections!==s.lanes.length||!['screen','confirm'].includes(s.stage)||!Number.isFinite(s.elapsedMs)||s.elapsedMs<=0))return null;
+  const screen=samples.filter(s=>s.stage==='screen'),confirm=samples.filter(s=>s.stage==='confirm');
+  const ranges=sampleRanges(screen);
+  const possible=CANDIDATES.filter(lanes=>{
+    const own=ranges.find(r=>laneKey(r.lanes)===laneKey(lanes));
+    return !own||ranges.every(other=>other===own||own.max<other.min);
+  });
+  const result=reason=>({reason,possibleLanes:possible.map(lanes=>[...lanes]),
+    evidence:[{stage:'screen',ranges},...(confirm.length?[{stage:'confirm',ranges:sampleRanges(confirm)}]:[])]});
+  if(!possible.length)return result('screen_ranges_overlap_irrecoverable');
+  const fallbackLanes=Array.from({length:fallback},(_,i)=>i);
+  if(possible.length===1&&laneKey(possible[0])===laneKey(fallbackLanes))return result('only_fallback_can_still_qualify');
+  if(!confirm.length)return null;
+  const winner=clearWinner(ranges);if(!winner)return result('screen_ranges_overlap_irrecoverable');
+  const confirmation=sampleRanges(confirm),own=confirmation.find(r=>laneKey(r.lanes)===laneKey(winner.lanes));
+  if(own&&confirmation.some(other=>other!==own&&own.max>=other.min))return result('confirmation_cannot_confirm_screen_winner');
+  if(confirm.some(s=>lateRate(s)===null))return result('late_delivery_unavailable');
+  const tails=sampleRanges(confirm,'lateRate'),tail=tails.find(r=>laneKey(r.lanes)===laneKey(winner.lanes));
+  if(tail&&tails.some(other=>other!==tail&&tail.min<=other.max))return result('late_delivery_cannot_confirm_screen_winner');
+  return null;
+}
+
 /** Native drain events, not polling. The byte cap bounds each live association;
  * cancellation/close settle the wait without adding a timeout or retry timer.
  */
@@ -99,10 +126,10 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
   const permitted=peer=>!suspended&&trusted(peer);
   const live=s=>active===s&&!closed&&!s.stopped;
   const notify=(s,report)=>onReport({peer:s.peer,id:s.id,scope:'synthetic_transfer_connections',...report});
-  function wire(s,body){if(live(s))send(s.peer,{type:'transferScout',version:4,id:s.id,...body});}
+  function wire(s,body){if(live(s))send(s.peer,{type:'transferScout',version:5,id:s.id,...body});}
   function releasePool(reason='pool_released',notifyPeer=true) {
     const pool=parked;if(!pool)return;parked=null;
-    if(notifyPeer&&trusted(pool.peer))send(pool.peer,{type:'transferScout',version:4,id:pool.id,action:'release'});
+    if(notifyPeer&&trusted(pool.peer))send(pool.peer,{type:'transferScout',version:5,id:pool.id,action:'release'});
     for(const row of pool.lanes)if(row&&!row.claimed){
       row.pc.ondatachannel=null;row.pc.onconnectionstatechange=null;row.pc.onicecandidate=null;
       if(row.pending){row.pending.onmessage=null;row.pending.close();}
@@ -117,7 +144,7 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
     if(notifyPeer)wire(s,{action:'cancel',reason});
     const partial=partialSample(s);
     s.stopped=true;active=null;s.controller.abort();
-    s.ack?.reject(Error(reason));s.ack=null;s.planAck?.reject(Error(reason));s.planAck=null;
+    s.ack?.reject(Error(reason));s.ack=null;s.planAck?.reject(Error(reason));s.planAck=null;s.endAck?.reject(Error(reason));s.endAck=null;
     if(reason==='complete'){
       releasePool();parked=s;
       for(const row of s.lanes){
@@ -203,7 +230,7 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
       if(data.length>512)throw Error('Invalid probe data');
       const body=JSON.parse(data);
       if(body.action==='sample') {
-        if(s.initiator?(s.oneWay||s.samples.length!==20):s.started)throw Error('Invalid probe data');
+        if(s.initiator?(s.oneWay||!s.sentDirection):s.started)throw Error('Invalid probe data');
         if(body.round!==s.nextReceive||!Number.isInteger(body.round)||body.round<0||body.round>=2*ROUNDS)throw Error('Invalid probe data');
         const spec=specification(s,body.round,s.incomingFinalists);
         if(!spec.lanes.includes(lane)||body.bytes!==spec.perLane)throw Error('Invalid probe data');
@@ -212,9 +239,15 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
         s.receiving.counts.set(lane,0);s.receiving.arrivals.set(lane,{lane,bytes:0,messages:0,firstAtMs:null,lastAtMs:null,maxGapMs:0,largestGaps:[],completeAtMs:null});return;
       }
       if(lane!==0&&!(['progress','ack'].includes(body.action)&&s.ack?.controlLane===lane))throw Error('Invalid probe data');
+      if(body.action==='endDirection'){
+        const base=s.initiator?ROUNDS:0,end=base+ROUNDS;
+        if((s.initiator&&(s.oneWay||!s.sentDirection))||(!s.initiator&&s.started)||s.receiving||s.receiveEnded||s.nextReceive<base+1||s.nextReceive>=end||body.nextRound!==end)throw Error('Invalid probe data');
+        s.nextReceive=end;s.receiveEnded=true;rowSend(s,0,{action:'endDirectionAck'});return;
+      }
+      if(body.action==='endDirectionAck'&&s.endAck){const ack=s.endAck;s.endAck=null;ack.resolve();return;}
       if(body.action==='finalists'){
         const expected=s.initiator?ROUNDS+SCREEN_ROUNDS+1:SCREEN_ROUNDS+1;
-        if((s.initiator&&(s.oneWay||s.samples.length!==20))||(!s.initiator&&s.started)||s.nextReceive!==expected||s.incomingFinalists||!Array.isArray(body.lanes)||body.lanes.length!==3||body.lanes.some((lanes,i)=>!validLanes(lanes)||lanes.length!==i+1))throw Error('Invalid probe data');
+        if((s.initiator&&(s.oneWay||!s.sentDirection))||(!s.initiator&&s.started)||s.nextReceive!==expected||s.incomingFinalists||!Array.isArray(body.lanes)||body.lanes.length!==3||body.lanes.some((lanes,i)=>!validLanes(lanes)||lanes.length!==i+1))throw Error('Invalid probe data');
         s.incomingFinalists=body.lanes.map(lanes=>[...lanes]);rowSend(s,0,{action:'finalistsAck'});return;
       }
       if(body.action==='finalistsAck'&&s.planAck){const ack=s.planAck;s.planAck=null;ack.resolve();return;}
@@ -222,7 +255,7 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
       if(body.action==='ack'&&s.ack?.round===body.round&&s.ack.controlLane===lane){const ack=s.ack;s.ack=null;ack.resolve();return;}
       if(body.action==='turn'&&!s.oneWay&&!s.initiator&&s.nextReceive===ROUNDS&&!s.started){s.started=true;void run(s,ROUNDS).catch(e=>fail(s,e));return;}
       if(body.action==='finished'&&(s.oneWay?!s.initiator&&s.nextReceive===ROUNDS:s.initiator&&s.nextReceive===2*ROUNDS)){s.finishing=true;rowSend(s,0,{action:'finishAck'});return;}
-      if(body.action==='finishAck'&&(s.oneWay?s.initiator:!s.initiator)&&s.running===false&&s.samples.length===20){wire(s,{action:'complete'});retire(s,'complete',false);return;}
+      if(body.action==='finishAck'&&(s.oneWay?s.initiator:!s.initiator)&&s.running===false&&s.sentDirection){wire(s,{action:'complete'});retire(s,'complete',false);return;}
       throw Error('Invalid probe data');
     }
     const receiving=s.receiving;
@@ -302,13 +335,24 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
       s.outgoing=null;
       if(!sample.warmup)s.samples.push(sample);
       notify(s,{phase:'preflight-sample',direction:'outgoing',...sample});snapshot(s,'preflight-sample-stats',round);
+      if(!sample.warmup&&round<base+ROUNDS-1){
+        const stop=scoutStopDecision(s.samples,fallback);
+        if(stop){
+          s.earlyStop=stop;
+          const ended=new Promise((resolve,reject)=>{s.endAck={resolve,reject};});void ended.catch(()=>{});
+          rowSend(s,0,{action:'endDirection',nextRound:base+ROUNDS});await ended;if(!live(s))return;break;
+        }
+      }
     }
     s.running=false;
-    const selection=selectTransferSetup(s.samples,fallback);
-    const result={version:4,id:s.id,scope:'synthetic_transfer_connections',direction:'outgoing',...selection,
+    const selection=s.earlyStop?{status:'inconclusive',connections:fallback,lanes:Array.from({length:fallback},(_,i)=>i),...s.earlyStop}:selectTransferSetup(s.samples,fallback);
+    const result={version:5,id:s.id,scope:'synthetic_transfer_connections',direction:'outgoing',...selection,
+      stoppedEarly:!!s.earlyStop,completedSamples:s.samples.length,unrunSamples:20-s.samples.length,
+      directionPayloadBytes:s.bytes+s.samples.reduce((total,sample)=>total+sample.bytes,0),
+      directionPayloadAvoidedBytes:(1+SCREEN_ROUNDS+CONFIRM_ROUNDS*CONFIRM_SCALE)*s.bytes-(s.bytes+s.samples.reduce((total,sample)=>total+sample.bytes,0)),
       sampleBytes:s.bytes,confirmationBytes:s.bytes*CONFIRM_SCALE,payloadBudgetBytes:(s.oneWay?1:2)*(1+SCREEN_ROUNDS+CONFIRM_ROUNDS*CONFIRM_SCALE)*s.bytes,queueHighBytes:QUEUE_BYTES,samples:structuredClone(s.samples),validFor:'current_peer_connection_generation',
       limitations:['bounded_samples_include_ack_latency','per_association_probe_queue_cap','file_handoff_requires_retained_associations','does_not_measure_disk_or_hashing','does_not_establish_link_capacity']};
-    results.set(s.peer,result);notify(s,{phase:'preflight-result',...result});
+    s.sentDirection=true;results.set(s.peer,result);notify(s,{phase:'preflight-result',...result});
     if(base===0&&!s.oneWay)rowSend(s,0,{action:'turn'});else rowSend(s,0,{action:'finished'});
   }
   async function signal(s,lane,body) {
@@ -342,14 +386,14 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
       }catch(e){if(active)retire(active,'setup_failed');return false;}
     },
     receive(peer,body) {
-      if(!trusted(peer)||body?.type!=='transferScout'||body.version!==4||!validId(body.id))return false;
+      if(!trusted(peer)||body?.type!=='transferScout'||body.version!==5||!validId(body.id))return false;
       if(body.action==='release'&&parked?.peer===peer&&parked.id===body.id){releasePool('peer_released',false);return true;}
       if(body.action==='init') {
         if(active?.peer===peer&&active.id===body.id)return true;
         const oneWay=body.oneWay===true;
         const invalid=typeof body.oneWay!=='boolean'||(!oneWay&&self()<peer)||!Number.isInteger(body.sampleBytes)||body.sampleBytes<3072||body.sampleBytes>sampleBytes||body.sampleBytes%6||typeof body.reverse!=='boolean';
         if(!invalid&&oneWay&&!demanded.has(peer)&&active?.peer===peer&&!active.oneWay)retire(active,'sender_intent',false);
-        if(invalid||suspended||active||parked||busy()||(oneWay?demanded.has(peer):attempted.has(peer))||attempted.size>=128){send(peer,{type:'transferScout',version:4,id:body.id,action:'cancel',reason:invalid?'profile_not_supported':'busy'});return false;}
+        if(invalid||suspended||active||parked||busy()||(oneWay?demanded.has(peer):attempted.has(peer))||attempted.size>=128){send(peer,{type:'transferScout',version:5,id:body.id,action:'cancel',reason:invalid?'profile_not_supported':'busy'});return false;}
         try{if(oneWay)demanded.add(peer);create(peer,body.id,false,body.sampleBytes,body.reverse,oneWay);}catch{if(active)retire(active,'setup_failed');}return true;
       }
       const s=active;if(!s||s.peer!==peer||s.id!==body.id)return false;
