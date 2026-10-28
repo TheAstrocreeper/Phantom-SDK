@@ -1,6 +1,7 @@
 import {defaultRTCConfiguration} from './rtc-configuration.js';
 import {scoutConnection,compareScoutTransport} from './connection-scout.js';
 import {makeReceiverEvidence,readReceiverEvidence} from './scout-receiver-evidence.js';
+import {buildScoutConnectionPlan} from './scout-connection-plan.js';
 
 export const TRANSFER_SCOUT_PROTOCOL = 'phantom-transfer-scout-v6';
 const LANES = 3, MAX_BYTES = 3 * 1024 * 1024, DEFAULT_BYTES = 768 * 1024;
@@ -411,6 +412,7 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
       transportObservations:structuredClone(s.transportObservations),
       receiverEvidence:receiverEvidence(s),
       limitations:['bounded_samples_include_ack_latency','per_association_probe_queue_cap','file_handoff_requires_retained_associations','does_not_measure_disk_or_hashing','does_not_establish_link_capacity','browser_stats_do_not_expose_kernel_receive_drops_or_socket_buffer_limits']};
+    result.connectionPlan=buildScoutConnectionPlan(result,{fallback});
     s.sentDirection=true;results.set(s.peer,result);notify(s,{phase:'preflight-result',...result});
     if(base===0&&!s.oneWay)rowSend(s,0,{action:'turn'});else rowSend(s,0,{action:'finished'});
   }
@@ -453,7 +455,7 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
         if(!s||!Number.isInteger(round)||!s.sentRounds.has(round)||s.remoteEvidence.has(round))return false;
         const observation=readReceiverEvidence(body.observation,s.sentRounds.get(round));if(!observation)return false;
         s.remoteEvidence.set(round,observation);
-        const status=s.remoteEvidence.size===s.sentRounds.size?'complete':'partial',result=results.get(peer);if(result?.id===s.id)result.receiverEvidence=receiverEvidence(s);
+        const status=s.remoteEvidence.size===s.sentRounds.size?'complete':'partial',result=results.get(peer);if(result?.id===s.id){result.receiverEvidence=receiverEvidence(s);result.connectionPlan=buildScoutConnectionPlan(result,{fallback});}
         notify(s,{phase:'preflight-receiver-evidence',direction:'incoming_report',observation,status,expectedRounds:s.sentRounds.size,receivedRounds:s.remoteEvidence.size});return true;
       }
       if(body.action==='init') {

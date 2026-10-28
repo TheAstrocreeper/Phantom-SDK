@@ -8,7 +8,7 @@ const root=resolve(fileURLToPath(new URL('../../',import.meta.url)));
 const require=createRequire(new URL('../swarm/package.json',import.meta.url)),{chromium}=require('playwright');
 const server=createServer(async(req,res)=>{try{
  const path=new URL(req.url,'http://localhost').pathname;if(path==='/'){res.setHeader('content-type','text/html');res.end('<!doctype html>');return;}
- const target=resolve(root,'.'+path);if(!target.startsWith(root+sep)||!(path.startsWith('/packages/')||path==='/tests/fixtures/scout-clock.js')||!path.endsWith('.js')){res.writeHead(403).end();return;}
+ const target=resolve(root,'.'+path);if(!target.startsWith(root+sep)||!(path.startsWith('/packages/')||['/tests/fixtures/scout-clock.js','/tests/fixtures/scout-receiver-model.js'].includes(path))||!path.endsWith('.js')){res.writeHead(403).end();return;}
  res.setHeader('content-type','text/javascript');res.end(await readFile(target));
 }catch{res.writeHead(404).end();}});
 await new Promise(r=>server.listen(0,'127.0.0.1',r));let browser;
@@ -21,6 +21,7 @@ try{
    const {createAdminIdentity}=await import('/packages/phantom-core/src/authorization.js');
    const ids=['1111111111111111','2222222222222222','3333333333333333'],leader=ids[2],admin=await createAdminIdentity();
    const {scoutClock}=await import('/tests/fixtures/scout-clock.js');
+   const {modelReceiverEvidence}=await import('/tests/fixtures/scout-receiver-model.js');
    const clocks=ids.map(()=>scoutClock({winner:mode==='early'?[0,1,2]:[1,2],queueWinner:mode==='queue'}));
    const callbacks=new Map(),events=[],pcs=[],scouted=new Set(),filePCs=new Set();let peak=0,fileQueuePeak=0;const source=mode==='send'?1:0,target=1-source;
    class RTC extends RTCPeerConnection{
@@ -31,7 +32,7 @@ try{
    const services=ids.map((id,i)=>createNetworkDistribution({networkId:'worm-browser',adminPublicKey:admin.publicKey,
     runtime:{crypto,performance:(mode==='pair'||mode==='early'||mode==='queue')?clocks[i]:performance,RTCPeerConnection:RTC},lifecycle:{issue:(action,target,fields)=>admin.sign({networkId:'worm-browser',action,target,...fields,operationId:crypto.randomUUID()})},
     core:{getState:()=>({peerId:id,leader,mirror:ids[1],role:i===2?'syscon1':i===1?'syscon2':'peer',state:'admitted',admitted:true}),
-     onEvent(fn){callbacks.set(id,fn);return()=>callbacks.delete(id);},command(type,{to,frame}){if(type==='PHANTOM_DIST_SEND')queueMicrotask(()=>callbacks.get(to)?.({type:'PHANTOM_DIST',payload:{from:id,frame}}));}},
+     onEvent(fn){callbacks.set(id,fn);return()=>callbacks.delete(id);},command(type,{to,frame}){if(['pair','early','queue'].includes(mode))frame=modelReceiverEvidence(frame,{winner:mode==='early'?[0,1,2]:[1,2],queueWinner:mode==='queue'});if(type==='PHANTOM_DIST_SEND')queueMicrotask(()=>callbacks.get(to)?.({type:'PHANTOM_DIST',payload:{from:id,frame}}));}},
     options:{intervalMs:10,batchSize:mode==='queue'?32:2,requestWindow:mode==='queue'?32:8,maxChunkBytes:262144,assignedRanges:true,transferLanes:3,capabilityExchange:true,transferScout:true,fileTimeline:true,scoutBeforeSend:mode==='send',rtcConfiguration:{iceServers:[]}},
     emit(type,data){if(type==='distributionScout')clocks[i].report(data);events.push({i,type,data});if(i===2&&type==='distributionJob')peak=Math.max(peak,services[2].snapshot().jobs.length);}}));
    for(const fn of callbacks.values())fn({type:'PRESENCE_ROSTER',payload:{list:ids.map(hKey=>({hKey}))}});

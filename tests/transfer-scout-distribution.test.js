@@ -4,6 +4,7 @@ import {createNetworkDistribution} from '../packages/phantom-core/src/network-di
 import {createAdminIdentity} from '../packages/phantom-core/src/authorization.js';
 import {memoryRTC} from './fixtures/memory-rtc.js';
 import {scoutClock} from './fixtures/scout-clock.js';
+import {modelReceiverEvidence} from './fixtures/scout-receiver-model.js';
 const ids=['1111111111111111','2222222222222222','3333333333333333'];
 async function until(predicate){const end=Date.now()+2500;while(!predicate()&&Date.now()<end)await new Promise(r=>setTimeout(r,5));assert.ok(predicate(),'expected state did not arrive');}
 async function fixture({thirdLeader=false,legacyLeader=false,legacyReceiver=false,dropScout=false,winner=[0],legacyLaneCoordinator=false,queueWinner=false}={}) {
@@ -20,7 +21,7 @@ async function fixture({thirdLeader=false,legacyLeader=false,legacyReceiver=fals
   const runtimeCrypto={subtle:crypto.subtle,getRandomValues:crypto.getRandomValues.bind(crypto),randomUUID:()=>`probe-${i}-${serial++}0`};
   return createNetworkDistribution({networkId:'scout-distribution',adminPublicKey:admin.publicKey,runtime:{crypto:runtimeCrypto,RTCPeerConnection:RTC,performance:clock},
    core:{getState:()=>({peerId:id,leader,mirror:ids[1],role:id===leader?'syscon1':i===1?'syscon2':'peer',state:'admitted',admitted:true}),
-    onEvent(fn){callbacks.set(id,fn);return()=>callbacks.delete(id);},command(type,{to,frame}){if(type!=='PHANTOM_DIST_SEND')return;frames.push(frame);if(legacyLeader&&frame.body.type==='rangeCapabilityAck')return;if(legacyLaneCoordinator&&frame.body.type==='rangeCapabilityAck')delete frame.body.scoutLaneScheduling;queueMicrotask(()=>callbacks.get(to)?.({type:'PHANTOM_DIST',payload:{from:id,frame}}));}},
+    onEvent(fn){callbacks.set(id,fn);return()=>callbacks.delete(id);},command(type,{to,frame}){if(type!=='PHANTOM_DIST_SEND')return;frame=modelReceiverEvidence(frame,{winner,queueWinner});frames.push(frame);if(legacyLeader&&frame.body.type==='rangeCapabilityAck')return;if(legacyLaneCoordinator&&frame.body.type==='rangeCapabilityAck')delete frame.body.scoutLaneScheduling;queueMicrotask(()=>callbacks.get(to)?.({type:'PHANTOM_DIST',payload:{from:id,frame}}));}},
    lifecycle:{issue:(action,target,fields)=>admin.sign({networkId:'scout-distribution',action,target,...fields,operationId:crypto.randomUUID()})},
    options:{intervalMs:10,jobTimeoutMs:5000,requestTimeoutMs:4000,batchSize:8,requestWindow:8,assignedRanges:true,transferLanes:3,capabilityExchange:true,transferScout:!(legacyReceiver&&i===1),scoutSampleBytes:98304},
    emit:(type,data)=>{if(type==='distributionScout')clock.report(data);events.push({i,type,data});}});

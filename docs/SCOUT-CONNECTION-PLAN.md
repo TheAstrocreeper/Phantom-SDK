@@ -1,0 +1,13 @@
+# Pre-transfer connection plan
+
+`buildScoutConnectionPlan` combines the existing sender qualification with receiver-reported delivery evidence. It returns the exact lane set and source queue policy to use for the retained association generation, together with reasons, rate/stall envelopes, sample counts, and explicit native receive-state uncertainty. Distribution scheduling and retained source-channel queue enforcement consume this plan before the file starts. No new probe rounds, timers, retries, or waits are added.
+
+A lane winner must first satisfy the existing screening, larger repeated confirmation, and late-delivery rules. The same confirmation rounds must have receiver reports showing a repeated rate advantage over both alternatives and no worse stall envelope: the winner's slowest rate exceeds each alternative's fastest rate, and its largest gap is no larger than each alternative's smallest maximum gap. Missing reports, overlapping results, or receiver regression retain the configured fallback lanes. A partial scout cannot be promoted by an attractive isolated result.
+
+A smaller queue must first satisfy the existing repeated sender total/late delivery improvement and exercised-capacity tests. Receiver reports must cover all four queue comparison rounds on the exact final lane set, confirm at least a 10% elapsed-time improvement across the repetition envelopes, and show no worse maximum-gap envelope. Otherwise the existing 16 MiB / 4 MiB queue defaults remain. If receiver evidence changes the chosen lanes, queue evidence from a different lane set cannot be applied.
+
+The fallback is usable, not a claim that it is optimal. Kernel UDP receive drops and actual socket limits stay unknown. Browser counters from differently timed observations are not interpreted as wire loss. Environment names such as Android do not select a profile. Plans apply only to the current retained connection generation; source, receiver, coordinator acknowledgment, and asset binding remain required for enforcement.
+
+`node tools/perf/scout-plan-report.mjs SUPPORT_LOG.json [...]` replays saved sender setup records without networking. It prefers the setup's latest returned receiver evidence, and prints the plan and tested-profile table. Logs without returned evidence get explicit fallback results.
+
+Policy tests provide controlled sender and receiver timings. Real Chrome enforcement tests retain real RTC connections, payloads, checksums, and counter observations, while their explicitly labeled synthetic selection modes model receiver timing too. Those modes verify policy and enforcement, not WAN performance improvement.
