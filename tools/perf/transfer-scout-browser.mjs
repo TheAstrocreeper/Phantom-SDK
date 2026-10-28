@@ -52,7 +52,7 @@ try{
    }finally{services.forEach(s=>s.close());}
   },mode);
   assert.equal(result.identical,true);assert.equal(result.coordinatorReceivedFile,false);assert.equal(result.scoutClosed,true);
-  if(mode==='complete'){assert.equal(result.scoutAssociations,6);assert.equal(result.samples,10);assert.equal(result.selection.samples.length,4);assert.ok(result.applied);assert.equal(result.applied.connections,result.selection.connections);assert.ok(result.peak<=result.selection.connections);}
+  if(mode==='complete'){assert.equal(result.scoutAssociations,6);assert.equal(result.samples,18);assert.equal(result.selection.samples.length,8);assert.ok(result.selection.samples.filter(s=>s.stage==='confirm').every(s=>s.bytes===3145728&&s.delivery.length>=3&&s.peakBufferedBytes.every(n=>n<=786432)));assert.ok(result.applied);assert.equal(result.applied.connections,result.selection.connections);assert.ok(result.peak<=result.selection.connections);}
   else assert.equal(result.cancelled,true);
   console.log(JSON.stringify(result));
  }

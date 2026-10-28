@@ -3,29 +3,47 @@
 Opt in with `distribution: {capabilityExchange:true, assignedRanges:true,
 transferScout:true, maxConnections:3}`. Capability exchange must be requested
 on the authenticated peer path, as Phantom Share already does on readiness.
-Both endpoints must advertise `phantom-transfer-scout-v1`; older peers continue
-using the previous file path. Native WebRTC is not involved.
+Both endpoints must advertise `phantom-transfer-scout-v2`; older peers continue
+using the previous file path without this probe. The v2 byte schedule is never
+sent to a v1 scout. Native WebRTC is not involved.
 
 The smaller peer ID owns one bounded exploration. It opens three independent
 RTC associations with the same RTC configuration as file jobs. Each direction
-gets one warm-up and four equal-byte deliveries in balanced 1/3/3/1 or 3/1/1/3
-order. Directions run consecutively. Payloads are pseudorandom bytes counted
-and discarded by the receiver, with completion acknowledgments on the probe's
-first data channel. Elapsed time uses only the sending endpoint's monotonic
-clock. No clocks are compared between devices. Default round size is 768 KiB;
-ten deliveries total, including warm-ups, use at most 7.5 MiB of payload plus
-signaling/framing overhead. `scoutSampleBytes` can configure 3 KiB–3 MiB per
-round, divisible by three. No retries or new timers are added.
+gets a warm-up, four screening deliveries, and four larger confirmations.
+Screening uses balanced 1/3/3/1 or 3/1/1/3 connection order; confirmation uses
+the opposite order. Directions run consecutively. Payloads are pseudorandom
+bytes counted and discarded by the receiver. Three bounded intermediate
+acknowledgments, when message boundaries permit them, report cumulative bytes;
+a final acknowledgment confirms completion. All elapsed times use the sender's
+monotonic clock. No clocks are compared between devices.
 
-The scout records per-round duration, actual message sizes, queue observations,
-and bounded local browser stats. It selects a connection count only when both
-observed delivery durations for one candidate beat both observations of the
-other. Otherwise the result explicitly says inconclusive and keeps three.
-Two repetitions are a screening measurement, not a statistical guarantee.
-Short synthetic deliveries include acknowledgment latency and omit disk,
-hashing, file framing and batch coordination. Probe associations are separate
-from subsequent file associations and can select different routes. This is
-not a measurement of the link's capacity or proof of sustained file speed.
+The initial sample defaults to 768 KiB; each confirmation carries four times
+that payload, or 3 MiB. Both directions together are capped at 31.5 MiB of
+payload plus signaling/framing overhead. `scoutSampleBytes` configures the base
+sample between 3 KiB and 3 MiB, divisible by three; the larger stage and total
+budget scale from that base. Each association's application queue is bounded
+at 768 KiB, resuming from native drain events below 384 KiB. Larger candidates
+pump all active associations concurrently. No retries or new timers are added.
+A silent native queue remains cancellable through the existing lifecycle.
+
+The scout records message sizes, delivery progress, queue peaks and bounded
+local browser stats. A short-run winner is only provisional. To replace the
+fallback, both repeated timings must beat both timings of the alternative at
+each payload size, the winner must agree between sizes, and the later portion
+of both confirmations must also beat the alternative. Missing, contradictory
+or overlapping evidence is explicitly inconclusive and keeps three. A later
+portion begins at the first recorded progress point between 50% and 75% of the
+payload and ends at completion; these are acknowledged-delivery rates, not NIC
+packet timestamps. Reports retain both stages and the reason for the decision.
+
+This is a bounded multiscale experiment, not a statistical guarantee or proof
+of steady-state throughput. It includes acknowledgment and browser scheduling
+latency. It omits file reading, hashing, file framing, storage and batching.
+Its per-association queue cap is a probe resource bound, not a tuning change to
+the file sender's watermarks. Probe associations are separate from file
+associations and may select different routes. The probe does not establish
+link capacity or prove that its choice wins for a full large file. Existing
+actual-file logs remain necessary for checking that predictive gap.
 
 Only outgoing evidence chooses outgoing transfers. Share captures the current
 selection when preparing a file for one agreed recipient. The selected limit
