@@ -149,11 +149,11 @@ function queueCapacity(dc,bytes,signal,high=QUEUE_BYTES,low=high/2) {
  * A silent peer can occupy that bounded slot until cancellation/disconnection;
  * it never blocks file selection. Payloads are counted and discarded on receipt.
  */
-export function createTransferScout({self,allowed,send,runtime=globalThis,configuration,comparison='queue',
+export function createTransferScout({self,allowed,send,runtime=globalThis,configuration,comparison='queue',prepareTransport=null,
   onReport=()=>{},busy=()=>false,sampleBytes=DEFAULT_BYTES,fallback=3,newId=()=>(runtime.crypto??globalThis.crypto).randomUUID()}) {
   if (![self,allowed,send,onReport,busy,newId].every(f => typeof f === 'function') ||
       !Number.isInteger(sampleBytes) || sampleBytes < 3 * 1024 || sampleBytes > MAX_BYTES || sampleBytes % 6 ||
-      (![1,2,3].includes(fallback)||!['queue','message'].includes(comparison))) throw TypeError('Invalid transfer scout configuration');
+      (![1,2,3].includes(fallback)||!['queue','message'].includes(comparison))||(prepareTransport!==null&&typeof prepareTransport!=='function')) throw TypeError('Invalid transfer scout configuration');
   let active=null,parked=null,closed=false,suspended=false;
   const demanded=new Set(),waiters=new Map();
   const attempted=new Set(),results=new Map(),crypto=runtime.crypto??globalThis.crypto;
@@ -165,10 +165,15 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
   const receiverEvidence=s=>({status:s.remoteEvidence.size===s.sentRounds.size&&s.sentRounds.size>0?'complete':s.remoteEvidence.size?'partial':'unavailable',
     expectedRounds:s.sentRounds.size,receivedRounds:s.remoteEvidence.size,observations:structuredClone([...s.remoteEvidence.values()].sort((a,b)=>a.round-b.round))});
   function wire(s,body){if(live(s))send(s.peer,{type:'transferScout',version:7,id:s.id,...body});}
+  function releasePrepared(s,row,lane,reason){
+    const prepared=row.preparedTransport;row.preparedTransport=null;if(!prepared?.release)return;
+    try{void Promise.resolve(prepared.release(reason)).then(observation=>{if(observation)notify(s,{phase:'preflight-native-socket',lane,status:'released',observation});}).catch(()=>notify(s,{phase:'preflight-native-socket',lane,status:'unavailable',reason:'native_release_failed'}));}catch{notify(s,{phase:'preflight-native-socket',lane,status:'unavailable',reason:'native_release_failed'});}
+  }
   function releasePool(reason='pool_released',notifyPeer=true) {
     const pool=parked;if(!pool)return;parked=null;
     if(notifyPeer&&trusted(pool.peer))send(pool.peer,{type:'transferScout',version:7,id:pool.id,action:'release'});
-    for(const row of pool.lanes)if(row&&!row.claimed){
+    for(const [lane,row] of pool.lanes.entries())if(row&&!row.claimed){
+      releasePrepared(pool,row,lane,reason);
       row.pc.ondatachannel=null;row.pc.onconnectionstatechange=null;row.pc.onicecandidate=null;
       if(row.pending){row.pending.onmessage=null;row.pending.close();}
       row.dc.onclose=null;row.dc.close();row.pc.close();
@@ -197,7 +202,8 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
       notify(s,{phase:'preflight',status:'complete',incomingSamples:s.incomingSamples,retainedAssociations:LANES});
       settleSend(s.peer);return;
     }
-    for(const lane of s.lanes){
+    for(const [index,lane] of s.lanes.entries()){
+      releasePrepared(s,lane,index,reason);
       lane.pc.onicecandidate=null;lane.pc.onconnectionstatechange=null;lane.pc.ondatachannel=null;
       if(lane.dc){lane.dc.onopen=null;lane.dc.onclose=null;lane.dc.onerror=null;lane.dc.onmessage=null;try{lane.dc.close();}catch{}}
       try{lane.pc.close();}catch{}
@@ -276,7 +282,18 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
   function bind(s,lane,dc) {
     if(!live(s)||s.lanes[lane].dc||dc.label!=='phantom-distribution-scout'||dc.ordered===false||dc.maxRetransmits!=null||dc.maxPacketLifeTime!=null){try{dc.close();}catch{}return;}
     const row=s.lanes[lane];row.dc=dc;dc.binaryType='arraybuffer';
-    const opened=()=>{if(!live(s))return;wire(s,{action:'ready',lane});maybeStart(s);};
+    const opened=()=>{
+      if(!live(s)||row.opening)return;row.opening=true;
+      const announce=()=>{if(live(s)){wire(s,{action:'ready',lane});maybeStart(s);}};
+      if(!prepareTransport){announce();return;}
+      void (async()=>{
+        let prepared;
+        try{prepared=await prepareTransport({peer:s.peer,id:s.id,lane,pc:row.pc,signal:s.controller.signal});}
+        catch{if(live(s))notify(s,{phase:'preflight-native-socket',lane,status:'unavailable',reason:'native_preparation_failed'});}
+        if(prepared){row.preparedTransport=prepared;if(!live(s)){releasePrepared(s,row,lane,'scout_cancelled');return;}if(prepared.report)notify(s,{phase:'preflight-native-socket',lane,status:'prepared',observation:prepared.report});}
+        announce();
+      })().catch(e=>fail(s,e));
+    };
     dc.onopen=opened;dc.onclose=()=>retire(s,'channel_closed');dc.onerror=()=>retire(s,'channel_error');
     dc.onmessage=e=>{try{receiveData(s,lane,e.data);}catch(error){fail(s,error);}};
     if(dc.readyState==='open')opened();
@@ -515,7 +532,7 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
       pool.asset=asset;row.claimed=true;row.pc.onicecandidate=null;row.pc.onconnectionstatechange=null;row.pc.ondatachannel=null;
       row.dc.onclose=null;row.dc.onmessage=null;row.dc.close();
       notify(pool,{phase:'preflight-handoff',lane:index,status:'claimed',jobId});
-      return {pc:row.pc,channel:row.pending??null,id:pool.id,lane:index};
+      return {pc:row.pc,channel:row.pending??null,id:pool.id,lane:index,releaseTransport:reason=>releasePrepared(pool,row,index,reason)};
     },
     get(peer){const result=results.get(peer);return result?{...structuredClone(result),transportAvailable:parked?.peer===peer&&!parked.asset}:null;},
     suspend(reason='file_selected'){suspended=true;if(active)retire(active,reason);},

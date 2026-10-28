@@ -74,7 +74,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
   }
   const capabilityExchange=options.capabilityExchange===true?createCapabilityExchange({send:frame,allowed:peerAllowed,localReport:localCapability,onReport:(peer,report)=>{emit('distributionCapability',{peer,report});if(report.protocols.includes(TRANSFER_SCOUT_PROTOCOL))preflight?.start(peer);}}):null;
   const agreement=capabilityExchange?createPlanAgreement({send:frame,allowed:peerAllowed,localReport:localCapability,remoteReport:peer=>capabilityExchange.get(peer),newId:()=>crypto.randomUUID(),onDecision:result=>emit('distributionPlanDecision',result)}):null;
-  const preflight=scoutEnabled?createTransferScout({self,allowed:peerAllowed,send:frame,runtime,configuration:options.rtcConfiguration,comparison:options.scoutComparison,sampleBytes:options.scoutSampleBytes,busy:()=>links.size>0,onReport:report=>emit('distributionScout',report)}):null;
+  const preflight=scoutEnabled?createTransferScout({self,allowed:peerAllowed,send:frame,runtime,configuration:options.rtcConfiguration,comparison:options.scoutComparison,prepareTransport:options.prepareScoutTransport??null,sampleBytes:options.scoutSampleBytes,busy:()=>links.size>0,onReport:report=>emit('distributionScout',report)}):null;
   function clearPeerSetup(peer){
     preflight?.drop(peer);
     for(const asset of assets.values()){
@@ -174,7 +174,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
     }
   }
   function payloadSend(link,data){link.dc.send(data);link.payloadEnd=link.submittedBytes;}
-  function closeLink(id){pendingSignals.delete(id);closedJobs.set(id,Date.now());const link=links.get(id);if(!link)return;scout(link,'closing');timeline(link,'close',{bufferedBytes:link.dc?.bufferedAmount??null});links.delete(id);link.sendController.abort();link.receiveController?.abort();files.flushTimings(link.peer,link.job.asset);if(link.readyTimer)clearTimeout(link.readyTimer);link.readyTimer=null;link.pc.onicecandidate=null;link.pc.onconnectionstatechange=null;link.pc.ondatachannel=null;if(link.dc){link.dc.onopen=null;link.dc.onmessage=null;link.dc.onclose=null;try{link.dc.close();}catch{}}try{link.pc.close();}catch{}link.pendingIce.length=0;link.binary=null;emit('distributionConnectionClosed',{jobId:id,peer:link.peer});}
+  function closeLink(id){pendingSignals.delete(id);closedJobs.set(id,Date.now());const link=links.get(id);if(!link)return;scout(link,'closing');timeline(link,'close',{bufferedBytes:link.dc?.bufferedAmount??null});link.releaseTransport?.('file_connection_closed');link.releaseTransport=null;links.delete(id);link.sendController.abort();link.receiveController?.abort();files.flushTimings(link.peer,link.job.asset);if(link.readyTimer)clearTimeout(link.readyTimer);link.readyTimer=null;link.pc.onicecandidate=null;link.pc.onconnectionstatechange=null;link.pc.ondatachannel=null;if(link.dc){link.dc.onopen=null;link.dc.onmessage=null;link.dc.onclose=null;try{link.dc.close();}catch{}}try{link.pc.close();}catch{}link.pendingIce.length=0;link.binary=null;emit('distributionConnectionClosed',{jobId:id,peer:link.peer});}
   async function receive(link){const job=link.job,startedAt=performance.now();let succeeded=false;
     emit('distributionBatchStarted',{jobId:job.id,batch:job.batch??0,total:job.indexes.length,peer:link.peer});try{
     await files.request(job.asset,{peers:[link.peer],indexes:job.indexes,signal:link.receiveController.signal,concurrentRanges:job.assigned===true});
@@ -269,7 +269,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
     const RTC=job.assigned===true?runtime.RTCPeerConnection:DistributionRTC;
     if(job.assigned===true&&!assignedRanges)throw Error('Assigned ranges are not supported');
     const retained=job.assigned===true&&job.source===self()?preflight?.take(peer,asset.outgoingSetup?.scoutId,undefined,job.asset,job.id,asset.outgoingSetup?.lanes??[0,1,2]):null;
-    const pc=retained?.pc??new RTC(options.rtcConfiguration??defaultRTCConfiguration());link={pc,peer,job,sendController:new AbortController(),started:false,pendingIce:[]};links.set(job.id,link);
+    const pc=retained?.pc??new RTC(options.rtcConfiguration??defaultRTCConfiguration());link={pc,peer,job,releaseTransport:retained?.releaseTransport??null,sendController:new AbortController(),started:false,pendingIce:[]};links.set(job.id,link);
     if(retained&&asset.outgoingQueuePolicy){
       link.queuePolicy={...asset.outgoingQueuePolicy};
       emit('distributionScout',{phase:'preflight-queue-applied',id:retained.id,peer,asset:job.asset,lane:retained.lane,jobId:job.id,policy:link.queuePolicy,enforcement:'retained_source_channel'});
@@ -295,7 +295,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
       if(!link.job.assigned||link.job.receiver!==self()||link.dc||link.pc.remoteDescription||typeof handoff.id!=='string'||!Number.isInteger(handoff.lane)||handoff.lane<0||handoff.lane>2)throw Error('Invalid scout handoff');
       const retained=preflight?.take(from,handoff.id,handoff.lane,link.job.asset,link.job.id);if(!retained)throw Error('Scout association unavailable');
       link.pc.onconnectionstatechange=null;link.pc.ondatachannel=null;link.pc.onicecandidate=null;link.pc.close();
-      link.pc=retained.pc;link.requireReady=true;link.reuse=reuseConnections&&body.reuseProtocol===2;configureLink(link);
+      link.pc=retained.pc;link.releaseTransport=retained.releaseTransport;link.requireReady=true;link.reuse=reuseConnections&&body.reuseProtocol===2;configureLink(link);
       emit('distributionScout',{phase:'preflight-handoff',status:'bound',peer:from,id:retained.id,lane:retained.lane,jobId:link.job.id});
       if(retained.channel)bind(link,retained.channel);return;
     }

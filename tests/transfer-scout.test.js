@@ -32,7 +32,7 @@ test('a burst advantage cannot hide slower late delivery or missing progress evi
  const absent=samples();delete absent[14].delivery;assert.equal(selectTransferSetup(absent).reason,'late_delivery_unavailable');
  const reordered=samples();reordered[14].delivery[1].elapsedMs=999;assert.equal(selectTransferSetup(reordered).status,'inconclusive');
 });
-function fixture({drop=false,maxMessageSize=262144,sampleBytes=98304,queueModel=false,freezeDrain=false,clockWinner=[0],dropEndAck=false,stats=null,dropEvidence=false,comparison='queue',dropMessage=false}={}){
+function fixture({drop=false,maxMessageSize=262144,sampleBytes=98304,queueModel=false,freezeDrain=false,clockWinner=[0],dropEndAck=false,stats=null,dropEvidence=false,comparison='queue',dropMessage=false,prepareTransport=null}={}){
  const frames=[],reports=[],pcs=[],payloads=[],peaks=[],messages=[],channelRound=new Map();
  const upgrade=ch=>{if(ch.addEventListener)return;const events=new EventTarget();ch.addEventListener=events.addEventListener.bind(events);ch.removeEventListener=events.removeEventListener.bind(events);ch.dispatchEvent=events.dispatchEvent.bind(events);};
  const Base=memoryRTC({maxMessageSize,onSend(data,ch){
@@ -45,7 +45,7 @@ function fixture({drop=false,maxMessageSize=262144,sampleBytes=98304,queueModel=
   let serial=0;
   const clock=queueModel?performance:scoutClock({maxMessageSize,sampleBytes,winner:clockWinner});
   return createTransferScout({self:()=>id,allowed:p=>p===ids[1-i],runtime:{crypto,RTCPeerConnection:RTC,performance:clock},
-   send(peer,body){frames.push({from:id,peer,body});if(dropEvidence&&body.action==='receiverEvidence')return;queueMicrotask(()=>nodes[1-i].receive(id,body));},newId:()=> `scout-${i}-${serial++}-0`,sampleBytes,comparison,onReport:r=>{clock.report?.(r);reports.push({i,...r});}});
+   send(peer,body){frames.push({from:id,peer,body});if(dropEvidence&&body.action==='receiverEvidence')return;queueMicrotask(()=>nodes[1-i].receive(id,body));},newId:()=> `scout-${i}-${serial++}-0`,sampleBytes,comparison,prepareTransport,onReport:r=>{clock.report?.(r);reports.push({i,...r});}});
  });
  return {nodes,frames,reports,pcs,payloads,peaks,messages,close:()=>nodes.forEach(n=>n.close())};
 }
@@ -368,5 +368,28 @@ test('cancelling a silent message comparison settles preparation without applyin
   const waiting=f.nodes[0].forSend(ids[1]);await settle(()=>f.payloads.some(p=>p.round>=21));
   f.nodes[0].suspend('send_without_waiting');assert.equal(await waiting,null);
   const stopped=f.reports.find(r=>r.reason==='send_without_waiting');assert.equal(stopped.partial.outgoing.stage,'message');assert.equal(stopped.messageSamples.length,0);assert.equal(f.nodes[0].get(ids[1]),null);
+ }finally{f.close();}
+});
+
+
+test('prepared native resources follow retained ownership and are released exactly once',async()=>{
+ const releases=[];const f=fixture({prepareTransport:async({id,lane})=>({report:{status:'observed'},release:async reason=>{releases.push({id,lane,reason});return {status:'observed'};}})});
+ try{
+  const result=await f.nodes[0].forSend(ids[1]);await settle(()=>f.frames.some(r=>r.body.action==='complete'));
+  assert.equal(f.reports.filter(r=>r.phase==='preflight-native-socket'&&r.status==='prepared').length,6);
+  const source=f.nodes[0].take(ids[1],result.id,0,'asset-native'),target=f.nodes[1].take(ids[0],result.id,0,'asset-native');
+  f.close();await settle(()=>releases.length===4);source.releaseTransport('file_connection_closed');source.releaseTransport('duplicate_close');target.releaseTransport('file_connection_closed');
+  await settle(()=>releases.length===6);source.pc.close();target.pc.close();assert.equal(releases.filter(r=>r.reason==='duplicate_close').length,0);
+ }finally{f.close();}
+});
+test('cancelling pending native preparation settles send intent and releases late resources without payload',async()=>{
+ const pending=[],releases=[];const f=fixture({prepareTransport:()=>new Promise(resolve=>pending.push(resolve))});try{
+  const waiting=f.nodes[0].forSend(ids[1]);await settle(()=>pending.length===6);assert.equal(f.payloads.length,0);f.nodes[0].suspend();assert.equal(await waiting,null);
+  for(const resolve of pending)resolve({release:reason=>{releases.push(reason);return null;}});await settle(()=>releases.length===6);assert.equal(f.payloads.length,0);
+ }finally{f.close();}
+});
+test('an unavailable native observer is reported and does not prevent the browser scout',async()=>{
+ const f=fixture({prepareTransport:async()=>{throw Error('not supported');}});try{
+  const result=await f.nodes[0].forSend(ids[1]);assert.ok(result);assert.ok(f.reports.some(r=>r.phase==='preflight-native-socket'&&r.reason==='native_preparation_failed'));
  }finally{f.close();}
 });
