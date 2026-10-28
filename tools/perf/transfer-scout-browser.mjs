@@ -73,6 +73,9 @@ try{
   if(mode!=='cancel'){assert.equal(result.selection.queueSamples.length,4);assert.equal(result.selection.queueComparisonPayloadBytes,36*1024*1024);assert.ok(result.selection.queueSamples.every(s=>s.bytes===9437184&&s.lanes.join(',')===result.selection.lanes.join(',')));}
   if(mode!=='cancel'){
    assert.ok(result.transportEvidence.some(r=>r.phase==='preflight-receive-stats'));
+   assert.equal(result.selection.receiverEvidence.status,'complete');
+   assert.equal(result.selection.receiverEvidence.receivedRounds,result.selection.completedSamples+5);
+   assert.ok(result.selection.receiverEvidence.observations.every(r=>r.clock==='receiver_monotonic'&&r.lanes.reduce((n,l)=>n+l.bytes,0)===r.bytes));
    for(const endpoint of [0,1])assert.ok(result.transportEvidence.some(r=>r.endpoint===endpoint&&r.current?.packetsReceived!==null&&r.current?.packetsReceived!==undefined));
    assert.ok(result.transportEvidence.every(r=>r.change.kernelReceiveDrops.status==='unavailable'));
   }

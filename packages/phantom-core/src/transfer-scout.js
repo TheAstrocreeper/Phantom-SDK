@@ -1,5 +1,6 @@
 import {defaultRTCConfiguration} from './rtc-configuration.js';
 import {scoutConnection,compareScoutTransport} from './connection-scout.js';
+import {makeReceiverEvidence,readReceiverEvidence} from './scout-receiver-evidence.js';
 
 export const TRANSFER_SCOUT_PROTOCOL = 'phantom-transfer-scout-v6';
 const LANES = 3, MAX_BYTES = 3 * 1024 * 1024, DEFAULT_BYTES = 768 * 1024;
@@ -146,6 +147,8 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
   const permitted=peer=>!suspended&&trusted(peer);
   const live=s=>active===s&&!closed&&!s.stopped;
   const notify=(s,report)=>onReport({peer:s.peer,id:s.id,scope:'synthetic_transfer_connections',...report});
+  const receiverEvidence=s=>({status:s.remoteEvidence.size===s.sentRounds.size&&s.sentRounds.size>0?'complete':s.remoteEvidence.size?'partial':'unavailable',
+    expectedRounds:s.sentRounds.size,receivedRounds:s.remoteEvidence.size,observations:structuredClone([...s.remoteEvidence.values()].sort((a,b)=>a.round-b.round))});
   function wire(s,body){if(live(s))send(s.peer,{type:'transferScout',version:6,id:s.id,...body});}
   function releasePool(reason='pool_released',notifyPeer=true) {
     const pool=parked;if(!pool)return;parked=null;
@@ -216,7 +219,7 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
   }
   function create(peer,id,initiator,bytes,reverse,oneWay=false) {
     const s={peer,id,initiator,bytes,reverse,oneWay,lanes:[],ready:new Set(),started:false,stopped:false,
-      receiving:null,nextReceive:initiator?ROUNDS:0,controller:new AbortController(),samples:[],queueSamples:[],incomingSamples:[],transportObservations:[],outgoing:null,ack:null,running:false,receivedRounds:0,payload:new Uint8Array(262144)};
+      receiving:null,nextReceive:initiator?ROUNDS:0,controller:new AbortController(),samples:[],queueSamples:[],incomingSamples:[],transportObservations:[],sentRounds:new Map(),remoteEvidence:new Map(),outgoing:null,ack:null,running:false,receivedRounds:0,payload:new Uint8Array(262144)};
     active=s;attempted.add(peer);results.delete(peer);
     for(let offset=0;offset<s.payload.length;offset+=65536)crypto.getRandomValues(s.payload.subarray(offset,offset+65536));
     for(let lane=0;lane<LANES;lane++) {
@@ -319,6 +322,8 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
     }
     if(receiving.counts.size===receiving.spec.connections&&[...receiving.counts.values()].every(n=>n===receiving.spec.perLane)) {
       const observed=incomingSample(receiving,true);s.incomingSamples.push(observed);notify(s,{phase:'preflight-receive-sample',direction:'incoming',...observed});
+      try{wire(s,{action:'receiverEvidence',observation:makeReceiverEvidence(observed,s.transportObservations)});}
+      catch{notify(s,{phase:'preflight-receiver-evidence-unavailable',round:receiving.round,reason:'control_send_failed'});}
       s.nextReceive++;s.receivedRounds++;s.receiving=null;rowSend(s,receiving.spec.lanes[0],{action:'ack',round:receiving.round});
       snapshot(s,'preflight-receive-stats',receiving.round);
     }
@@ -341,6 +346,7 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
         rowSend(s,0,{action:'queuePlan',lanes:s.outgoingQueueLanes});await agreed;if(!live(s))return;
       }
       const spec=specification(s,round),{stage,connections,lanes,perLane,bytes}=spec;
+      s.sentRounds.set(round,spec);
       const queueHigh=spec.queueHighBytes??QUEUE_BYTES,queueLow=spec.queueLowBytes??queueHigh/2;
       const delivery=[{bytes:0,elapsedMs:0}];
       const ack=new Promise((resolve,reject)=>{s.ack={round,resolve,reject,bytes,delivery,controlLane:lanes[0],startedAt:null};});
@@ -403,6 +409,7 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
       directionPayloadAvoidedBytes:(1+SCREEN_ROUNDS+CONFIRM_ROUNDS*CONFIRM_SCALE)*s.bytes-(s.bytes+s.samples.reduce((total,sample)=>total+sample.bytes,0)),
       sampleBytes:s.bytes,confirmationBytes:s.bytes*CONFIRM_SCALE,payloadBudgetBytes:(s.oneWay?1:2)*(1+SCREEN_ROUNDS+CONFIRM_ROUNDS*CONFIRM_SCALE+QUEUE_ROUNDS*QUEUE_SAMPLE_SCALE)*s.bytes,queueHighBytes:QUEUE_BYTES,samples:structuredClone(s.samples),validFor:'current_peer_connection_generation',
       transportObservations:structuredClone(s.transportObservations),
+      receiverEvidence:receiverEvidence(s),
       limitations:['bounded_samples_include_ack_latency','per_association_probe_queue_cap','file_handoff_requires_retained_associations','does_not_measure_disk_or_hashing','does_not_establish_link_capacity','browser_stats_do_not_expose_kernel_receive_drops_or_socket_buffer_limits']};
     s.sentDirection=true;results.set(s.peer,result);notify(s,{phase:'preflight-result',...result});
     if(base===0&&!s.oneWay)rowSend(s,0,{action:'turn'});else rowSend(s,0,{action:'finished'});
@@ -440,6 +447,15 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
     receive(peer,body) {
       if(!trusted(peer)||body?.type!=='transferScout'||body.version!==6||!validId(body.id))return false;
       if(body.action==='release'&&parked?.peer===peer&&parked.id===body.id){releasePool('peer_released',false);return true;}
+      if(body.action==='receiverEvidence'){
+        const s=active?.peer===peer&&active.id===body.id?active:parked?.peer===peer&&parked.id===body.id?parked:null;
+        const round=body.observation?.round;
+        if(!s||!Number.isInteger(round)||!s.sentRounds.has(round)||s.remoteEvidence.has(round))return false;
+        const observation=readReceiverEvidence(body.observation,s.sentRounds.get(round));if(!observation)return false;
+        s.remoteEvidence.set(round,observation);
+        const status=s.remoteEvidence.size===s.sentRounds.size?'complete':'partial',result=results.get(peer);if(result?.id===s.id)result.receiverEvidence=receiverEvidence(s);
+        notify(s,{phase:'preflight-receiver-evidence',direction:'incoming_report',observation,status,expectedRounds:s.sentRounds.size,receivedRounds:s.remoteEvidence.size});return true;
+      }
       if(body.action==='init') {
         if(active?.peer===peer&&active.id===body.id)return true;
         const oneWay=body.oneWay===true;

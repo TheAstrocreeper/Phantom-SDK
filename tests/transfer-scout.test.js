@@ -32,7 +32,7 @@ test('a burst advantage cannot hide slower late delivery or missing progress evi
  const absent=samples();delete absent[14].delivery;assert.equal(selectTransferSetup(absent).reason,'late_delivery_unavailable');
  const reordered=samples();reordered[14].delivery[1].elapsedMs=999;assert.equal(selectTransferSetup(reordered).status,'inconclusive');
 });
-function fixture({drop=false,maxMessageSize=262144,sampleBytes=98304,queueModel=false,freezeDrain=false,clockWinner=[0],dropEndAck=false,stats=null}={}){
+function fixture({drop=false,maxMessageSize=262144,sampleBytes=98304,queueModel=false,freezeDrain=false,clockWinner=[0],dropEndAck=false,stats=null,dropEvidence=false}={}){
  const frames=[],reports=[],pcs=[],payloads=[],peaks=[],messages=[],channelRound=new Map();
  const upgrade=ch=>{if(ch.addEventListener)return;const events=new EventTarget();ch.addEventListener=events.addEventListener.bind(events);ch.removeEventListener=events.removeEventListener.bind(events);ch.dispatchEvent=events.dispatchEvent.bind(events);};
  const Base=memoryRTC({maxMessageSize,onSend(data,ch){
@@ -45,7 +45,7 @@ function fixture({drop=false,maxMessageSize=262144,sampleBytes=98304,queueModel=
   let serial=0;
   const clock=queueModel?performance:scoutClock({maxMessageSize,sampleBytes,winner:clockWinner});
   return createTransferScout({self:()=>id,allowed:p=>p===ids[1-i],runtime:{crypto,RTCPeerConnection:RTC,performance:clock},
-   send(peer,body){frames.push({from:id,peer,body});queueMicrotask(()=>nodes[1-i].receive(id,body));},newId:()=> `scout-${i}-${serial++}-0`,sampleBytes,onReport:r=>{clock.report?.(r);reports.push({i,...r});}});
+   send(peer,body){frames.push({from:id,peer,body});if(dropEvidence&&body.action==='receiverEvidence')return;queueMicrotask(()=>nodes[1-i].receive(id,body));},newId:()=> `scout-${i}-${serial++}-0`,sampleBytes,onReport:r=>{clock.report?.(r);reports.push({i,...r});}});
  });
  return {nodes,frames,reports,pcs,payloads,peaks,messages,close:()=>nodes.forEach(n=>n.close())};
 }
@@ -311,4 +311,36 @@ test('both endpoints retain ordered per-lane counter evidence without waiting fo
  const blocked=fixture({stats:()=>new Promise(()=>{})});
  try{blocked.nodes[0].start(ids[1]);await settle(()=>blocked.frames.some(r=>r.body.action==='complete'));assert.equal(blocked.nodes[0].get(ids[1]).status,'measured');}
  finally{blocked.close();}
+});
+
+
+test('receiver reports return actual rounds to each sender with bounded detached evidence',async()=>{
+ const f=fixture();try{
+  f.nodes[0].start(ids[1]);await settle(()=>f.frames.some(r=>r.body.action==='complete'));
+  for(const [i,node] of f.nodes.entries()){
+   const result=node.get(ids[1-i]),evidence=result.receiverEvidence;
+   assert.equal(evidence.status,'complete');assert.equal(evidence.expectedRounds,result.completedSamples+5);
+   assert.equal(evidence.receivedRounds,evidence.expectedRounds);assert.ok(evidence.observations.length<=25);
+   assert.ok(evidence.observations.every(r=>r.provenance==='peer_reported'&&r.clock==='receiver_monotonic'));
+   assert.ok(evidence.observations.every(r=>r.lanes.reduce((n,l)=>n+l.bytes,0)===r.bytes));
+   assert.ok(evidence.observations.every(r=>r.round>=(i?25:0)&&r.round<(i?50:25)));
+   evidence.observations[0].lanes[0].bytes=0;assert.notEqual(node.get(ids[1-i]).receiverEvidence.observations[0].lanes[0].bytes,0);
+  }
+ }finally{f.close();}
+});
+
+test('missing and late receiver reports do not block handoff and cannot cross generations or repeat',async()=>{
+ const f=fixture({dropEvidence:true});try{
+  const result=await f.nodes[1].forSend(ids[0]);await settle(()=>f.frames.some(r=>r.body.action==='complete'));
+  assert.equal(result.receiverEvidence.status,'unavailable');assert.equal(result.receiverEvidence.receivedRounds,0);
+  const frame=f.frames.find(r=>r.from===ids[0]&&r.body.action==='receiverEvidence'),body=structuredClone(frame.body);
+  assert.equal(f.nodes[1].receive('3333333333333333',body),false);
+  assert.equal(f.nodes[1].receive(ids[0],{...body,id:'wrong-generation'}),false);
+  assert.equal(f.nodes[1].receive(ids[0],{...body,observation:{...body.observation,round:49}}),false);
+  const bad=structuredClone(body);bad.observation.lanes[0].bytes++;
+  assert.equal(f.nodes[1].receive(ids[0],bad),false);
+  assert.equal(f.nodes[1].receive(ids[0],body),true);assert.equal(f.nodes[1].receive(ids[0],body),false);
+  assert.equal(f.nodes[1].get(ids[0]).receiverEvidence.status,'partial');assert.equal(f.nodes[1].get(ids[0]).receiverEvidence.receivedRounds,1);
+  f.nodes[1].clear();assert.equal(f.nodes[1].receive(ids[0],f.frames.find(r=>r.from===ids[0]&&r.body.action==='receiverEvidence'&&r.body.observation.round===1).body),false);
+ }finally{f.close();}
 });
