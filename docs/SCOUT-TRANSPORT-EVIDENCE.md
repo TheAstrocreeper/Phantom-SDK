@@ -1,0 +1,9 @@
+# Transport evidence collected by the browser scout
+
+Each existing outgoing sample completion and each incoming sample completion requests a local getStats observation for the three retained associations. Observations are serialized per association, without polling, retries, timers, additional payloads, or waiting for stats before acknowledging a sample or handing off a file. A stalled getStats call cannot hold up a transfer. Read start/end times use the endpoint's local monotonic clock; observations may finish after the sample they follow, so counter changes are not exact per-sample packet attribution.
+
+The normalized record uses only the selected ICE candidate pair identified by its transport. It preserves pair ID, transport ID, stats timestamp, and available packet/byte send/receive and send-discard counters. Each change compares successive observations of the same selected route. Missing counters, missing identity, a route change, a non-increasing timestamp, or a counter reset produce an explicit unknown value. Cumulative counters are never treated as losses from the current sample.
+
+Kernel UDP receive drops and actual socket receive-buffer capacity remain unavailable through browser WebRTC APIs. A zero browser send-discard count does not establish zero receive loss. These records cannot substitute for the per-socket ADB capture that identified Android receive drops, infer wire loss percentages, or establish link capacity.
+
+Preflight results include the latest available observation per lane, not a guarantee that all pending observations have finished. Share also retains the latest per-lane observation alongside its setup record, independently of raw-log rotation. These additions collect evidence; they do not change the lane-selection or queue-policy qualification rules or automatically import capture results as browser capabilities. The v6 wire protocol and payload budget are unchanged.

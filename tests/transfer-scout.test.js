@@ -32,7 +32,7 @@ test('a burst advantage cannot hide slower late delivery or missing progress evi
  const absent=samples();delete absent[14].delivery;assert.equal(selectTransferSetup(absent).reason,'late_delivery_unavailable');
  const reordered=samples();reordered[14].delivery[1].elapsedMs=999;assert.equal(selectTransferSetup(reordered).status,'inconclusive');
 });
-function fixture({drop=false,maxMessageSize=262144,sampleBytes=98304,queueModel=false,freezeDrain=false,clockWinner=[0],dropEndAck=false}={}){
+function fixture({drop=false,maxMessageSize=262144,sampleBytes=98304,queueModel=false,freezeDrain=false,clockWinner=[0],dropEndAck=false,stats=null}={}){
  const frames=[],reports=[],pcs=[],payloads=[],peaks=[],messages=[],channelRound=new Map();
  const upgrade=ch=>{if(ch.addEventListener)return;const events=new EventTarget();ch.addEventListener=events.addEventListener.bind(events);ch.removeEventListener=events.removeEventListener.bind(events);ch.dispatchEvent=events.dispatchEvent.bind(events);};
  const Base=memoryRTC({maxMessageSize,onSend(data,ch){
@@ -40,7 +40,7 @@ function fixture({drop=false,maxMessageSize=262144,sampleBytes=98304,queueModel=
   if(typeof data==='string'){const body=JSON.parse(data),lane=pcs.findIndex(pc=>pc.channels.includes(ch))%3;messages.push({lane,...body});if(dropEndAck&&body.action==='endDirectionAck')return false;if(body.action==='sample')channelRound.set(ch,body.round);}
   if(data instanceof ArrayBuffer){payloads.push({bytes:data.byteLength,label:ch.label,lane:pcs.findIndex(pc=>pc.channels.includes(ch))%3,round:channelRound.get(ch)});if(drop)return false;}return true;
  }});
- class RTC extends Base{constructor(){super();pcs.push(this);}fire(type,event={}){if(queueModel&&type==='datachannel')upgrade(event.channel);super.fire(type,event);}}
+ class RTC extends Base{constructor(){super();pcs.push(this);if(stats)this.getStats=()=>stats(this);}fire(type,event={}){if(queueModel&&type==='datachannel')upgrade(event.channel);super.fire(type,event);}}
  const nodes=ids.map((id,i)=>{
   let serial=0;
   const clock=queueModel?performance:scoutClock({maxMessageSize,sampleBytes,winner:clockWinner});
@@ -288,4 +288,27 @@ test('cancelling in the queue comparison preserves partial evidence and settles 
   assert.equal(f.nodes[0].get(ids[1]),null);
   const report=f.reports.findLast(r=>r.i===0&&r.status==='cancelled');assert.ok(report.partial?.outgoing?.stage==='queue'||report.samples.length>0);assert.ok(report.queueSamples.length<4);
  }finally{f.close();}
+});
+
+
+test('both endpoints retain ordered per-lane counter evidence without waiting for stats to transfer',async()=>{
+ const calls=new Map();
+ const f=fixture({stats:async pc=>{
+  const n=(calls.get(pc)??0)+1;calls.set(pc,n);
+  return new Map([['t',{id:'t',type:'transport',selectedCandidatePairId:'p'}],['p',{id:'p',type:'candidate-pair',timestamp:n*100,packetsSent:n*10,packetsReceived:n*8,packetsDiscardedOnSend:0}]]);
+ }});
+ try{
+  f.nodes[0].start(ids[1]);await settle(()=>f.frames.some(r=>r.body.action==='complete'));
+  for(const i of [0,1]){
+   assert.ok(f.reports.some(r=>r.i===i&&r.phase==='preflight-receive-stats'));
+   const observations=f.reports.filter(r=>r.i===i&&r.transport?.change.counters.packetsSent.status==='observed');
+   assert.ok(observations.length>3);
+   assert.ok(observations.every(r=>r.transport.change.counters.packetsSent.value===10));
+   assert.ok(observations.every(r=>r.transport.change.kernelReceiveDrops.status==='unavailable'));
+   assert.equal(f.nodes[i].get(ids[1-i]).transportObservations.length,3);
+  }
+ }finally{f.close();}
+ const blocked=fixture({stats:()=>new Promise(()=>{})});
+ try{blocked.nodes[0].start(ids[1]);await settle(()=>blocked.frames.some(r=>r.body.action==='complete'));assert.equal(blocked.nodes[0].get(ids[1]).status,'measured');}
+ finally{blocked.close();}
 });

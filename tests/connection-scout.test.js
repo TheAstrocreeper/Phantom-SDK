@@ -40,3 +40,31 @@ test('raw stats are bounded and disclose truncation', async () => {
   const result=await scoutConnection({getStats:async()=>rows},{runtime:{}});
   assert.equal(result.stats.total,520);assert.equal(result.stats.rows.length,512);assert.equal(result.stats.truncated,true);
 });
+
+test('selected-pair counters preserve unsupported fields instead of inventing zeros', async()=>{
+ const rows=new Map([['t',{id:'t',type:'transport',selectedCandidatePairId:'p'}],['p',{id:'p',type:'candidate-pair',timestamp:100,packetsSent:12,packetsReceived:8,bytesSent:1000,packetsDiscardedOnSend:0}]]);
+ const result=await scoutConnection({getStats:async()=>rows},{runtime:{}});
+ assert.equal(result.transportCounters.packetsSent,12);
+ assert.equal(result.transportCounters.packetsDiscardedOnSend,0);
+ assert.equal(result.transportCounters.bytesDiscardedOnSend,null);
+ assert.equal(result.transportCounters.bytesReceived,null);
+});
+
+test('transport differences expose only comparable counters, never kernel loss estimates',async()=>{
+ const {compareScoutTransport}=await import('../packages/phantom-core/src/connection-scout.js');
+ const before={transportId:'t',pairId:'p',timestampMs:100,packetsSent:10,packetsReceived:5,packetsDiscardedOnSend:2};
+ const after={...before,timestampMs:200,packetsSent:20,packetsReceived:9,packetsDiscardedOnSend:3};
+ const result=compareScoutTransport(before,after);
+ assert.deepEqual(result.counters.packetsSent,{status:'observed',value:10});
+ assert.deepEqual(result.counters.packetsDiscardedOnSend,{status:'observed',value:1});
+ assert.equal(result.counters.bytesReceived.status,'unknown');
+ assert.equal(result.kernelReceiveDrops.status,'unavailable');
+ assert.equal(result.socketReceiveBufferBytes.status,'unavailable');
+ assert.equal(result.elapsedMs,100);
+ for(const [changed,reason] of [[{pairId:'new'},'selected_route_changed'],[{transportId:null},'route_identity_unavailable'],[{timestampMs:100},'non_increasing_stats_timestamp']]){
+  const comparison=compareScoutTransport(before,{...after,...changed});
+  assert.equal(comparison.counters.packetsSent.reason,reason);assert.equal(comparison.counters.packetsSent.value,null);
+ }
+ assert.equal(compareScoutTransport(before,{...after,packetsSent:1}).counters.packetsSent.reason,'counter_reset');
+ assert.equal(compareScoutTransport(null,after).counters.packetsSent.reason,'missing_observation');
+});

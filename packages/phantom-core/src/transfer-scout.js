@@ -1,5 +1,5 @@
 import {defaultRTCConfiguration} from './rtc-configuration.js';
-import {scoutConnection} from './connection-scout.js';
+import {scoutConnection,compareScoutTransport} from './connection-scout.js';
 
 export const TRANSFER_SCOUT_PROTOCOL = 'phantom-transfer-scout-v6';
 const LANES = 3, MAX_BYTES = 3 * 1024 * 1024, DEFAULT_BYTES = 768 * 1024;
@@ -203,12 +203,20 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
   }
   function fail(s,error){retire(s,error?.message==='Invalid probe data'?'invalid_probe_data':'probe_failed');}
   function snapshot(s,phase,round) {
-    for(const [lane,row] of s.lanes.entries())void scoutConnection(row.pc,{channel:row.dc})
-      .then(report=>{if(!closed)notify(s,{phase,lane,round,report});}).catch(()=>{});
+    // Serialize observations per association so slow getStats calls cannot
+    // reverse counter history. Observation work never gates receipt or ACKs.
+    for(const [lane,row] of s.lanes.entries())row.observationTask=(row.observationTask??Promise.resolve()).then(async()=>{
+      if(closed||s.stopped)return;
+      const startedAtMs=now(),report=await scoutConnection(row.pc,{channel:row.dc,runtime});
+      const transport={lane,phase,round,startedAtMs,endedAtMs:now(),clock:'local_monotonic',
+        current:report.transportCounters,change:compareScoutTransport(row.previousCounters,report.transportCounters)};
+      row.previousCounters=report.transportCounters;s.transportObservations[lane]=transport;
+      if(!closed&&!s.stopped)notify(s,{phase,lane,round,report,transport});
+    }).catch(()=>{});
   }
   function create(peer,id,initiator,bytes,reverse,oneWay=false) {
     const s={peer,id,initiator,bytes,reverse,oneWay,lanes:[],ready:new Set(),started:false,stopped:false,
-      receiving:null,nextReceive:initiator?ROUNDS:0,controller:new AbortController(),samples:[],queueSamples:[],incomingSamples:[],outgoing:null,ack:null,running:false,receivedRounds:0,payload:new Uint8Array(262144)};
+      receiving:null,nextReceive:initiator?ROUNDS:0,controller:new AbortController(),samples:[],queueSamples:[],incomingSamples:[],transportObservations:[],outgoing:null,ack:null,running:false,receivedRounds:0,payload:new Uint8Array(262144)};
     active=s;attempted.add(peer);results.delete(peer);
     for(let offset=0;offset<s.payload.length;offset+=65536)crypto.getRandomValues(s.payload.subarray(offset,offset+65536));
     for(let lane=0;lane<LANES;lane++) {
@@ -312,6 +320,7 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
     if(receiving.counts.size===receiving.spec.connections&&[...receiving.counts.values()].every(n=>n===receiving.spec.perLane)) {
       const observed=incomingSample(receiving,true);s.incomingSamples.push(observed);notify(s,{phase:'preflight-receive-sample',direction:'incoming',...observed});
       s.nextReceive++;s.receivedRounds++;s.receiving=null;rowSend(s,receiving.spec.lanes[0],{action:'ack',round:receiving.round});
+      snapshot(s,'preflight-receive-stats',receiving.round);
     }
   }
   function rowSend(s,lane,body){if(!live(s)||s.lanes[lane].dc?.readyState!=='open')throw Error('Probe channel unavailable');s.lanes[lane].dc.send(JSON.stringify(body));}
@@ -393,7 +402,8 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
       directionPayloadBytes:s.bytes+[...s.samples,...s.queueSamples].reduce((total,sample)=>total+sample.bytes,0),
       directionPayloadAvoidedBytes:(1+SCREEN_ROUNDS+CONFIRM_ROUNDS*CONFIRM_SCALE)*s.bytes-(s.bytes+s.samples.reduce((total,sample)=>total+sample.bytes,0)),
       sampleBytes:s.bytes,confirmationBytes:s.bytes*CONFIRM_SCALE,payloadBudgetBytes:(s.oneWay?1:2)*(1+SCREEN_ROUNDS+CONFIRM_ROUNDS*CONFIRM_SCALE+QUEUE_ROUNDS*QUEUE_SAMPLE_SCALE)*s.bytes,queueHighBytes:QUEUE_BYTES,samples:structuredClone(s.samples),validFor:'current_peer_connection_generation',
-      limitations:['bounded_samples_include_ack_latency','per_association_probe_queue_cap','file_handoff_requires_retained_associations','does_not_measure_disk_or_hashing','does_not_establish_link_capacity']};
+      transportObservations:structuredClone(s.transportObservations),
+      limitations:['bounded_samples_include_ack_latency','per_association_probe_queue_cap','file_handoff_requires_retained_associations','does_not_measure_disk_or_hashing','does_not_establish_link_capacity','browser_stats_do_not_expose_kernel_receive_drops_or_socket_buffer_limits']};
     s.sentDirection=true;results.set(s.peer,result);notify(s,{phase:'preflight-result',...result});
     if(base===0&&!s.oneWay)rowSend(s,0,{action:'turn'});else rowSend(s,0,{action:'finished'});
   }
