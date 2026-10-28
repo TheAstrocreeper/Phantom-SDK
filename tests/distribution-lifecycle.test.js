@@ -7,11 +7,11 @@ import {memoryRTC} from './fixtures/memory-rtc.js';
 const ids=['1111111111111111','2222222222222222'],leader='3333333333333333';
 const pause=ms=>new Promise(r=>setTimeout(r,ms));
 async function until(check){const end=Date.now()+2000;while(Date.now()<end){if(check())return;await pause(5);}assert.fail('distribution did not settle');}
-async function fixture({intervalMs=1000,onSend,legacyProtocol=false,receiverStore,assignedRanges=false,scout=false,capabilityExchange=false,controlObservations=null,maxChunkBytes=65536,chunkSize=16384,fileSize=65536,maxMessageSize=262144}={}){
+async function fixture({reuseConnections=true,prepareTransferTransport,intervalMs=1000,onSend,legacyProtocol=false,receiverStore,assignedRanges=false,scout=false,capabilityExchange=false,controlObservations=null,maxChunkBytes=65536,chunkSize=16384,fileSize=65536,maxMessageSize=262144}={}){
  const admin=await createAdminIdentity(),callbacks=new Map(),events=[],frames=[],RTC=memoryRTC({onSend,maxMessageSize});
  const states=ids.map(peerId=>({peerId,leader,mirror:ids[0],role:'peer',state:'admitted',admitted:true}));
  const deliver=(to,from,body)=>{if(legacyProtocol&&body.type==='signal')body={...body,readyProtocol:undefined};return callbacks.get(to)?.({type:'PHANTOM_DIST',payload:{from:leader,frame:{networkId:'room',from,to,body}}});};
- const ds=ids.map((id,i)=>createNetworkDistribution({core:{getState:()=>states[i],...(controlObservations?{scoutPeer:async()=>typeof controlObservations[i]==='function'?controlObservations[i]():controlObservations[i]}:{}),onEvent(fn){callbacks.set(id,fn);return()=>callbacks.delete(id);},command(type,{frame}){if(type!=='PHANTOM_DIST_SEND')return;frames.push(frame);queueMicrotask(()=>deliver(frame.to,frame.from,frame.body));}},networkId:'room',adminPublicKey:admin.publicKey,lifecycle:{issue:(action,target)=>admin.sign({networkId:'room',action,target,operationId:crypto.randomUUID()})},runtime:{crypto,RTCPeerConnection:RTC},options:{intervalMs,requestTimeoutMs:1000,assignedRanges,scout,capabilityExchange,maxChunkBytes,...(i===1&&receiverStore?{chunkStore:receiverStore}:{})},emit:(type,data)=>events.push({peer:id,type,data})}));
+ const ds=ids.map((id,i)=>createNetworkDistribution({core:{getState:()=>states[i],...(controlObservations?{scoutPeer:async()=>typeof controlObservations[i]==='function'?controlObservations[i]():controlObservations[i]}:{}),onEvent(fn){callbacks.set(id,fn);return()=>callbacks.delete(id);},command(type,{frame}){if(type!=='PHANTOM_DIST_SEND')return;frames.push(frame);queueMicrotask(()=>deliver(frame.to,frame.from,frame.body));}},networkId:'room',adminPublicKey:admin.publicKey,lifecycle:{issue:(action,target)=>admin.sign({networkId:'room',action,target,operationId:crypto.randomUUID()})},runtime:{crypto,RTCPeerConnection:RTC},options:{reuseConnections,prepareTransferTransport:prepareTransferTransport?context=>prepareTransferTransport(context,i):undefined,intervalMs,requestTimeoutMs:1000,assignedRanges,scout,capabilityExchange,maxChunkBytes,...(i===1&&receiverStore?{chunkStore:receiverStore}:{})},emit:(type,data)=>events.push({peer:id,type,data})}));
  for(const fn of callbacks.values())fn({type:'PRESENCE_ROSTER',payload:{list:[...ids,leader].map(hKey=>({hKey}))}});
  const file=new Blob([Uint8Array.from({length:fileSize},(_,i)=>i%251)]),manifest=await ds[0].publish(file,{chunkSize});
  await ds[1].publish(file,{chunkSize});
@@ -191,4 +191,24 @@ test('peers without readiness capability transfer without the new handshake',asy
  let probes=0;
  const f=await fixture({legacyProtocol:true,onSend(data){let m;try{m=JSON.parse(data);}catch{return true;}if(m.kind==='ready_probe'||m.kind==='ready'){probes++;return false;}return true;}});
  try{f.job('legacy-protocol',ids[0],ids[1],[0]);await until(()=>f.frames.some(f=>f.body.type==='done'));assert.equal(probes,0);assert.deepEqual(f.events.filter(e=>e.type==='distributionError'),[]);}finally{f.close();}
+});
+
+test('fresh file sockets wait for preparation in both directions and release exactly once',async()=>{
+ const calls=[],released=[],gates=[];let payloads=0;
+ const f=await fixture({reuseConnections:false,assignedRanges:true,prepareTransferTransport:(context,side)=>new Promise(resolve=>{calls.push({context,side});gates.push(()=>resolve({report:{buffer:2097152},release:reason=>{released.push({id:context.id,side,reason});return {drops:0};}}));}),onSend:data=>{if(data instanceof ArrayBuffer)payloads++;return true;}});
+ try{
+  f.job('fresh-forward',ids[0],ids[1],[0]);await until(()=>calls.length===2);assert.equal(payloads,0);assert.equal(calls[0].context.scope,'file_connection');
+  gates.splice(0).forEach(resolve=>resolve());await until(()=>released.length===2);assert.ok(payloads>0);
+  const before=payloads;f.job('fresh-reverse',ids[1],ids[0],[1]);await until(()=>calls.length===4);assert.equal(payloads,before);
+  gates.splice(0).forEach(resolve=>resolve());await until(()=>released.length===4);assert.ok(payloads>before);assert.equal(new Set(released.map(r=>r.id+':'+r.side)).size,4);
+  assert.equal(f.events.filter(e=>e.data.phase==='file-native-socket'&&e.data.status==='released').length,4);
+ }finally{f.close();}assert.equal(released.length,4);
+});
+test('closing during fresh socket preparation aborts and releases a late resource',async()=>{
+ const calls=[],released=[];const f=await fixture({reuseConnections:false,assignedRanges:true,prepareTransferTransport:context=>new Promise(resolve=>calls.push({context,resolve}))});
+ try{f.job('fresh-cancel',ids[0],ids[1],[0]);await until(()=>calls.length===2);f.close();assert.ok(calls.every(row=>row.context.signal.aborted));for(const row of calls)row.resolve({release:()=>{released.push(row.context.id);}});await until(()=>released.length===2);}finally{f.close();}
+});
+test('unavailable fresh socket preparation continues the existing transfer',async()=>{
+ const f=await fixture({reuseConnections:false,assignedRanges:true,prepareTransferTransport:()=>{throw Error('unsupported');}});
+ try{f.job('fresh-unknown',ids[0],ids[1],[0]);await until(()=>f.frames.some(x=>x.body.type==='done'));assert.equal(f.events.filter(e=>e.data.phase==='file-native-socket'&&e.data.status==='unavailable').length,2);}finally{f.close();}
 });

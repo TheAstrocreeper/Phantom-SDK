@@ -195,7 +195,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
     }finally{if(ownsBatch(link,job)&&(!succeeded||!link.reuse)){frame(link.peer,{type:'close',jobId:job.id,batch:batchOf(job)});closeLink(job.id);}}}
 
   async function startReceiver(link){
-    if(links.get(link.job.id)!==link||link.job.receiver!==self()||(link.requireReady&&!link.sourceReady)||link.started||link.dc?.readyState!=='open')return;
+    if(links.get(link.job.id)!==link||link.transportPreparing||link.job.receiver!==self()||(link.requireReady&&!link.sourceReady)||link.started||link.dc?.readyState!=='open')return;
     let manifest;try{manifest=files.getManifest(link.job.asset);}catch{return;}
     const job=link.job;link.started=true;link.receiveController=new AbortController();
     try{
@@ -211,14 +211,27 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
     link.dc.send(JSON.stringify({kind:'ready_probe',hasManifest,jobId:link.job.id,batch:link.job.batch??0,file:{id:link.job.asset}}));
     link.readyTimer=setTimeout(()=>{link.readyTimer=null;probeSource(link);},100);
   }
+  function prepareFileTransport(link){
+    if(link.releaseTransport||!options.prepareTransferTransport)return null;
+    const context={peer:link.peer,id:link.job.id,lane:0,pc:link.pc,signal:link.sendController.signal,jobId:link.job.id,asset:link.job.asset,role:link.job.source===self()?'source':'receiver',scope:'file_connection'};
+    const report=(status,observation)=>emit('distributionScout',{phase:'file-native-socket',peer:context.peer,id:context.id,jobId:context.jobId,asset:context.asset,role:context.role,status,observation});
+    return Promise.resolve().then(()=>options.prepareTransferTransport(context)).then(resource=>{
+      if(!resource)return;
+      let released=false;
+      const release=reason=>{if(released)return;released=true;Promise.resolve().then(()=>resource.release?.(reason)).then(observation=>{if(observation)report('released',observation);}).catch(()=>report('unavailable',{reason:'socket_release_failed'}));};
+      if(links.get(link.job.id)!==link||link.sendController.signal.aborted){release('file_connection_closed');return;}
+      link.releaseTransport=release;report('prepared',resource.report??{status:'unavailable'});
+    }).catch(()=>{if(links.get(link.job.id)===link)report('unavailable',{reason:'socket_preparation_failed'});});
+  }
   function bind(link,dc){if(dc.label!=='phantom-distribution'){dc.close();return;}link.dc=dc;dc.binaryType='arraybuffer';link.submittedBytes=0;link.payloadEnd=0;link.drainedBytes=0;link.manifestOffsets=new Set();link.requestedIndexes=new Set();
     const nativeSend=dc.send.bind(dc);dc.send=data=>{const result=nativeSend(data);link.submittedBytes+=typeof data==='string'?new TextEncoder().encode(data).byteLength:data.byteLength;return result;};
-    dc.onopen=()=>{if(links.get(link.job.id)!==link||link.opened)return;link.opened=true;scout(link,'open');timeline(link,'open',link.queuePolicy?{queuePolicy:link.queuePolicy}:{});emit('distributionConnectionOpened',{jobId:link.job.id,peer:link.peer});
+    const opened=()=>{if(links.get(link.job.id)!==link||link.opened)return;link.opened=true;scout(link,'open');timeline(link,'open',link.queuePolicy?{queuePolicy:link.queuePolicy}:{});emit('distributionConnectionOpened',{jobId:link.job.id,peer:link.peer});
       if(link.job.source===self()&&!link.requireReady&&link.job.needsManifest)void files.share(link.peer,link.job.asset).catch(error);
       if(link.job.receiver===self()){if(link.requireReady)probeSource(link);startReceiver(link);}
     };
+    dc.onopen=()=>{if(links.get(link.job.id)!==link||link.opened||link.transportPreparing)return;const preparation=prepareFileTransport(link);if(!preparation){opened();return;}link.transportPreparing=preparation;preparation.then(()=>{link.transportPreparing=null;opened();});};
     function rejectFragment(){const job=link.job;link.fragment=null;link.binary=null;closeLink(job.id);frame(leader(),{type:'failed',jobId:job.id,batch:batchOf(job),reason:'invalid_fragment'});emit('distributionConnectionFailed',{id:job.asset,jobId:job.id,batch:batchOf(job),peer:link.peer,reason:'invalid_fragment'});}
-    dc.onmessage=event=>{if(links.get(link.job.id)!==link||!canUsePeer(link.peer)||!allowed(link.job.asset,assets.get(link.job.asset)?.distributionId))return;
+    const handleMessage=event=>{if(links.get(link.job.id)!==link||!canUsePeer(link.peer)||!allowed(link.job.asset,assets.get(link.job.asset)?.distributionId))return;
       if(event.data instanceof ArrayBuffer){const item=link.binary;link.binary=null;if(item?.fragment){const f=link.fragment;if(!f||event.data.byteLength!==item.length||f.received!==item.offset){rejectFragment();return;}f.bytes.set(new Uint8Array(event.data),f.received);f.received+=item.length;if(f.received===f.bytes.byteLength){link.fragment=null;traceChunk({direction:'receive',kind:'binary',jobId:link.job.id,peer:link.peer,index:f.file.index});fire('FILE_BIN_CHUNK',{from:link.peer,file:f.file,bytes:f.bytes.buffer});}return;}const file=item;if(file?.id===link.job.asset){traceChunk({direction:'receive',kind:'binary',jobId:link.job.id,peer:link.peer,index:file.index});fire('FILE_BIN_CHUNK',{from:link.peer,file,bytes:event.data});}return;}
       let m;try{m=JSON.parse(event.data);}catch{return;}
       if(m.file?.id!==link.job.asset)return;
@@ -242,6 +255,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
       if(m.kind==='binary'){if(link.fragment||link.binary){rejectFragment();return;}link.binary=m.file;}
       else if(m.kind==='message'){if(['PHANTOM_FILE_REQUEST','PHANTOM_FILE_MISSING'].includes(m.sys))traceChunk({direction:'receive',kind:m.sys,jobId:link.job.id,peer:link.peer,index:m.file.index});fire('INCOMING_MSG',{from:link.peer,sys:m.sys,file:m.file});}
     };
+    dc.onmessage=event=>{if(link.transportPreparing)link.transportPreparing.then(()=>handleMessage(event));else handleMessage(event);};
     if(dc.readyState==='open')dc.onopen();
     dc.onclose=()=>{if(links.get(link.job.id)===link){
       const interrupted=link.job.receiver===self()&&!link.completed;
