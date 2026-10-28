@@ -6,13 +6,17 @@ import {memoryRTC} from './fixtures/memory-rtc.js';
 import {scoutClock} from './fixtures/scout-clock.js';
 const ids=['1111111111111111','2222222222222222','3333333333333333'];
 async function until(predicate){const end=Date.now()+2500;while(!predicate()&&Date.now()<end)await new Promise(r=>setTimeout(r,5));assert.ok(predicate(),'expected state did not arrive');}
-async function fixture({thirdLeader=false,legacyLeader=false,legacyReceiver=false,dropScout=false,winner=[0],legacyLaneCoordinator=false}={}) {
+async function fixture({thirdLeader=false,legacyLeader=false,legacyReceiver=false,dropScout=false,winner=[0],legacyLaneCoordinator=false,queueWinner=false}={}) {
  const members=ids.slice(0,thirdLeader?3:2),leader=thirdLeader?ids[2]:ids[0],admin=await createAdminIdentity();
  const callbacks=new Map(),events=[],frames=[],pcs=[];
- const Base=memoryRTC({onSend(data,ch){if(typeof data==='string'&&ch.label==='phantom-distribution'&&JSON.parse(data).sys==='PHANTOM_FILE_REQUEST')return false;if(dropScout&&data instanceof ArrayBuffer&&ch.label==='phantom-distribution-scout')return false;return true;}});
+ const Base=memoryRTC({onSend(data,ch){if(queueWinner){
+  if(!ch.addEventListener){const events=new EventTarget();ch.addEventListener=events.addEventListener.bind(events);ch.removeEventListener=events.removeEventListener.bind(events);ch.dispatchEvent=events.dispatchEvent.bind(events);}
+  const bytes=typeof data==='string'?data.length:data.byteLength;ch.bufferedAmount+=bytes;
+  queueMicrotask(()=>{const before=ch.bufferedAmount;ch.bufferedAmount-=bytes;if(before>(ch.bufferedAmountLowThreshold??0)&&ch.bufferedAmount<=(ch.bufferedAmountLowThreshold??0))ch.dispatchEvent(new Event('bufferedamountlow'));});
+ }if(typeof data==='string'&&ch.label==='phantom-distribution'&&JSON.parse(data).sys==='PHANTOM_FILE_REQUEST')return false;if(dropScout&&data instanceof ArrayBuffer&&ch.label==='phantom-distribution-scout')return false;return true;}});
  class RTC extends Base{constructor(){super();pcs.push(this);}}
  const nodes=members.map((id,i)=>{
-  let serial=0;const clock=scoutClock({winner});
+  let serial=0;const clock=scoutClock({winner,queueWinner});
   const runtimeCrypto={subtle:crypto.subtle,getRandomValues:crypto.getRandomValues.bind(crypto),randomUUID:()=>`probe-${i}-${serial++}0`};
   return createNetworkDistribution({networkId:'scout-distribution',adminPublicKey:admin.publicKey,runtime:{crypto:runtimeCrypto,RTCPeerConnection:RTC,performance:clock},
    core:{getState:()=>({peerId:id,leader,mirror:ids[1],role:id===leader?'syscon1':i===1?'syscon2':'peer',state:'admitted',admitted:true}),
@@ -86,5 +90,22 @@ test('a coordinator without lane-policy support retains three jobs and never ack
   await f.publish();await until(()=>f.nodes[2].snapshot().jobs.length===3);
   assert.equal(f.frames.some(frame=>frame.body.type==='inventory'&&frame.body.setup),false);
   assert.equal(f.events.some(e=>e.data.phase==='preflight-applied'),false);
+ }finally{f.close();}
+});
+
+test('a confirmed queue policy is applied only to the measured retained source associations',async()=>{
+ const f=await fixture({queueWinner:true});try{
+  await f.scout();await until(()=>f.nodes[0].getScout(ids[1])&&f.nodes[1].getScout(ids[0]));
+  const selection=f.nodes[0].getScout(ids[1]);assert.equal(selection.queuePolicy.status,'measured');assert.equal(selection.queuePolicy.highWaterMark,1048576);
+  await f.publish();await until(()=>f.events.some(e=>e.data.phase==='preflight-queue-applied'));
+  const applied=f.events.filter(e=>e.data.phase==='preflight-queue-applied');assert.ok(applied.every(e=>e.i===0&&e.data.id===selection.id&&e.data.enforcement==='retained_source_channel'&&e.data.policy.highWaterMark===1048576));
+  assert.ok(applied.every(e=>f.frames.some(frame=>frame.body.type==='signal'&&frame.body.jobId===e.data.jobId&&frame.body.scoutTransport?.id===selection.id)));
+ }finally{f.close();}
+});
+test('an unconfirmed coordinator cannot apply the measured queue policy to a different lane set',async()=>{
+ const f=await fixture({thirdLeader:true,legacyLeader:true,queueWinner:true});try{
+  await f.scout();await until(()=>f.nodes[0].getScout(ids[1])&&f.nodes[1].getScout(ids[0]));assert.equal(f.nodes[0].getScout(ids[1]).queuePolicy.status,'measured');
+  await f.publish();await until(()=>f.nodes[2].snapshot().jobs.length===3);await until(()=>f.events.some(e=>e.data.phase==='preflight-handoff'));
+  assert.equal(f.events.some(e=>e.data.phase==='preflight-queue-applied'),false);
  }finally{f.close();}
 });

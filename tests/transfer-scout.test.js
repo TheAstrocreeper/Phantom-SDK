@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createTransferScout,selectTransferSetup,screenTransferCandidates,scoutStopDecision} from '../packages/phantom-core/src/transfer-scout.js';
+import {createTransferScout,selectTransferSetup,screenTransferCandidates,scoutStopDecision,selectQueuePolicy} from '../packages/phantom-core/src/transfer-scout.js';
 import {memoryRTC} from './fixtures/memory-rtc.js';
 import {scoutClock} from './fixtures/scout-clock.js';
 const ids=['1111111111111111','2222222222222222'];
@@ -62,7 +62,7 @@ test('measures both directions on three real-style associations with a fixed byt
    assert.equal(f.reports.filter(r=>r.i===i&&r.phase==='preflight-sample'&&r.warmup).length,1);
   }
   assert.equal(f.pcs.length,6);assert.ok(f.pcs.every(pc=>pc.connectionState==='connected'));
-  assert.equal(f.payloads.reduce((n,p)=>n+p.bytes,0),78*98304);assert.ok(f.payloads.every(p=>p.bytes<=16384));
+  assert.equal(f.payloads.reduce((n,p)=>n+p.bytes,0),174*98304);assert.ok(f.payloads.every(p=>p.bytes<=16384));
   assert.equal(f.nodes[0].start(ids[1]),false,'does not loop or repeat a completed scout');
  }finally{globalThis.setTimeout=original;f.close();}
 });
@@ -71,9 +71,9 @@ test('larger confirmations stream through bounded native queues using drain even
  try{
   globalThis.setTimeout=()=>{throw Error('unexpected timer');};f.nodes[0].start(ids[1]);
   await settle(()=>f.frames.some(f=>f.body.action==='complete'));
-  assert.ok(Math.max(...f.peaks)<=786432);assert.ok(f.pcs.some(pc=>pc.channels.some(dc=>dc.bufferedAmountLowThreshold===393216))); assert.ok(f.payloads.reduce((n,p)=>n+p.bytes,0)<=78*786432);
+  assert.ok(f.reports.filter(r=>r.phase==='preflight-sample').every(r=>r.lanes.every(lane=>r.peakBufferedBytes[lane]<=r.queueHighBytes)));assert.ok(Math.max(...f.peaks)<=16*1024*1024);assert.ok(f.reports.some(r=>r.phase==='preflight-sample'&&r.queueLowBytes===393216)); assert.ok(f.payloads.reduce((n,p)=>n+p.bytes,0)<=174*786432);
   for(const [i,node] of f.nodes.entries()){
-   const result=node.get(ids[1-i]);assert.ok(result.samples.filter(s=>s.stage==='confirm').length<=6);assert.equal(result.directionPayloadBytes+result.directionPayloadAvoidedBytes,39*786432);
+   const result=node.get(ids[1-i]);assert.ok(result.samples.filter(s=>s.stage==='confirm').length<=6);assert.equal(result.directionPayloadBytes+result.directionPayloadAvoidedBytes,87*786432);
    assert.ok(result.samples.filter(s=>s.stage==='confirm').every(s=>s.bytes===3145728&&s.delivery.at(-1).bytes===s.bytes));
   }
  }finally{globalThis.setTimeout=original;f.close();}
@@ -89,7 +89,7 @@ test('a silent receiver stays byte-bounded and file selection cancels and cleans
 });
 test('foreign, duplicate, oversized and unadmitted control messages do not allocate extra connections',async()=>{
  const f=fixture({drop:true});try{
-  const init={type:'transferScout',version:5,id:'foreign',action:'init',sampleBytes:98304,reverse:false,oneWay:false};
+  const init={type:'transferScout',version:6,id:'foreign',action:'init',sampleBytes:98304,reverse:false,oneWay:false};
   assert.equal(f.nodes[1].receive('3333333333333333',init),false);
   assert.equal(f.nodes[1].receive(ids[0],{...init,sampleBytes:4*1024*1024}),false);
   assert.equal(f.pcs.length,0);f.nodes[0].start(ids[1]);await settle(()=>f.pcs.length===6);
@@ -106,9 +106,9 @@ test('cancellation settles a confirmation waiting for native queue capacity',asy
   assert.equal(f.nodes[0].get(ids[1]),null);
  }finally{f.close();}
 });
-test('older control packets cannot start a v5 byte schedule',()=>{
+test('older control packets cannot start a v6 byte schedule',()=>{
  const f=fixture();try{
-  for(const version of [1,2,3,4])assert.equal(f.nodes[1].receive(ids[0],{type:'transferScout',version,id:'old-peer',action:'init',sampleBytes:98304,reverse:false,oneWay:false}),false);
+  for(const version of [1,2,3,4,5])assert.equal(f.nodes[1].receive(ids[0],{type:'transferScout',version,id:'old-peer',action:'init',sampleBytes:98304,reverse:false,oneWay:false}),false);
   assert.equal(f.pcs.length,0);
  }finally{f.close();}
 });
@@ -126,7 +126,7 @@ test('receiver summaries preserve each lane and bounded local arrival gaps in re
   f.nodes[0].start(ids[1]);await settle(()=>f.frames.some(f=>f.body.action==='complete'));
   for(const i of [0,1]){
    const completed=f.reports.find(r=>r.i===i&&r.phase==='preflight'&&r.status==='complete');
-   assert.equal(completed.incomingSamples.length,21);
+   assert.equal(completed.incomingSamples.length,25);
    for(const sample of completed.incomingSamples){
     assert.equal(sample.clock,'receiver_monotonic');assert.equal(sample.complete,true);
     assert.equal(sample.lanes.length,sample.connections);
@@ -164,8 +164,8 @@ test('cancelling preserves unfinished send and receive evidence without promotin
 test('the intended sender can own a one-way scout regardless of peer ID and retain its associations',async()=>{
  const f=fixture();try{
   const result=await f.nodes[1].forSend(ids[0]);await settle(()=>f.reports.filter(r=>r.phase==='preflight'&&r.status==='complete').length===2);
-  assert.equal(result.direction,'outgoing');assert.equal(result.samples.length,20);assert.equal(result.payloadBudgetBytes,39*98304);
-  assert.equal(f.payloads.reduce((n,p)=>n+p.bytes,0),39*98304);
+  assert.equal(result.direction,'outgoing');assert.equal(result.samples.length,20);assert.equal(result.payloadBudgetBytes,87*98304);
+  assert.equal(f.payloads.reduce((n,p)=>n+p.bytes,0),87*98304);
   assert.equal(f.nodes[0].get(ids[1]),null,'the receiver did not pretend to measure its outgoing direction');
   assert.equal(f.reports.filter(r=>r.i===0&&r.phase==='preflight-sample').length,0);
   assert.equal(f.pcs.length,6);assert.ok(f.pcs.every(pc=>pc.connectionState==='connected'));
@@ -225,10 +225,10 @@ test('an early fallback completes both direction handshakes and retains usable a
   f.nodes[0].start(ids[1]);await settle(()=>f.frames.some(frame=>frame.body.action==='complete'));
   for(const [i,node]of f.nodes.entries()){
    const result=node.get(ids[1-i]);assert.equal(result.stoppedEarly,true);assert.equal(result.status,'inconclusive');assert.equal(result.reason,'only_fallback_can_still_qualify');
-   assert.equal(result.samples.length,7);assert.equal(result.unrunSamples,13);assert.equal(result.directionPayloadBytes,8*98304);assert.equal(result.directionPayloadAvoidedBytes,31*98304);
+   assert.equal(result.samples.length,7);assert.equal(result.unrunSamples,13);assert.equal(result.directionPayloadBytes,56*98304);assert.equal(result.directionPayloadAvoidedBytes,31*98304);
    assert.equal(result.samples.some(s=>s.stage==='confirm'),false);assert.equal(result.transportAvailable,true);
   }
-  assert.equal(f.payloads.reduce((n,p)=>n+p.bytes,0),16*98304);
+  assert.equal(f.payloads.reduce((n,p)=>n+p.bytes,0),112*98304);
   assert.equal(f.frames.some(frame=>frame.body.action==='finalists'),false);
   const source=f.nodes[0].take(ids[1],null,0,'file'),target=f.nodes[1].take(ids[0],null,0,'file');assert.equal(source.pc.other,target.pc);source.pc.close();
  }finally{f.close();}
@@ -247,5 +247,45 @@ test('skipping a silent early-end acknowledgment settles preparation and closes 
   const waiting=f.nodes[0].forSend(ids[1]);await settle(()=>f.messages.some(m=>m.action==='endDirectionAck'));
   f.nodes[0].suspend('send_without_waiting');assert.equal(await waiting,null);
   await settle(()=>f.pcs.every(pc=>pc.connectionState==='closed'));assert.equal(f.nodes[0].get(ids[1]),null);
+ }finally{f.close();}
+});
+
+function queueSamples({tight=[80,82],normal=[100,102],tailPenalty=false}={}){
+ return [16777216,1048576,1048576,16777216].map((high,i)=>{
+  const ms=high===1048576?tight[i-1]:normal[i===0?0:1];
+  return {...sample([0,1,2],9437184,ms,'queue',tailPenalty&&high===1048576?1:ms/2),round:21+i,queueHighBytes:high,messageBytes:[262144,262144,262144],queues:[0,1,2].map(lane=>({lane,waitCount:high===1048576?2:0}))};
+ });
+}
+test('queue policy requires repeated total and late improvement on an identical exercised profile',()=>{
+ const selected=selectQueuePolicy(queueSamples());assert.equal(selected.status,'measured');assert.equal(selected.highWaterMark,1048576);assert.equal(selected.lowWaterMark,524288);
+ for(const rows of [queueSamples({tight:[80,101]}),queueSamples({tight:[94,95]}),queueSamples({tight:[120,122]}),queueSamples({tailPenalty:true})])assert.equal(selectQueuePolicy(rows).highWaterMark,16777216);
+ const missing=queueSamples();delete missing[1].delivery;assert.equal(selectQueuePolicy(missing).status,'inconclusive');
+ const unexercised=queueSamples();unexercised[1].queues[2].waitCount=0;assert.equal(selectQueuePolicy(unexercised).reason,'tight_queue_not_exercised');
+ const otherLane=queueSamples();otherLane[1].lanes=[0,1];otherLane[1].connections=2;assert.equal(selectQueuePolicy(otherLane).status,'inconclusive');
+ const otherPayload=queueSamples();otherPayload[1].bytes/=2;assert.equal(selectQueuePolicy(otherPayload).status,'inconclusive');
+ const otherMessage=queueSamples();otherMessage[1].messageBytes=[65536,65536,65536];assert.equal(selectQueuePolicy(otherMessage).status,'inconclusive');
+ const wrongOrder=queueSamples();[wrongOrder[0],wrongOrder[1]]=[wrongOrder[1],wrongOrder[0]];assert.equal(selectQueuePolicy(wrongOrder).reason,'invalid_queue_comparison_order');
+ assert.equal(selectQueuePolicy(queueSamples().slice(0,3)).status,'inconclusive');
+});
+test('queue passes hold lane identity, bytes and message sizes fixed and retain all comparison evidence',async()=>{
+ const f=fixture({sampleBytes:786432,queueModel:true});try{
+  f.nodes[0].start(ids[1]);await settle(()=>f.frames.some(f=>f.body.action==='complete'));
+  for(const i of [0,1]){
+   const result=f.nodes[i].get(ids[1-i]);assert.equal(result.version,6);assert.equal(result.queueSamples.length,4);assert.equal(result.queueComparisonPayloadBytes,36*1024*1024);
+   const rows=result.queueSamples;assert.deepEqual(rows.map(s=>s.queueHighBytes),[16777216,1048576,1048576,16777216]);
+   assert.ok(rows.every(s=>s.bytes===9437184&&key(s.lanes)===key(result.lanes)&&JSON.stringify(s.messageBytes)===JSON.stringify(rows[0].messageBytes)));
+   assert.ok(rows.filter(s=>s.queueHighBytes===1048576).every(s=>s.queues.every(q=>q.waitCount>=1)));
+   assert.ok(rows.every(s=>s.lanes.every(lane=>s.peakBufferedBytes[lane]<=s.queueHighBytes)));
+  }
+ }finally{f.close();}
+});
+test('cancelling in the queue comparison preserves partial evidence and settles the sender without a policy',async()=>{
+ const f=fixture({sampleBytes:786432});try{
+  const sending=f.nodes[0].forSend(ids[1]);
+  await settle(()=>f.reports.some(r=>r.i===0&&r.phase==='preflight-queue-comparison'));
+  f.nodes[0].suspend('file_selected');
+  assert.equal(await sending,null);await settle(()=>f.pcs.every(pc=>pc.connectionState==='closed'));
+  assert.equal(f.nodes[0].get(ids[1]),null);
+  const report=f.reports.findLast(r=>r.i===0&&r.status==='cancelled');assert.ok(report.partial?.outgoing?.stage==='queue'||report.samples.length>0);assert.ok(report.queueSamples.length<4);
  }finally{f.close();}
 });

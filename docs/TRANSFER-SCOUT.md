@@ -3,14 +3,14 @@
 Opt in with `distribution: {capabilityExchange:true, assignedRanges:true,
 transferScout:true, maxConnections:3}`. Add `scoutBeforeSend:true` to wait for
 outgoing scouting during single-recipient agreed preparation. Phantom Share
-uses both. Both endpoints advertise `phantom-transfer-scout-v5`; v1/v2/v3/v4 peers
-keep their compatible file path without v5 scouting or handoff. Native WebRTC
+uses both. Both endpoints advertise `phantom-transfer-scout-v6`; v1/v2/v3/v4/v5 peers
+keep their compatible file path without v6 scouting or handoff. Native WebRTC
 is not involved.
 
 The smaller peer ID starts background exploration over three independent RTC
 associations using the file RTC configuration and reliable ordered channels.
 Each direction allows a warm-up, up to fourteen screening deliveries, and up to six larger
-confirmations. Screening covers all seven lane sets: each singleton, each pair,
+confirmations, followed by four queue-policy comparison passes. Screening covers all seven lane sets: each singleton, each pair,
 and all three. A balanced order followed by its reverse repeats every candidate
 with equal payload. Each lane participates equally across the full screen.
 
@@ -40,13 +40,13 @@ or leave. There is no new timeout, polling loop or retry queue. Opt-in callers
 must provide cancellation access. Unsupported peers are never awaited.
 
 The base sample defaults to 768 KiB; each confirmation carries 3 MiB. Background
-exploration is capped at 58.5 MiB of payload, and a replacement outgoing pass
-at 29.25 MiB, plus signaling/framing. At most one replacement is attempted per
+exploration is capped at 130.5 MiB of payload, and a replacement outgoing pass
+at 65.25 MiB, plus signaling/framing. At most one replacement is attempted per
 peer and generation. `scoutSampleBytes` configures the base between 3 KiB and
 3 MiB, divisible by six; budgets scale with it. Each association's probe
-queue is bounded at 768 KiB, resuming on native drain events below 384 KiB.
-Active lanes pump concurrently. These queue bounds do not tune the file
-sender's watermarks.
+lane-selection queue is bounded at 768 KiB, resuming on native drain events
+below 384 KiB. Active lanes pump concurrently. The separate queue comparison
+below tests and may select a file-sender queue policy.
 
 A selected lane set must have both screening timings beat both repetitions of
 all other screened sets. The same exact set must win both larger repetitions
@@ -62,6 +62,45 @@ sample completion to wait on lane 0's transport. Finalist agreement and lifecycl
 control still use lane 0 between timed samples. These are acknowledged-delivery
 rates, not NIC timestamps, link capacity or steady-state guarantees. Probe
 payload omits file reading, hashing, framing and storage.
+
+## Compare native send-queue policies before the file
+
+After choosing the exact lane set (including an inconclusive three-lane
+fallback), the sender announces that set and waits for acknowledgment. Four
+passes use only those associations. Each carries 12 times the base payload
+(9 MiB by default), counted/discarded by the receiver. Order is baseline,
+tight, tight, baseline, or its reverse according to the scout's existing
+order bit. Every pass receives a final delivery acknowledgment before the
+next starts. Payload amount, participating lanes and per-lane message sizes
+stay identical; messages use at most 256 KiB and respect the negotiated
+message limit, with a conservative 64 KiB limit when it is unknown.
+
+Baseline uses the current file limits (16 MiB high, 4 MiB low per association).
+Tight uses 1 MiB high and 512 KiB low. Only native bufferedamountlow events
+release capacity; no sampler, pacing timer, retry or sleep is added. These
+passes add at most 36 MiB per direction with the normal base size. This is
+additional preparation traffic and time, not free measurement. Very small
+configured base samples may never exercise the tight limit and then cannot
+select it.
+
+To select tight, both tight total times must beat both baseline times by at
+least 10%, and both tight late-half rates must exceed both baseline late-half
+rates by at least 10%. Every tight lane must actually wait for capacity in
+both passes. Partial, mismatched, overlapping, unexercised or missing delivery
+evidence retains the original file limits. A baseline win does not need a new
+policy. This bounded synthetic comparison is evidence for a candidate policy,
+not proof that file throughput will improve or an exhaustive optimum.
+
+Results retain `queueSamples`, `queueComparisonPayloadBytes`, and `queuePolicy`
+with timing/rate envelopes and the selection/fallback reason. Cancellation
+retains partial evidence without publishing a policy. The source applies a
+confirmed tight policy only to the same retained associations, the same asset,
+recipient, and coordinator-confirmed exact lane set. Fresh/fallback connections
+and unsupported coordinators retain the original limits. Data framing, chunk
+hashing, receiver admission and source queue ordering are unchanged. Each
+application emits `preflight-queue-applied` with the actual job/lane and limits;
+Share preserves those applications with its setup even after raw logs rotate.
+A disconnect or connection-generation change invalidates the policy.
 
 ## Stop when more samples cannot improve the policy
 
@@ -80,9 +119,10 @@ samples to measured evidence. The result explicitly remains inconclusive, with
 reason, possible lane sets and observed ranges retained.
 
 An acknowledged `endDirection` message advances the receiver's bounded round
-cursor to the normal direction boundary. The existing turn/completion handshakes
-then retain the same associations for file use. No timer, polling or retry is
-added. Cancellation releases this acknowledgment wait too. v5 peers alone use
+cursor to the queue-comparison boundary. Lane selection can stop early, but
+the four queue passes still run. The existing turn/completion handshakes then
+retain the same associations for file use. No timer, polling or retry is
+added. Cancellation releases this acknowledgment wait too. v6 peers alone use
 this shortened schedule; older peers retain the compatible file path.
 
 Results record `stoppedEarly`, completed/unrun sample counts,

@@ -1,9 +1,10 @@
 import {defaultRTCConfiguration} from './rtc-configuration.js';
 import {scoutConnection} from './connection-scout.js';
 
-export const TRANSFER_SCOUT_PROTOCOL = 'phantom-transfer-scout-v5';
+export const TRANSFER_SCOUT_PROTOCOL = 'phantom-transfer-scout-v6';
 const LANES = 3, MAX_BYTES = 3 * 1024 * 1024, DEFAULT_BYTES = 768 * 1024;
-const CONFIRM_SCALE = 4, SCREEN_ROUNDS = 14, CONFIRM_ROUNDS = 6, ROUNDS = 21, QUEUE_BYTES = 768 * 1024;
+const CONFIRM_SCALE = 4, SCREEN_ROUNDS = 14, CONFIRM_ROUNDS = 6, LANE_ROUNDS = 21, QUEUE_ROUNDS = 4, ROUNDS = 25, QUEUE_BYTES = 768 * 1024;
+const TIGHT_QUEUE_BYTES=1024*1024, DEFAULT_QUEUE_BYTES=16*1024*1024, QUEUE_SAMPLE_SCALE=12;
 const CANDIDATES=[[0],[1,2],[0,1,2],[1],[0,2],[2],[0,1]], FINAL_ORDER=[1,2,3,3,2,1];
 const laneKey=lanes=>lanes.join(',');
 const validLanes=lanes=>Array.isArray(lanes)&&lanes.length>=1&&lanes.length<=3&&lanes.every((lane,i)=>Number.isInteger(lane)&&lane>=0&&lane<3&&(i===0||lane>lanes[i-1]));
@@ -93,17 +94,36 @@ export function scoutStopDecision(samples,fallback=3) {
   return null;
 }
 
+/** Repeated ABBA comparison on one exact lane set. The default stays in force
+ * unless the smaller queue improves both total and late delivery by >=10%,
+ * with non-overlapping repetition envelopes. No result is inferred from a peak
+ * bufferedAmount, a warmup, missing progress or an interrupted comparison.
+ */
+export function selectQueuePolicy(samples) {
+  const fallback=reason=>({status:'inconclusive',reason,highWaterMark:DEFAULT_QUEUE_BYTES,lowWaterMark:DEFAULT_QUEUE_BYTES/4});
+  if(!Array.isArray(samples)||samples.length!==QUEUE_ROUNDS||samples.some(s=>!s||s.stage!=='queue'||!validLanes(s.lanes)||s.connections!==s.lanes.length||!Number.isSafeInteger(s.bytes)||s.bytes<1||!Number.isFinite(s.elapsedMs)||s.elapsedMs<=0||!Array.isArray(s.messageBytes)||s.messageBytes.length!==s.connections||s.messageBytes.some(n=>!Number.isSafeInteger(n)||n<1024||n>262144))||new Set(samples.map(s=>s.bytes)).size!==1||new Set(samples.map(s=>laneKey(s.lanes))).size!==1||new Set(samples.map(s=>JSON.stringify(s.messageBytes))).size!==1)return fallback('insufficient_queue_comparison');
+  if(samples[0].queueHighBytes!==samples[3].queueHighBytes||samples[1].queueHighBytes!==samples[2].queueHighBytes||samples[0].queueHighBytes===samples[1].queueHighBytes)return fallback('invalid_queue_comparison_order');
+  const groups=[TIGHT_QUEUE_BYTES,DEFAULT_QUEUE_BYTES].map(high=>samples.filter(s=>s.queueHighBytes===high));
+  if(groups.some(rows=>rows.length!==2)||samples.some(s=>lateRate(s)===null))return fallback('insufficient_queue_delivery_evidence');
+  const evidence=groups.map(rows=>({highWaterMark:rows[0].queueHighBytes,elapsedMs:{min:Math.min(...rows.map(s=>s.elapsedMs)),max:Math.max(...rows.map(s=>s.elapsedMs))},lateBytesPerSecond:{min:Math.min(...rows.map(lateRate)),max:Math.max(...rows.map(lateRate))}}));
+  // A comparison that never constrained the tight queue did not test pacing.
+  if(groups[0].some(s=>!Array.isArray(s.queues)||s.queues.length!==s.connections||s.queues.some(q=>!Number.isSafeInteger(q.waitCount)||q.waitCount<1)))return {...fallback('tight_queue_not_exercised'),evidence};
+  const [tight,normal]=evidence;
+  if(tight.elapsedMs.max<=normal.elapsedMs.min*.9&&tight.lateBytesPerSecond.min>=normal.lateBytesPerSecond.max*1.1)return {status:'measured',reason:'smaller_queue_repeated_total_and_late_improvement',highWaterMark:TIGHT_QUEUE_BYTES,lowWaterMark:TIGHT_QUEUE_BYTES/2,evidence};
+  return {...fallback('smaller_queue_not_confirmed'),evidence};
+}
+
 /** Native drain events, not polling. The byte cap bounds each live association;
  * cancellation/close settle the wait without adding a timeout or retry timer.
  */
-function queueCapacity(dc,bytes,signal) {
+function queueCapacity(dc,bytes,signal,high=QUEUE_BYTES,low=high/2) {
   if(signal.aborted||dc.readyState!=='open')return Promise.reject(Error('Probe stopped'));
-  if(dc.bufferedAmount+bytes<=QUEUE_BYTES)return Promise.resolve();
+  if(dc.bufferedAmount+bytes<=high)return Promise.resolve();
   return new Promise((resolve,reject)=>{
     const finish=error=>{dc.removeEventListener('bufferedamountlow',check);signal.removeEventListener('abort',aborted);error?reject(error):resolve();};
     const aborted=()=>finish(Error('Probe stopped'));
-    const check=()=>{if(signal.aborted)return aborted();if(dc.readyState!=='open')return finish(Error('Probe channel closed'));if(dc.bufferedAmount<=QUEUE_BYTES/2&&dc.bufferedAmount+bytes<=QUEUE_BYTES)finish();};
-    dc.bufferedAmountLowThreshold=QUEUE_BYTES/2;
+    const check=()=>{if(signal.aborted)return aborted();if(dc.readyState!=='open')return finish(Error('Probe channel closed'));if(dc.bufferedAmount<=low&&dc.bufferedAmount+bytes<=high)finish();};
+    dc.bufferedAmountLowThreshold=low;
     dc.addEventListener('bufferedamountlow',check);signal.addEventListener('abort',aborted,{once:true});check();
   });
 }
@@ -126,10 +146,10 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
   const permitted=peer=>!suspended&&trusted(peer);
   const live=s=>active===s&&!closed&&!s.stopped;
   const notify=(s,report)=>onReport({peer:s.peer,id:s.id,scope:'synthetic_transfer_connections',...report});
-  function wire(s,body){if(live(s))send(s.peer,{type:'transferScout',version:5,id:s.id,...body});}
+  function wire(s,body){if(live(s))send(s.peer,{type:'transferScout',version:6,id:s.id,...body});}
   function releasePool(reason='pool_released',notifyPeer=true) {
     const pool=parked;if(!pool)return;parked=null;
-    if(notifyPeer&&trusted(pool.peer))send(pool.peer,{type:'transferScout',version:5,id:pool.id,action:'release'});
+    if(notifyPeer&&trusted(pool.peer))send(pool.peer,{type:'transferScout',version:6,id:pool.id,action:'release'});
     for(const row of pool.lanes)if(row&&!row.claimed){
       row.pc.ondatachannel=null;row.pc.onconnectionstatechange=null;row.pc.onicecandidate=null;
       if(row.pending){row.pending.onmessage=null;row.pending.close();}
@@ -164,7 +184,7 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
       if(lane.dc){lane.dc.onopen=null;lane.dc.onclose=null;lane.dc.onerror=null;lane.dc.onmessage=null;try{lane.dc.close();}catch{}}
       try{lane.pc.close();}catch{}
     }
-    if(reason!=='complete') {results.delete(s.peer);notify(s,{phase:'preflight',status:'cancelled',reason,samples:s.samples,incomingSamples:s.incomingSamples,partial});}
+    if(reason!=='complete') {results.delete(s.peer);notify(s,{phase:'preflight',status:'cancelled',reason,samples:s.samples,queueSamples:s.queueSamples,incomingSamples:s.incomingSamples,partial});}
     settleSend(s.peer);
   }
   // Receiver times describe local arrival only; they never subtract clocks
@@ -188,25 +208,32 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
   }
   function create(peer,id,initiator,bytes,reverse,oneWay=false) {
     const s={peer,id,initiator,bytes,reverse,oneWay,lanes:[],ready:new Set(),started:false,stopped:false,
-      receiving:null,nextReceive:initiator?ROUNDS:0,controller:new AbortController(),samples:[],incomingSamples:[],outgoing:null,ack:null,running:false,receivedRounds:0,payload:new Uint8Array(65536)};
+      receiving:null,nextReceive:initiator?ROUNDS:0,controller:new AbortController(),samples:[],queueSamples:[],incomingSamples:[],outgoing:null,ack:null,running:false,receivedRounds:0,payload:new Uint8Array(262144)};
     active=s;attempted.add(peer);results.delete(peer);
-    crypto.getRandomValues(s.payload);
+    for(let offset=0;offset<s.payload.length;offset+=65536)crypto.getRandomValues(s.payload.subarray(offset,offset+65536));
     for(let lane=0;lane<LANES;lane++) {
       const pc=new runtime.RTCPeerConnection(configuration??defaultRTCConfiguration()),row={pc,dc:null,ice:[],signals:Promise.resolve(),signalCount:0};s.lanes.push(row);
       pc.onicecandidate=e=>{if(e.candidate)wire(s,{action:'signal',lane,candidate:e.candidate.toJSON?.()??e.candidate});};
       pc.onconnectionstatechange=()=>{if(['failed','closed','disconnected'].includes(pc.connectionState))retire(s,'connection_'+pc.connectionState);};
       pc.ondatachannel=e=>bind(s,lane,e.channel);
     }
-    notify(s,{phase:'preflight',status:'started',sampleBytes:bytes,candidates:[1,2,3],laneCandidates:CANDIDATES.map(lanes=>[...lanes]),roundsPerDirection:20,confirmationBytes:CONFIRM_SCALE*bytes,
-      intent:oneWay?'send':'explore',direction:initiator?'outgoing':'incoming',payloadBudgetBytes:(oneWay?1:2)*(1+SCREEN_ROUNDS+CONFIRM_ROUNDS*CONFIRM_SCALE)*bytes,order:order(s),messageCeilingBytes:65536,queueHighBytes:QUEUE_BYTES});
+    notify(s,{phase:'preflight',status:'started',sampleBytes:bytes,candidates:[1,2,3],laneCandidates:CANDIDATES.map(lanes=>[...lanes]),roundsPerDirection:24,laneRoundsPerDirection:20,confirmationBytes:CONFIRM_SCALE*bytes,
+      intent:oneWay?'send':'explore',direction:initiator?'outgoing':'incoming',payloadBudgetBytes:(oneWay?1:2)*(1+SCREEN_ROUNDS+CONFIRM_ROUNDS*CONFIRM_SCALE+QUEUE_ROUNDS*QUEUE_SAMPLE_SCALE)*bytes,queueComparison:{rounds:QUEUE_ROUNDS,bytesPerRound:QUEUE_SAMPLE_SCALE*bytes,highWaterMarks:[TIGHT_QUEUE_BYTES,DEFAULT_QUEUE_BYTES]},order:order(s),messageCeilingBytes:65536,queueHighBytes:QUEUE_BYTES});
     return s;
   }
   const order=s=>{
     const first=s.reverse?[...CANDIDATES].reverse():CANDIDATES;
     return [...first,...[...first].reverse()].map(lanes=>[...lanes]);
   };
-  function specification(s,round,finalists=s.outgoingFinalists) {
-    const phase=round%ROUNDS,stage=phase===0?'warmup':phase<=SCREEN_ROUNDS?'screen':'confirm';
+  function specification(s,round,finalists=s.outgoingFinalists,queueLanes=s.outgoingQueueLanes) {
+    const phase=round%ROUNDS;
+    if(phase>=LANE_ROUNDS){
+      if(!validLanes(queueLanes))throw Error('Invalid probe data');
+      const sequence=s.reverse?[TIGHT_QUEUE_BYTES,DEFAULT_QUEUE_BYTES,DEFAULT_QUEUE_BYTES,TIGHT_QUEUE_BYTES]:[DEFAULT_QUEUE_BYTES,TIGHT_QUEUE_BYTES,TIGHT_QUEUE_BYTES,DEFAULT_QUEUE_BYTES];
+      const high=sequence[phase-LANE_ROUNDS],bytes=s.bytes*QUEUE_SAMPLE_SCALE;
+      return {stage:'queue',connections:queueLanes.length,lanes:[...queueLanes],bytes,perLane:bytes/queueLanes.length,queueHighBytes:high,queueLowBytes:high===DEFAULT_QUEUE_BYTES?high/4:high/2};
+    }
+    const stage=phase===0?'warmup':phase<=SCREEN_ROUNDS?'screen':'confirm';
     const lanes=phase===0?[0,1,2]:stage==='screen'?order(s)[phase-1]:finalists?.find(lanes=>lanes.length===FINAL_ORDER[phase-SCREEN_ROUNDS-1]);
     if(!validLanes(lanes))throw Error('Invalid probe data');
     const bytes=s.bytes*(stage==='confirm'?CONFIRM_SCALE:1);
@@ -232,7 +259,7 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
       if(body.action==='sample') {
         if(s.initiator?(s.oneWay||!s.sentDirection):s.started)throw Error('Invalid probe data');
         if(body.round!==s.nextReceive||!Number.isInteger(body.round)||body.round<0||body.round>=2*ROUNDS)throw Error('Invalid probe data');
-        const spec=specification(s,body.round,s.incomingFinalists);
+        const spec=specification(s,body.round,s.incomingFinalists,s.incomingQueueLanes);
         if(!spec.lanes.includes(lane)||body.bytes!==spec.perLane)throw Error('Invalid probe data');
         s.receiving??={round:body.round,counts:new Map(),arrivals:new Map(),startedAt:now(),spec,nextCheckpoint:spec.bytes/4};
         if(s.receiving.counts.has(lane))throw Error('Invalid probe data');
@@ -240,11 +267,17 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
       }
       if(lane!==0&&!(['progress','ack'].includes(body.action)&&s.ack?.controlLane===lane))throw Error('Invalid probe data');
       if(body.action==='endDirection'){
-        const base=s.initiator?ROUNDS:0,end=base+ROUNDS;
+        const base=s.initiator?ROUNDS:0,end=base+LANE_ROUNDS;
         if((s.initiator&&(s.oneWay||!s.sentDirection))||(!s.initiator&&s.started)||s.receiving||s.receiveEnded||s.nextReceive<base+1||s.nextReceive>=end||body.nextRound!==end)throw Error('Invalid probe data');
         s.nextReceive=end;s.receiveEnded=true;rowSend(s,0,{action:'endDirectionAck'});return;
       }
       if(body.action==='endDirectionAck'&&s.endAck){const ack=s.endAck;s.endAck=null;ack.resolve();return;}
+      if(body.action==='queuePlan'){
+        const expected=(s.initiator?ROUNDS:0)+LANE_ROUNDS;
+        if((s.initiator&&(s.oneWay||!s.sentDirection))||(!s.initiator&&s.started)||s.receiving||s.nextReceive!==expected||s.incomingQueueLanes||!validLanes(body.lanes))throw Error('Invalid probe data');
+        s.incomingQueueLanes=[...body.lanes];rowSend(s,0,{action:'queuePlanAck'});return;
+      }
+      if(body.action==='queuePlanAck'&&s.planAck){const ack=s.planAck;s.planAck=null;ack.resolve();return;}
       if(body.action==='finalists'){
         const expected=s.initiator?ROUNDS+SCREEN_ROUNDS+1:SCREEN_ROUNDS+1;
         if((s.initiator&&(s.oneWay||!s.sentDirection))||(!s.initiator&&s.started)||s.nextReceive!==expected||s.incomingFinalists||!Array.isArray(body.lanes)||body.lanes.length!==3||body.lanes.some((lanes,i)=>!validLanes(lanes)||lanes.length!==i+1))throw Error('Invalid probe data');
@@ -259,7 +292,7 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
       throw Error('Invalid probe data');
     }
     const receiving=s.receiving;
-    if(!(data instanceof ArrayBuffer)||data.byteLength<1||data.byteLength>65536||!receiving?.counts.has(lane))throw Error('Invalid probe data');
+    if(!(data instanceof ArrayBuffer)||data.byteLength<1||data.byteLength>(receiving?.spec.stage==='queue'?262144:65536)||!receiving?.counts.has(lane))throw Error('Invalid probe data');
     const count=receiving.counts.get(lane)+data.byteLength;
     if(count>receiving.spec.perLane)throw Error('Invalid probe data');
     receiving.counts.set(lane,count);
@@ -291,7 +324,15 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
         const agreed=new Promise((resolve,reject)=>{s.planAck={resolve,reject};});void agreed.catch(()=>{});
         rowSend(s,0,{action:'finalists',lanes:s.outgoingFinalists});await agreed;if(!live(s))return;
       }
-      const {stage,connections,lanes,perLane,bytes}=specification(s,round);
+      if(round%ROUNDS===LANE_ROUNDS){
+        const selected=s.earlyStop?{lanes:Array.from({length:fallback},(_,i)=>i)}:selectTransferSetup(s.samples,fallback);
+        s.outgoingQueueLanes=[...selected.lanes];
+        notify(s,{phase:'preflight-queue-comparison',lanes:s.outgoingQueueLanes,rounds:QUEUE_ROUNDS,bytesPerRound:s.bytes*QUEUE_SAMPLE_SCALE,highWaterMarks:[TIGHT_QUEUE_BYTES,DEFAULT_QUEUE_BYTES],queueOrder:s.reverse?[TIGHT_QUEUE_BYTES,DEFAULT_QUEUE_BYTES,DEFAULT_QUEUE_BYTES,TIGHT_QUEUE_BYTES]:[DEFAULT_QUEUE_BYTES,TIGHT_QUEUE_BYTES,TIGHT_QUEUE_BYTES,DEFAULT_QUEUE_BYTES]});
+        const agreed=new Promise((resolve,reject)=>{s.planAck={resolve,reject};});void agreed.catch(()=>{});
+        rowSend(s,0,{action:'queuePlan',lanes:s.outgoingQueueLanes});await agreed;if(!live(s))return;
+      }
+      const spec=specification(s,round),{stage,connections,lanes,perLane,bytes}=spec;
+      const queueHigh=spec.queueHighBytes??QUEUE_BYTES,queueLow=spec.queueLowBytes??queueHigh/2;
       const delivery=[{bytes:0,elapsedMs:0}];
       const ack=new Promise((resolve,reject)=>{s.ack={round,resolve,reject,bytes,delivery,controlLane:lanes[0],startedAt:null};});
       void ack.catch(()=>{}); // Cancellation may happen while send() itself throws.
@@ -300,7 +341,8 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
       const payloads=lanes.map(lane=>{
         const row=s.lanes[lane];
         const limit=row.pc.sctp?.maxMessageSize;
-        const size=Number.isFinite(limit)&&limit>0?Math.min(65536,Math.floor(limit)):65536;
+        const ceiling=stage==='queue'?262144:65536;
+        const size=Number.isFinite(limit)&&limit>0?Math.min(ceiling,Math.floor(limit)):(limit===0||limit===Infinity?ceiling:Math.min(65536,ceiling));
         if(size<1024)throw Error('Probe message limit too small');
         return s.payload.buffer.slice(0,size);
       });
@@ -308,16 +350,16 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
       const before=s.lanes.map(r=>r.dc.bufferedAmount),startedAt=now();s.ack.startedAt=startedAt;
       const peak=s.lanes.map(r=>r.dc.bufferedAmount);
       const queues=lanes.map(lane=>({lane,payloadBytes:0,waitCount:0,waitMs:0,maxWaitMs:0,waitingSinceMs:null,enqueuedAtMs:null}));
-      s.outgoing={round,stage,connections,lanes,bytes,startedAt,delivery,queues,peakBufferedBytes:peak};
+      s.outgoing={round,stage,connections,lanes,bytes,startedAt,delivery,queues,queueHighBytes:queueHigh,queueLowBytes:queueLow,peakBufferedBytes:peak};
       await Promise.all(payloads.map(async(payload,position)=>{
         const lane=lanes[position];
         const size=payload.byteLength;rowSend(s,lane,{action:'sample',round,bytes:perLane});
         for(let offset=0;offset<perLane;offset+=size){
           const part=offset+size<=perLane?payload:payload.slice(0,perLane-offset);
           const queue=queues[position];
-          if(s.lanes[lane].dc.bufferedAmount+part.byteLength>QUEUE_BYTES){
+          if(s.lanes[lane].dc.bufferedAmount+part.byteLength>queueHigh){
             const waitingAt=now();queue.waitCount++;queue.waitingSinceMs=waitingAt-startedAt;
-            try{await queueCapacity(s.lanes[lane].dc,part.byteLength,s.controller.signal);}
+            try{await queueCapacity(s.lanes[lane].dc,part.byteLength,s.controller.signal,queueHigh,queueLow);}
             finally{const waited=now()-waitingAt;queue.waitMs+=waited;queue.maxWaitMs=Math.max(queue.maxWaitMs,waited);queue.waitingSinceMs=null;}
           }
           if(!live(s))throw Error('Probe stopped');
@@ -330,27 +372,27 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
       if(!live(s))return;
       const elapsedMs=now()-startedAt;
       delivery.push({bytes,elapsedMs});
-      const sample={round,stage,connections,lanes,bytes,elapsedMs,delivery,queues,clock:'sender_monotonic',queueHighBytes:QUEUE_BYTES,peakBufferedBytes:peak,messageBytes,bufferedBefore:before,bufferedAfterEnqueue:queued,
+      const sample={round,stage,connections,lanes,bytes,elapsedMs,delivery,queues,clock:'sender_monotonic',queueHighBytes:queueHigh,queueLowBytes:queueLow,peakBufferedBytes:peak,messageBytes,bufferedBefore:before,bufferedAfterEnqueue:queued,
         bufferedAfterAck:s.lanes.map(r=>r.dc.bufferedAmount),bytesPerSecond:elapsedMs>0?bytes*1000/elapsedMs:null,warmup:stage==='warmup'};
       s.outgoing=null;
-      if(!sample.warmup)s.samples.push(sample);
+      if(stage==='queue')s.queueSamples.push(sample);else if(!sample.warmup)s.samples.push(sample);
       notify(s,{phase:'preflight-sample',direction:'outgoing',...sample});snapshot(s,'preflight-sample-stats',round);
-      if(!sample.warmup&&round<base+ROUNDS-1){
+      if(!sample.warmup&&stage!=='queue'&&round<base+LANE_ROUNDS-1){
         const stop=scoutStopDecision(s.samples,fallback);
         if(stop){
           s.earlyStop=stop;
           const ended=new Promise((resolve,reject)=>{s.endAck={resolve,reject};});void ended.catch(()=>{});
-          rowSend(s,0,{action:'endDirection',nextRound:base+ROUNDS});await ended;if(!live(s))return;break;
+          rowSend(s,0,{action:'endDirection',nextRound:base+LANE_ROUNDS});await ended;if(!live(s))return;round=base+LANE_ROUNDS-1;
         }
       }
     }
     s.running=false;
     const selection=s.earlyStop?{status:'inconclusive',connections:fallback,lanes:Array.from({length:fallback},(_,i)=>i),...s.earlyStop}:selectTransferSetup(s.samples,fallback);
-    const result={version:5,id:s.id,scope:'synthetic_transfer_connections',direction:'outgoing',...selection,
+    const result={version:6,id:s.id,scope:'synthetic_transfer_connections',direction:'outgoing',...selection,queuePolicy:selectQueuePolicy(s.queueSamples),queueSamples:structuredClone(s.queueSamples),queueComparisonPayloadBytes:s.queueSamples.reduce((total,sample)=>total+sample.bytes,0),
       stoppedEarly:!!s.earlyStop,completedSamples:s.samples.length,unrunSamples:20-s.samples.length,
-      directionPayloadBytes:s.bytes+s.samples.reduce((total,sample)=>total+sample.bytes,0),
+      directionPayloadBytes:s.bytes+[...s.samples,...s.queueSamples].reduce((total,sample)=>total+sample.bytes,0),
       directionPayloadAvoidedBytes:(1+SCREEN_ROUNDS+CONFIRM_ROUNDS*CONFIRM_SCALE)*s.bytes-(s.bytes+s.samples.reduce((total,sample)=>total+sample.bytes,0)),
-      sampleBytes:s.bytes,confirmationBytes:s.bytes*CONFIRM_SCALE,payloadBudgetBytes:(s.oneWay?1:2)*(1+SCREEN_ROUNDS+CONFIRM_ROUNDS*CONFIRM_SCALE)*s.bytes,queueHighBytes:QUEUE_BYTES,samples:structuredClone(s.samples),validFor:'current_peer_connection_generation',
+      sampleBytes:s.bytes,confirmationBytes:s.bytes*CONFIRM_SCALE,payloadBudgetBytes:(s.oneWay?1:2)*(1+SCREEN_ROUNDS+CONFIRM_ROUNDS*CONFIRM_SCALE+QUEUE_ROUNDS*QUEUE_SAMPLE_SCALE)*s.bytes,queueHighBytes:QUEUE_BYTES,samples:structuredClone(s.samples),validFor:'current_peer_connection_generation',
       limitations:['bounded_samples_include_ack_latency','per_association_probe_queue_cap','file_handoff_requires_retained_associations','does_not_measure_disk_or_hashing','does_not_establish_link_capacity']};
     s.sentDirection=true;results.set(s.peer,result);notify(s,{phase:'preflight-result',...result});
     if(base===0&&!s.oneWay)rowSend(s,0,{action:'turn'});else rowSend(s,0,{action:'finished'});
@@ -386,14 +428,14 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
       }catch(e){if(active)retire(active,'setup_failed');return false;}
     },
     receive(peer,body) {
-      if(!trusted(peer)||body?.type!=='transferScout'||body.version!==5||!validId(body.id))return false;
+      if(!trusted(peer)||body?.type!=='transferScout'||body.version!==6||!validId(body.id))return false;
       if(body.action==='release'&&parked?.peer===peer&&parked.id===body.id){releasePool('peer_released',false);return true;}
       if(body.action==='init') {
         if(active?.peer===peer&&active.id===body.id)return true;
         const oneWay=body.oneWay===true;
         const invalid=typeof body.oneWay!=='boolean'||(!oneWay&&self()<peer)||!Number.isInteger(body.sampleBytes)||body.sampleBytes<3072||body.sampleBytes>sampleBytes||body.sampleBytes%6||typeof body.reverse!=='boolean';
         if(!invalid&&oneWay&&!demanded.has(peer)&&active?.peer===peer&&!active.oneWay)retire(active,'sender_intent',false);
-        if(invalid||suspended||active||parked||busy()||(oneWay?demanded.has(peer):attempted.has(peer))||attempted.size>=128){send(peer,{type:'transferScout',version:5,id:body.id,action:'cancel',reason:invalid?'profile_not_supported':'busy'});return false;}
+        if(invalid||suspended||active||parked||busy()||(oneWay?demanded.has(peer):attempted.has(peer))||attempted.size>=128){send(peer,{type:'transferScout',version:6,id:body.id,action:'cancel',reason:invalid?'profile_not_supported':'busy'});return false;}
         try{if(oneWay)demanded.add(peer);create(peer,body.id,false,body.sampleBytes,body.reverse,oneWay);}catch{if(active)retire(active,'setup_failed');}return true;
       }
       const s=active;if(!s||s.peer!==peer||s.id!==body.id)return false;
