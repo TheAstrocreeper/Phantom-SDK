@@ -33,7 +33,8 @@ for(const thirdLeader of [false,true])test(`a measured single-connection choice 
   await until(()=>f.nodes[0].snapshot().connections.length===1);await new Promise(r=>setTimeout(r,100));
   const coordinator=f.nodes[thirdLeader?2:0];assert.equal(coordinator.snapshot().jobs.length,1,JSON.stringify(f.events.filter(e=>!['distributionScout','distributionProgress','distributionFileEvent'].includes(e.type))));
   assert.ok(coordinator.snapshot().jobs.every(j=>j.assigned===true&&j.asset===manifest.id));
-  assert.ok(f.pcs.filter(pc=>pc.channels.some(ch=>ch.label==='phantom-distribution-scout')).every(pc=>pc.connectionState==='closed'));
+  assert.ok(f.frames.some(frame=>frame.body.type==='signal'&&frame.body.scoutTransport));
+  assert.ok(f.pcs.some(pc=>pc.channels.some(ch=>ch.label==='phantom-distribution-scout')&&pc.channels.some(ch=>ch.label==='phantom-distribution')));
   if(thirdLeader)assert.equal(f.events.some(e=>e.i===2&&e.type==='distributionProgress'),false);
  }finally{f.close();}
 });

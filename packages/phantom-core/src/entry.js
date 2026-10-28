@@ -56,6 +56,7 @@ export function createPhantomEntry({openContext, relays, doorways, adminPublicKe
       proposeTransferPlan:(peer,settings)=>{active();if(!distribution)throw new Error('Enable distribution in SDK configuration');return distribution.proposePlan(peer,settings);},
       getTransferPlan:peer=>{active();return distribution?.getPlan(peer)??null;},
       getTransferScout:peer=>{active();return distribution?.getScout(peer)??null;},
+      skipTransferScout:()=>{active();distribution?.skipScout();},
       prepareAgreedDistributionFile:(file,peer,settings)=>{active();if(!distribution)throw new Error('Enable distribution in SDK configuration');return distribution.prepareAgreed(file,peer,settings);},
       distributeFile:(file,options)=>{active();if(!distribution)throw new Error('Enable distribution in SDK configuration');return distribution.publish(file,options);},
       getDistributionState:()=>distribution?.snapshot()??null,

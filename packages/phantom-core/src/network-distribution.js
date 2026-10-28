@@ -82,7 +82,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
       if(asset.outgoingSetup?.receiver===peer){delete asset.outgoingSetup;asset.setupAcknowledged=false;reported.delete(asset.id);}
     }
   }
-  function selectedSetup(peer){const result=preflight?.get(peer);return result?{...result,enforcement:scoutCoordinator?'coordinator_supported':'default_coordinator_unconfirmed',effectiveConnections:scoutCoordinator?result.connections:Math.min(3,maxConnections)}:null;}
+  function selectedSetup(peer){const result=preflight?.get(peer);return result?.transportAvailable?{...result,enforcement:scoutCoordinator?'coordinator_supported':'default_coordinator_unconfirmed',effectiveConnections:scoutCoordinator?result.connections:Math.min(3,maxConnections)}:null;}
   function setRoster(rows){const next=rows.map(r=>r.hKey).filter(k=>/^[0-9a-f]{16}$/.test(k)&&canUsePeer(k));for(const peer of roster)if(!next.includes(peer)){controlObservations.delete(peer);controlGenerations.delete(peer);controlPending.delete(peer);clearPeerSetup(peer);capabilityExchange?.drop(peer);agreement?.drop(peer);}roster=next;for(const peer of rangePeers)if(!roster.includes(peer))rangePeers.delete(peer);}
   function report(){if(assignedRanges&&self()&&leader()&&canUsePeer(leader())&&rangeAdvertisement!==leaderToken){rangeAdvertisement=leaderToken;frame(leader(),{type:'rangeCapability',version:1});}for(const asset of assets.values())if(allowed(asset.id,asset.distributionId)&&asset.holders.has(self())){const sent=reported.get(asset.id)??new Set(),have=asset.holders.get(self());if(reported.has(asset.id)&&sent.size===have.size)continue;const indexes=[...have].filter(i=>!sent.has(i)).sort((a,b)=>a-b);for(let offset=0;offset<Math.max(1,indexes.length);offset+=128)frame(leader(),{type:'inventory',id:asset.id,total:asset.total,distributionId:asset.distributionId,proof:asset.proof,indexes:indexes.slice(offset,offset+128),...(asset.outgoingSetup&&scoutCoordinator?{setup:asset.outgoingSetup}:{})});reported.set(asset.id,sent);}lastReport=Date.now();}
   function table(){return {sequence,leader:self(),assets:[...assets.values()].map(a=>({id:a.id,total:a.total,distributionId:a.distributionId,proof:a.proof,holders:[...a.holders].map(([peer,indexes])=>({peer,indexes:[...indexes].sort((a,b)=>a-b)}))}))};}
@@ -218,6 +218,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
       if(m.kind==='binary'){if(link.fragment||link.binary){rejectFragment();return;}link.binary=m.file;}
       else if(m.kind==='message'){if(['PHANTOM_FILE_REQUEST','PHANTOM_FILE_MISSING'].includes(m.sys))traceChunk({direction:'receive',kind:m.sys,jobId:link.job.id,peer:link.peer,index:m.file.index});fire('INCOMING_MSG',{from:link.peer,sys:m.sys,file:m.file});}
     };
+    if(dc.readyState==='open')dc.onopen();
     dc.onclose=()=>{if(links.get(link.job.id)===link){
       const interrupted=link.job.receiver===self()&&!link.completed;
       closeLink(link.job.id);
@@ -225,6 +226,15 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
       // A normal close at the source must not invalidate verified receipt.
       if(interrupted){frame(leader(),{type:'failed',jobId:link.job.id,batch:batchOf(link.job),reason:'channel_closed'});emit('distributionConnectionFailed',{id:link.job.asset,jobId:link.job.id,batch:batchOf(link.job),peer:link.peer,reason:'channel_closed'});}
     }};
+  }
+  function configureLink(link){
+    const pc=link.pc,peer=link.peer,job=link.job;
+    pc.onicecandidate=e=>{if(e.candidate)frame(peer,{type:'signal',jobId:job.id,candidate:e.candidate.toJSON?.()??e.candidate});};
+    pc.onconnectionstatechange=()=>{if(['failed','closed'].includes(pc.connectionState)&&links.get(job.id)===link){
+      const current=link.job,interrupted=current.receiver===self()&&!link.completed;closeLink(current.id);
+      if(interrupted){frame(leader(),{type:'failed',jobId:current.id,batch:batchOf(current),reason:'rtc_transport_failed'});emit('distributionConnectionFailed',{id:current.asset,jobId:current.id,batch:batchOf(current),peer:link.peer,reason:'rtc_transport_failed'});}
+    }};
+    pc.ondatachannel=e=>bind(link,e.channel);
   }
   async function open(job){if(links.has(job.id)||closedJobs.has(job.id))return;const used=[...links.values()].reduce((n,link)=>n+(link.job.assigned?1:transferLanes),0);if(links.size>=maxJobs||used+(job.assigned?1:transferLanes)>maxConnections){frame(leader(),{type:'failed',jobId:job.id,batch:batchOf(job)});return;}
     const asset=assets.get(job.asset);if(!asset||!allowed(asset.id,asset.distributionId))return;
@@ -234,20 +244,29 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
     try{
     const RTC=job.assigned===true?runtime.RTCPeerConnection:DistributionRTC;
     if(job.assigned===true&&!assignedRanges)throw Error('Assigned ranges are not supported');
-    const pc=new RTC(options.rtcConfiguration??defaultRTCConfiguration());link={pc,peer,job,sendController:new AbortController(),started:false,pendingIce:[]};links.set(job.id,link);
-    pc.onicecandidate=e=>{if(e.candidate)frame(peer,{type:'signal',jobId:job.id,candidate:e.candidate.toJSON?.()??e.candidate});};
-    pc.onconnectionstatechange=()=>{if(['failed','closed'].includes(pc.connectionState)&&links.get(job.id)===link){
-      const current=link.job,interrupted=current.receiver===self()&&!link.completed;
-      closeLink(current.id);
-      if(interrupted){frame(leader(),{type:'failed',jobId:current.id,batch:batchOf(current),reason:'rtc_transport_failed'});emit('distributionConnectionFailed',{id:current.asset,jobId:current.id,batch:batchOf(current),peer:link.peer,reason:'rtc_transport_failed'});}
-    }};
-    pc.ondatachannel=e=>bind(link,e.channel);
+    const retained=job.assigned===true&&job.source===self()?preflight?.take(peer,asset.outgoingSetup?.scoutId,undefined,job.asset,job.id):null;
+    const pc=retained?.pc??new RTC(options.rtcConfiguration??defaultRTCConfiguration());link={pc,peer,job,sendController:new AbortController(),started:false,pendingIce:[]};links.set(job.id,link);
+    configureLink(link);
+    if(retained){
+      link.requireReady=true;link.reuse=reuseConnections;
+      frame(peer,{type:'signal',jobId:job.id,scoutTransport:{id:retained.id,lane:retained.lane},readyProtocol:1,reuseProtocol:reuseConnections?2:0});
+      bind(link,pc.createDataChannel('phantom-distribution'));return;
+    }
     if(job.source===self()){
       bind(link,pc.createDataChannel('phantom-distribution'));await pc.setLocalDescription(await pc.createOffer());if(!ownsBatch(link,job))return;frame(peer,{type:'signal',jobId:job.id,readyProtocol:1,reuseProtocol:reuseConnections?2:0,description:{type:pc.localDescription.type,sdp:pc.localDescription.sdp}});
     }
     }catch(e){if(closed||(link&&!ownsBatch(link,job)))return;closeLink(job.id);frame(leader(),{type:'failed',jobId:job.id,batch:batchOf(job),reason:'rtc_setup_failed'});emit('distributionConnectionFailed',{jobId:job.id,peer,reason:'rtc_setup_failed',error:e.message});error(e);}
   }
   async function signal(from,body){if(closedJobs.has(body.jobId))return;const link=links.get(body.jobId);if(!link){if(pendingSignals.size<maxJobs*2){const pending=pendingSignals.get(body.jobId)??[];pending.createdAt??=Date.now();if(pending.length<64)pending.push({from,body});pendingSignals.set(body.jobId,pending);}return;}if(link.peer!==from)return;
+    if(body.scoutTransport){
+      const handoff=body.scoutTransport;
+      if(!link.job.assigned||link.job.receiver!==self()||link.dc||link.pc.remoteDescription||typeof handoff.id!=='string'||!Number.isInteger(handoff.lane)||handoff.lane<0||handoff.lane>2)throw Error('Invalid scout handoff');
+      const retained=preflight?.take(from,handoff.id,handoff.lane,link.job.asset,link.job.id);if(!retained)throw Error('Scout association unavailable');
+      link.pc.onconnectionstatechange=null;link.pc.ondatachannel=null;link.pc.onicecandidate=null;link.pc.close();
+      link.pc=retained.pc;link.requireReady=true;link.reuse=reuseConnections&&body.reuseProtocol===2;configureLink(link);
+      emit('distributionScout',{phase:'preflight-handoff',status:'bound',peer:from,id:retained.id,lane:retained.lane,jobId:link.job.id});
+      if(retained.channel)bind(link,retained.channel);return;
+    }
     if(body.description){link.requireReady=body.readyProtocol===1;
       // Version 2 requires batch-scoped failures and closes; older peers use fresh jobs.
       link.reuse=reuseConnections&&body.reuseProtocol===2;await link.pc.setRemoteDescription(body.description);for(const candidate of link.pendingIce.splice(0))await link.pc.addIceCandidate(candidate);
@@ -425,10 +444,11 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
     proposePlan(peer,settings={}){if(!agreement)throw Error('Capability exchange is disabled');return agreement.propose(peer,{...settings,protocolPreference:['phantom-file-v1']});},
     getPlan(peer){const plan=agreement?.get(peer);return plan?{...plan,setup:selectedSetup(peer)}:null;},
     getScout(peer){return selectedSetup(peer);},
+    skipScout(){preflight?.suspend('send_without_waiting');},
     restore,
     async getFile(id){await restore();const asset=assets.get(id);if(closed||!asset||asset.holders.get(self())?.size!==asset.total)throw Error('No complete local distribution copy');return files.getFile(id);},
     async prepare(file,settings={}){preflight?.suspend();if(closed)throw Error('Distribution closed');await restore();const manifest=await files.publish(file,settings);preparedFiles.set(manifest,{file,id:manifest.id});return manifest;},
-    async prepareAgreed(file,peer,settings={}){const setup=selectedSetup(peer);preflight?.suspend();if(closed||!peerAllowed(peer))throw Error('Peer unavailable');const agreed=agreement?.get(peer);if(!agreed)throw Error('No agreed plan');if('chunkSize' in settings)throw TypeError('Chunk size comes from the agreed plan');await restore();const manifest=await files.publish(file,{...settings,chunkSize:agreed.plan.payloadBytes});if(closed||!peerAllowed(peer)||agreement.get(peer)?.id!==agreed.id)throw Error('Agreed plan no longer valid');preparedFiles.set(manifest,{file,id:manifest.id,peer,planId:agreed.id,setup});return manifest;},
+    async prepareAgreed(file,peer,settings={}){if(options.scoutBeforeSend===true&&capabilityExchange?.get(peer)?.protocols.includes(TRANSFER_SCOUT_PROTOCOL))await preflight?.forSend(peer);const setup=selectedSetup(peer);preflight?.suspend();if(closed||!peerAllowed(peer))throw Error('Peer unavailable');const agreed=agreement?.get(peer);if(!agreed)throw Error('No agreed plan');if('chunkSize' in settings)throw TypeError('Chunk size comes from the agreed plan');await restore();const manifest=await files.publish(file,{...settings,chunkSize:agreed.plan.payloadBytes});if(closed||!peerAllowed(peer)||agreement.get(peer)?.id!==agreed.id)throw Error('Agreed plan no longer valid');preparedFiles.set(manifest,{file,id:manifest.id,peer,planId:agreed.id,setup});return manifest;},
     async publish(file,{authorization,recipients,prepared,...settings}={}){if(closed)throw Error('Distribution closed');if(!state().admitted)throw Error('Wait for network admission before distributing');if(!policy)throw Error('Distribution requires an admin authority');await restore();if(closed)throw Error('Distribution closed');
       if(recipients!==undefined){
         if(!Array.isArray(recipients)||recipients.length>128||recipients.some(id=>typeof id!=='string'||! /^[0-9a-f]{16}$/.test(id)))throw new TypeError('Invalid publication recipients');

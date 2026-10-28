@@ -1,7 +1,7 @@
 import {defaultRTCConfiguration} from './rtc-configuration.js';
 import {scoutConnection} from './connection-scout.js';
 
-export const TRANSFER_SCOUT_PROTOCOL = 'phantom-transfer-scout-v2';
+export const TRANSFER_SCOUT_PROTOCOL = 'phantom-transfer-scout-v3';
 const LANES = 3, MAX_BYTES = 3 * 1024 * 1024, DEFAULT_BYTES = 768 * 1024;
 const CONFIRM_SCALE = 4, ROUNDS = 9, QUEUE_BYTES = 768 * 1024;
 const validId = id => typeof id === 'string' && /^[a-zA-Z0-9-]{1,64}$/.test(id);
@@ -68,14 +68,26 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
   if (![self,allowed,send,onReport,busy,newId].every(f => typeof f === 'function') ||
       !Number.isInteger(sampleBytes) || sampleBytes < 3 * 1024 || sampleBytes > MAX_BYTES || sampleBytes % 3 ||
       ![1,3].includes(fallback)) throw TypeError('Invalid transfer scout configuration');
-  let active=null,closed=false,suspended=false;
+  let active=null,parked=null,closed=false,suspended=false;
+  const demanded=new Set(),waiters=new Map();
   const attempted=new Set(),results=new Map(),crypto=runtime.crypto??globalThis.crypto;
   const now=()=>runtime.performance?.now() ?? performance.now();
   const trusted=peer=>!closed&&typeof peer==='string'&&/^[0-9a-f]{16}$/.test(peer)&&peer!==self()&&allowed(peer);
   const permitted=peer=>!suspended&&trusted(peer);
   const live=s=>active===s&&!closed&&!s.stopped;
   const notify=(s,report)=>onReport({peer:s.peer,id:s.id,scope:'synthetic_transfer_connections',...report});
-  function wire(s,body){if(live(s))send(s.peer,{type:'transferScout',version:2,id:s.id,...body});}
+  function wire(s,body){if(live(s))send(s.peer,{type:'transferScout',version:3,id:s.id,...body});}
+  function releasePool(reason='pool_released',notifyPeer=true) {
+    const pool=parked;if(!pool)return;parked=null;
+    if(notifyPeer&&trusted(pool.peer))send(pool.peer,{type:'transferScout',version:3,id:pool.id,action:'release'});
+    for(const row of pool.lanes)if(row&&!row.claimed){
+      row.pc.ondatachannel=null;row.pc.onconnectionstatechange=null;row.pc.onicecandidate=null;
+      if(row.pending){row.pending.onmessage=null;row.pending.close();}
+      row.dc.onclose=null;row.dc.close();row.pc.close();
+    }
+    notify(pool,{phase:'preflight-pool',status:'released',reason});
+  }
+  function settleSend(peer){const resolve=waiters.get(peer);if(resolve){waiters.delete(peer);resolve(results.get(peer)?structuredClone(results.get(peer)):null);}}
   function retire(s,reason,notifyPeer=true) {
     if(!live(s))return;
     if(s.finishing&&['channel_closed','connection_closed','connection_failed'].includes(reason))reason='complete';
@@ -83,13 +95,27 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
     const partial=partialSample(s);
     s.stopped=true;active=null;s.controller.abort();
     s.ack?.reject(Error(reason));s.ack=null;
+    if(reason==='complete'){
+      releasePool();parked=s;
+      for(const row of s.lanes){
+        row.dc.onopen=null;row.dc.onclose=null;row.dc.onerror=null;row.dc.onmessage=null;
+        row.pc.onicecandidate=null;
+        row.pc.onconnectionstatechange=()=>{if(['failed','closed','disconnected'].includes(row.pc.connectionState))releasePool('connection_'+row.pc.connectionState);};
+        row.pc.ondatachannel=e=>{
+          if(row.claimed||row.pending||e.channel.label!=='phantom-distribution'){e.channel.close();return;}
+          row.pending=e.channel;
+        };
+      }
+      notify(s,{phase:'preflight',status:'complete',incomingSamples:s.incomingSamples,retainedAssociations:LANES});
+      settleSend(s.peer);return;
+    }
     for(const lane of s.lanes){
       lane.pc.onicecandidate=null;lane.pc.onconnectionstatechange=null;lane.pc.ondatachannel=null;
       if(lane.dc){lane.dc.onopen=null;lane.dc.onclose=null;lane.dc.onerror=null;lane.dc.onmessage=null;try{lane.dc.close();}catch{}}
       try{lane.pc.close();}catch{}
     }
     if(reason!=='complete') {results.delete(s.peer);notify(s,{phase:'preflight',status:'cancelled',reason,samples:s.samples,incomingSamples:s.incomingSamples,partial});}
-    else notify(s,{phase:'preflight',status:'complete',incomingSamples:s.incomingSamples});
+    settleSend(s.peer);
   }
   // Receiver times describe local arrival only; they never subtract clocks
   // from the sender. Keep summaries bounded even when a round is interrupted.
@@ -110,8 +136,8 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
     for(const [lane,row] of s.lanes.entries())void scoutConnection(row.pc,{channel:row.dc})
       .then(report=>{if(!closed)notify(s,{phase,lane,round,report});}).catch(()=>{});
   }
-  function create(peer,id,initiator,bytes,reverse) {
-    const s={peer,id,initiator,bytes,reverse,lanes:[],ready:new Set(),started:false,stopped:false,
+  function create(peer,id,initiator,bytes,reverse,oneWay=false) {
+    const s={peer,id,initiator,bytes,reverse,oneWay,lanes:[],ready:new Set(),started:false,stopped:false,
       receiving:null,nextReceive:initiator?ROUNDS:0,controller:new AbortController(),samples:[],incomingSamples:[],outgoing:null,ack:null,running:false,receivedRounds:0,payload:new Uint8Array(65536)};
     active=s;attempted.add(peer);results.delete(peer);
     crypto.getRandomValues(s.payload);
@@ -122,7 +148,7 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
       pc.ondatachannel=e=>bind(s,lane,e.channel);
     }
     notify(s,{phase:'preflight',status:'started',sampleBytes:bytes,candidates:[1,3],roundsPerDirection:8,confirmationBytes:CONFIRM_SCALE*bytes,
-      payloadBudgetBytes:2*(5+4*CONFIRM_SCALE)*bytes,order:order(s),messageCeilingBytes:65536,queueHighBytes:QUEUE_BYTES});
+      intent:oneWay?'send':'explore',direction:initiator?'outgoing':'incoming',payloadBudgetBytes:(oneWay?1:2)*(5+4*CONFIRM_SCALE)*bytes,order:order(s),messageCeilingBytes:65536,queueHighBytes:QUEUE_BYTES});
     return s;
   }
   const order=s=>s.reverse?[3,1,1,3]:[1,3,3,1];
@@ -150,7 +176,7 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
       if(data.length>512)throw Error('Invalid probe data');
       const body=JSON.parse(data);
       if(body.action==='sample') {
-        if(s.initiator?s.samples.length!==8:s.started)throw Error('Invalid probe data');
+        if(s.initiator?(s.oneWay||s.samples.length!==8):s.started)throw Error('Invalid probe data');
         if(body.round!==s.nextReceive||!Number.isInteger(body.round)||body.round<0||body.round>=2*ROUNDS)throw Error('Invalid probe data');
         const spec=specification(s,body.round);
         if(lane>=spec.connections||body.bytes!==spec.perLane)throw Error('Invalid probe data');
@@ -161,9 +187,9 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
       if(lane!==0)throw Error('Invalid probe data');
       if(body.action==='progress'&&s.ack?.round===body.round){const ack=s.ack;if(!Number.isSafeInteger(body.bytes)||body.bytes<=ack.delivery.at(-1).bytes||body.bytes>=ack.bytes||ack.delivery.length>=4)throw Error('Invalid probe data');ack.delivery.push({bytes:body.bytes,elapsedMs:now()-ack.startedAt});return;}
       if(body.action==='ack'&&s.ack?.round===body.round){const ack=s.ack;s.ack=null;ack.resolve();return;}
-      if(body.action==='turn'&&!s.initiator&&s.nextReceive===ROUNDS&&!s.started){s.started=true;void run(s,ROUNDS).catch(e=>fail(s,e));return;}
-      if(body.action==='finished'&&s.initiator&&s.nextReceive===2*ROUNDS){s.finishing=true;rowSend(s,0,{action:'finishAck'});return;}
-      if(body.action==='finishAck'&&!s.initiator&&s.running===false&&s.samples.length===8){wire(s,{action:'complete'});retire(s,'complete',false);return;}
+      if(body.action==='turn'&&!s.oneWay&&!s.initiator&&s.nextReceive===ROUNDS&&!s.started){s.started=true;void run(s,ROUNDS).catch(e=>fail(s,e));return;}
+      if(body.action==='finished'&&(s.oneWay?!s.initiator&&s.nextReceive===ROUNDS:s.initiator&&s.nextReceive===2*ROUNDS)){s.finishing=true;rowSend(s,0,{action:'finishAck'});return;}
+      if(body.action==='finishAck'&&(s.oneWay?s.initiator:!s.initiator)&&s.running===false&&s.samples.length===8){wire(s,{action:'complete'});retire(s,'complete',false);return;}
       throw Error('Invalid probe data');
     }
     const receiving=s.receiving;
@@ -239,11 +265,11 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
     }
     s.running=false;
     const selection=selectTransferSetup(s.samples,fallback);
-    const result={version:2,id:s.id,scope:'synthetic_transfer_connections',direction:'outgoing',...selection,
-      sampleBytes:s.bytes,confirmationBytes:s.bytes*CONFIRM_SCALE,payloadBudgetBytes:2*(5+4*CONFIRM_SCALE)*s.bytes,queueHighBytes:QUEUE_BYTES,samples:structuredClone(s.samples),validFor:'current_peer_connection_generation',
-      limitations:['bounded_samples_include_ack_latency','per_association_probe_queue_cap','separate_associations_from_file','does_not_measure_disk_or_hashing','does_not_establish_link_capacity']};
+    const result={version:3,id:s.id,scope:'synthetic_transfer_connections',direction:'outgoing',...selection,
+      sampleBytes:s.bytes,confirmationBytes:s.bytes*CONFIRM_SCALE,payloadBudgetBytes:(s.oneWay?1:2)*(5+4*CONFIRM_SCALE)*s.bytes,queueHighBytes:QUEUE_BYTES,samples:structuredClone(s.samples),validFor:'current_peer_connection_generation',
+      limitations:['bounded_samples_include_ack_latency','per_association_probe_queue_cap','file_handoff_requires_retained_associations','does_not_measure_disk_or_hashing','does_not_establish_link_capacity']};
     results.set(s.peer,result);notify(s,{phase:'preflight-result',...result});
-    if(base===0)rowSend(s,0,{action:'turn'});else rowSend(s,0,{action:'finished'});
+    if(base===0&&!s.oneWay)rowSend(s,0,{action:'turn'});else rowSend(s,0,{action:'finished'});
   }
   async function signal(s,lane,body) {
     if(!live(s))return;
@@ -261,13 +287,13 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
     }
   }
   return {
-    start(peer) {
-      if(!permitted(peer)||self()>peer||busy()||active||attempted.has(peer)||attempted.size>=128)return false;
+    start(peer,oneWay=false) {
+      if(!permitted(peer)||(!oneWay&&self()>peer)||busy()||active||parked||(!oneWay&&attempted.has(peer))||attempted.size>=128)return false;
       const id=newId();if(!validId(id))throw Error('Invalid probe id');
       let s;
       try {
-        s=create(peer,id,true,sampleBytes,parseInt(id.replaceAll('-','').slice(-1),16)%2===1);
-        wire(s,{action:'init',sampleBytes:s.bytes,reverse:s.reverse});
+        s=create(peer,id,true,sampleBytes,parseInt(id.replaceAll('-','').slice(-1),16)%2===1,oneWay);
+        wire(s,{action:'init',sampleBytes:s.bytes,reverse:s.reverse,oneWay});
         for(const [lane,row]of s.lanes.entries()) {
           bind(s,lane,row.pc.createDataChannel('phantom-distribution-scout',{ordered:true}));
           void (async()=>{await row.pc.setLocalDescription(await row.pc.createOffer());wire(s,{action:'signal',lane,description:{type:'offer',sdp:row.pc.localDescription.sdp}});})().catch(e=>fail(s,e));
@@ -276,25 +302,51 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
       }catch(e){if(active)retire(active,'setup_failed');return false;}
     },
     receive(peer,body) {
-      if(!trusted(peer)||body?.type!=='transferScout'||body.version!==2||!validId(body.id))return false;
+      if(!trusted(peer)||body?.type!=='transferScout'||body.version!==3||!validId(body.id))return false;
+      if(body.action==='release'&&parked?.peer===peer&&parked.id===body.id){releasePool('peer_released',false);return true;}
       if(body.action==='init') {
         if(active?.peer===peer&&active.id===body.id)return true;
-        const invalid=self()<peer||!Number.isInteger(body.sampleBytes)||body.sampleBytes<3072||body.sampleBytes>sampleBytes||body.sampleBytes%3||typeof body.reverse!=='boolean';
-        if(invalid||suspended||active||busy()||attempted.has(peer)||attempted.size>=128){send(peer,{type:'transferScout',version:2,id:body.id,action:'cancel',reason:invalid?'profile_not_supported':'busy'});return false;}
-        try{create(peer,body.id,false,body.sampleBytes,body.reverse);}catch{if(active)retire(active,'setup_failed');}return true;
+        const oneWay=body.oneWay===true;
+        const invalid=typeof body.oneWay!=='boolean'||(!oneWay&&self()<peer)||!Number.isInteger(body.sampleBytes)||body.sampleBytes<3072||body.sampleBytes>sampleBytes||body.sampleBytes%3||typeof body.reverse!=='boolean';
+        if(!invalid&&oneWay&&!demanded.has(peer)&&active?.peer===peer&&!active.oneWay)retire(active,'sender_intent',false);
+        if(invalid||suspended||active||parked||busy()||(oneWay?demanded.has(peer):attempted.has(peer))||attempted.size>=128){send(peer,{type:'transferScout',version:3,id:body.id,action:'cancel',reason:invalid?'profile_not_supported':'busy'});return false;}
+        try{if(oneWay)demanded.add(peer);create(peer,body.id,false,body.sampleBytes,body.reverse,oneWay);}catch{if(active)retire(active,'setup_failed');}return true;
       }
       const s=active;if(!s||s.peer!==peer||s.id!==body.id)return false;
       if(body.action==='cancel'){retire(s,['busy','profile_not_supported'].includes(body.reason)?'peer_'+body.reason:'peer_cancelled',false);return true;}
-      if(body.action==='complete'&&s.initiator&&s.nextReceive===2*ROUNDS){retire(s,'complete',false);return true;}
+      if(body.action==='complete'&&(s.oneWay?!s.initiator&&s.nextReceive===ROUNDS:s.initiator&&s.nextReceive===2*ROUNDS)){retire(s,'complete',false);return true;}
       if(!Number.isInteger(body.lane)||body.lane<0||body.lane>=LANES)return false;
       if(body.action==='ready'){s.ready.add(body.lane);maybeStart(s);return true;}
       if(body.action==='signal'){const row=s.lanes[body.lane];if(++row.signalCount>64){retire(s,'signal_budget_exceeded');return false;}row.signals=row.signals.then(()=>signal(s,body.lane,body)).catch(e=>fail(s,e));return true;}
       return false;
     },
-    get(peer){const result=results.get(peer);return result?structuredClone(result):null;},
+    async forSend(peer){
+      if(!permitted(peer)||busy())return null;
+      if(parked?.peer===peer&&!parked.asset&&results.has(peer))return structuredClone(results.get(peer));
+      if(waiters.has(peer))return null;
+      if(demanded.has(peer))return null;
+      // A file declares its direction. Replace incomplete background exploration
+      // with one bounded outgoing pass; never probe the opposite direction first.
+      if(active)retire(active,'sender_intent');
+      releasePool();demanded.add(peer);
+      const completed=new Promise(resolve=>waiters.set(peer,resolve));
+      if(!this.start(peer,true))settleSend(peer);
+      return completed;
+    },
+    take(peer,id,lane,asset,jobId){
+      const pool=parked;if(!pool||pool.peer!==peer||(id&&pool.id!==id)||!trusted(peer)||(pool.asset&&pool.asset!==asset))return null;
+      const index=lane===undefined?pool.lanes.findIndex(row=>!row.claimed):lane;
+      if(!Number.isInteger(index)||index<0||index>=LANES)return null;
+      const row=pool.lanes[index];if(row.claimed||row.pc.connectionState!=='connected')return null;
+      pool.asset=asset;row.claimed=true;row.pc.onicecandidate=null;row.pc.onconnectionstatechange=null;row.pc.ondatachannel=null;
+      row.dc.onclose=null;row.dc.onmessage=null;row.dc.close();
+      notify(pool,{phase:'preflight-handoff',lane:index,status:'claimed',jobId});
+      return {pc:row.pc,channel:row.pending??null,id:pool.id,lane:index};
+    },
+    get(peer){const result=results.get(peer);return result?{...structuredClone(result),transportAvailable:parked?.peer===peer&&!parked.asset}:null;},
     suspend(reason='file_selected'){suspended=true;if(active)retire(active,reason);},
-    drop(peer){if(active?.peer===peer)retire(active,'peer_disconnected',false);results.delete(peer);attempted.delete(peer);},
-    clear(){if(active)retire(active,'generation_changed',false);results.clear();attempted.clear();suspended=false;},
-    close(){if(active)retire(active,'session_closed');closed=true;results.clear();attempted.clear();},
+    drop(peer){if(parked?.peer===peer)releasePool('peer_disconnected',false);demanded.delete(peer);if(active?.peer===peer)retire(active,'peer_disconnected',false);results.delete(peer);attempted.delete(peer);},
+    clear(){releasePool('generation_changed');demanded.clear();if(active)retire(active,'generation_changed',false);results.clear();attempted.clear();suspended=false;},
+    close(){releasePool('session_closed');demanded.clear();if(active)retire(active,'session_closed');closed=true;results.clear();attempted.clear();},
   };
 }

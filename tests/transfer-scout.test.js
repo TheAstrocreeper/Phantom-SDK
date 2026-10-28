@@ -32,9 +32,10 @@ function fixture({drop=false,maxMessageSize=262144,sampleBytes=98304,queueModel=
  }});
  class RTC extends Base{constructor(){super();pcs.push(this);}fire(type,event={}){if(queueModel&&type==='datachannel')upgrade(event.channel);super.fire(type,event);}}
  const nodes=ids.map((id,i)=>{
+  let serial=0;
   const clock=queueModel?performance:scoutClock({maxMessageSize,sampleBytes});
   return createTransferScout({self:()=>id,allowed:p=>p===ids[1-i],runtime:{crypto,RTCPeerConnection:RTC,performance:clock},
-   send(peer,body){frames.push({from:id,peer,body});queueMicrotask(()=>nodes[1-i].receive(id,body));},newId:()=> 'scout-0000',sampleBytes,onReport:r=>{clock.report?.(r);reports.push({i,...r});}});
+   send(peer,body){frames.push({from:id,peer,body});queueMicrotask(()=>nodes[1-i].receive(id,body));},newId:()=> `scout-${i}-${serial++}-0`,sampleBytes,onReport:r=>{clock.report?.(r);reports.push({i,...r});}});
  });
  return {nodes,frames,reports,pcs,payloads,peaks,close:()=>nodes.forEach(n=>n.close())};
 }
@@ -50,7 +51,7 @@ test('measures both directions on three real-style associations with a fixed byt
    assert.equal(report.samples.length,8);assert.deepEqual(report.samples.map(s=>s.bytes),[98304,98304,98304,98304,393216,393216,393216,393216]);assert.ok(report.samples.every(s=>s.delivery.length>=3));
    assert.equal(f.reports.filter(r=>r.i===i&&r.phase==='preflight-sample'&&r.warmup).length,1);
   }
-  assert.equal(f.pcs.length,6);assert.ok(f.pcs.every(pc=>pc.connectionState==='closed'));
+  assert.equal(f.pcs.length,6);assert.ok(f.pcs.every(pc=>pc.connectionState==='connected'));
   assert.equal(f.payloads.reduce((n,p)=>n+p.bytes,0),42*98304);assert.ok(f.payloads.every(p=>p.bytes<=16384));
   assert.equal(f.nodes[0].start(ids[1]),false,'does not loop or repeat a completed scout');
  }finally{globalThis.setTimeout=original;f.close();}
@@ -78,7 +79,7 @@ test('a silent receiver stays byte-bounded and file selection cancels and cleans
 });
 test('foreign, duplicate, oversized and unadmitted control messages do not allocate extra connections',async()=>{
  const f=fixture({drop:true});try{
-  const init={type:'transferScout',version:2,id:'foreign',action:'init',sampleBytes:98304,reverse:false};
+  const init={type:'transferScout',version:3,id:'foreign',action:'init',sampleBytes:98304,reverse:false,oneWay:false};
   assert.equal(f.nodes[1].receive('3333333333333333',init),false);
   assert.equal(f.nodes[1].receive(ids[0],{...init,sampleBytes:4*1024*1024}),false);
   assert.equal(f.pcs.length,0);f.nodes[0].start(ids[1]);await settle(()=>f.pcs.length===6);
@@ -95,9 +96,9 @@ test('cancellation settles a confirmation waiting for native queue capacity',asy
   assert.equal(f.nodes[0].get(ids[1]),null);
  }finally{f.close();}
 });
-test('v1 control packets cannot start a v2 byte schedule',()=>{
+test('older control packets cannot start a v3 byte schedule',()=>{
  const f=fixture();try{
-  assert.equal(f.nodes[1].receive(ids[0],{type:'transferScout',version:1,id:'old-peer',action:'init',sampleBytes:98304,reverse:false}),false);
+  assert.equal(f.nodes[1].receive(ids[0],{type:'transferScout',version:1,id:'old-peer',action:'init',sampleBytes:98304,reverse:false,oneWay:false}),false);
   assert.equal(f.pcs.length,0);
  }finally{f.close();}
 });
@@ -147,5 +148,38 @@ test('cancelling preserves unfinished send and receive evidence without promotin
   assert.equal(incoming.partial.incoming.complete,false);assert.equal(incoming.partial.incoming.lanes.reduce((n,l)=>n+l.bytes,0),0);
   assert.equal(f.nodes[0].get(ids[1]),null);
   const captured=structuredClone(outgoing.partial);await Promise.resolve();assert.deepEqual(outgoing.partial,captured);
+ }finally{f.close();}
+});
+
+test('the intended sender can own a one-way scout regardless of peer ID and retain its associations',async()=>{
+ const f=fixture();try{
+  const result=await f.nodes[1].forSend(ids[0]);await settle(()=>f.reports.filter(r=>r.phase==='preflight'&&r.status==='complete').length===2);
+  assert.equal(result.direction,'outgoing');assert.equal(result.samples.length,8);assert.equal(result.payloadBudgetBytes,21*98304);
+  assert.equal(f.payloads.reduce((n,p)=>n+p.bytes,0),21*98304);
+  assert.equal(f.nodes[0].get(ids[1]),null,'the receiver did not pretend to measure its outgoing direction');
+  assert.equal(f.reports.filter(r=>r.i===0&&r.phase==='preflight-sample').length,0);
+  assert.equal(f.pcs.length,6);assert.ok(f.pcs.every(pc=>pc.connectionState==='connected'));
+  const source=f.nodes[1].take(ids[0],result.id,0,'asset-A');
+  const target=f.nodes[0].take(ids[1],result.id,0,'asset-A');
+  assert.equal(source.pc.other,target.pc);assert.equal(f.nodes[1].take(ids[0],result.id,0,'asset-A'),null);
+  assert.equal(f.nodes[1].take(ids[0],result.id,1,'asset-B'),null,'a pool cannot be borrowed by another asset');
+  assert.equal(f.nodes[1].get(ids[0]).transportAvailable,false);
+  source.pc.close();
+ }finally{f.close();}
+});
+test('sender intent replaces unfinished background exploration and skip releases the wait',async()=>{
+ const f=fixture({drop:true});try{
+  f.nodes[0].start(ids[1]);await settle(()=>f.payloads.length>0);
+  const waiting=f.nodes[1].forSend(ids[0]);await settle(()=>f.reports.some(r=>r.i===1&&r.phase==='preflight'&&r.intent==='send'));
+  f.nodes[1].suspend('send_without_waiting');assert.equal(await waiting,null);
+  await settle(()=>f.pcs.every(pc=>pc.connectionState==='closed'));
+  assert.equal(f.nodes[1].get(ids[0]),null);
+ }finally{f.close();}
+});
+test('an unused retained pool is released on generation invalidation on both peers',async()=>{
+ const f=fixture();try{
+  await f.nodes[1].forSend(ids[0]);await settle(()=>f.reports.filter(r=>r.phase==='preflight'&&r.status==='complete').length===2);
+  f.nodes[1].clear();await settle(()=>f.pcs.every(pc=>pc.connectionState==='closed'));
+  assert.equal(f.nodes[0].take(ids[1],null,0,'asset'),null);
  }finally{f.close();}
 });

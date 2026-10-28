@@ -1,93 +1,100 @@
-# Transfer scout: measured setup before a file
+# Transfer scout: measured setup and transport handoff
 
 Opt in with `distribution: {capabilityExchange:true, assignedRanges:true,
-transferScout:true, maxConnections:3}`. Capability exchange must be requested
-on the authenticated peer path, as Phantom Share already does on readiness.
-Both endpoints must advertise `phantom-transfer-scout-v2`; older peers continue
-using the previous file path without this probe. The v2 byte schedule is never
-sent to a v1 scout. Native WebRTC is not involved.
+transferScout:true, maxConnections:3}`. Add `scoutBeforeSend:true` to wait for
+outgoing scouting during single-recipient agreed preparation. Phantom Share
+uses both. Both endpoints advertise `phantom-transfer-scout-v3`; v1/v2 peers
+keep their compatible file path without v3 scouting or handoff. Native WebRTC
+is not involved.
 
-The smaller peer ID owns one bounded exploration. It opens three independent
-RTC associations with the same RTC configuration as file jobs. Each direction
-gets a warm-up, four screening deliveries, and four larger confirmations.
-Screening uses balanced 1/3/3/1 or 3/1/1/3 connection order; confirmation uses
-the opposite order. Directions run consecutively. Payloads are pseudorandom
+The smaller peer ID starts background exploration over three independent RTC
+associations using the file RTC configuration and reliable ordered channels.
+Each direction gets a warm-up, four screening deliveries, and four larger
+confirmations. Screening uses balanced 1/3/3/1 or 3/1/1/3 order; confirmation
+uses the opposite order. Directions run consecutively. Payloads are random
 bytes counted and discarded by the receiver. Three bounded intermediate
-acknowledgments, when message boundaries permit them, report cumulative bytes;
-a final acknowledgment confirms completion. All elapsed times use the sender's
-monotonic clock. No clocks are compared between devices.
+acknowledgments report cumulative bytes; the final acknowledgment confirms
+completion. Sender durations use its monotonic clock, never device clock
+subtraction.
 
-The initial sample defaults to 768 KiB; each confirmation carries four times
-that payload, or 3 MiB. Both directions together are capped at 31.5 MiB of
-payload plus signaling/framing overhead. `scoutSampleBytes` configures the base
-sample between 3 KiB and 3 MiB, divisible by three; the larger stage and total
-budget scale from that base. Each association's application queue is bounded
-at 768 KiB, resuming from native drain events below 384 KiB. Larger candidates
-pump all active associations concurrently. No retries or new timers are added.
-A silent native queue remains cancellable through the existing lifecycle.
+If a file is selected before background exploration completes, agreed
+preparation with `scoutBeforeSend:true` replaces it with one outgoing pass
+owned by the intended sender, regardless of peer ID. The other direction
+is not measured first. Preparation continues after explicit completion,
+native failure, peer refusal, cancellation, disconnect or session close.
+`network.skipTransferScout()` cancels that wait and continues with the
+compatible file setup; Share exposes **Send without waiting** during this
+step. A silent peer cannot be detected without a timeout: the user must skip
+or leave. There is no new timeout, polling loop or retry queue. Opt-in callers
+must provide cancellation access. Unsupported peers are never awaited.
 
-The scout records message sizes, delivery progress, queue peaks and bounded
-local browser stats. Each sender sample also retains per-lane submitted payload,
-queue wait count, cumulative/maximum queue wait, and enqueue completion time.
-The receiver independently retains each lane's byte/message count, first/last
-arrival, completion time, maximum gap and four largest gap intervals. These
-arrival times share the receiver's monotonic clock, so intervals across lanes
-of the same round can be compared. They are JavaScript delivery observations,
-not packet timestamps or proof of network loss. Sender queue times use the
-sender's clock and must not be subtracted from receiver times.
+The base sample defaults to 768 KiB; each confirmation carries 3 MiB. Background
+exploration is capped at 31.5 MiB of payload, and a replacement outgoing pass
+at 15.75 MiB, plus signaling/framing. At most one replacement is attempted per
+peer and generation. `scoutSampleBytes` configures the base between 3 KiB and
+3 MiB, divisible by three; budgets scale with it. Each association's probe
+queue is bounded at 768 KiB, resuming on native drain events below 384 KiB.
+Active lanes pump concurrently. These queue bounds do not tune the file
+sender's watermarks.
 
-Completion and cancellation lifecycle reports retain the bounded incoming
-round summaries, even if raw stats reports rotate out of Share's export.
-Cancellation also captures unfinished outgoing enqueue/progress/queue state
-and unfinished incoming lane state. Partial observations never qualify as a
-completed measurement or override the fallback. This adds no probe payload,
-control frames, timers, or automatic retries. A short-run winner is only provisional. To replace the
-fallback, both repeated timings must beat both timings of the alternative at
-each payload size, the winner must agree between sizes, and the later portion
-of both confirmations must also beat the alternative. Missing, contradictory
-or overlapping evidence is explicitly inconclusive and keeps three. A later
-portion begins at the first recorded progress point between 50% and 75% of the
-payload and ends at completion; these are acknowledged-delivery rates, not NIC
-packet timestamps. Reports retain both stages and the reason for the decision.
+A short-run winner is provisional. Both repeated timings must beat both of
+the alternative at each size, agree between sizes, and also win in the later
+confirmation delivery windows. Missing or overlapping evidence explicitly
+keeps the fallback of three connections. These are acknowledged-delivery
+rates, not NIC timestamps, link capacity or steady-state guarantees. Probe
+payload omits file reading, hashing, framing and storage.
 
-This is a bounded multiscale experiment, not a statistical guarantee or proof
-of steady-state throughput. It includes acknowledgment and browser scheduling
-latency. It omits file reading, hashing, file framing, storage and batching.
-Its per-association queue cap is a probe resource bound, not a tuning change to
-the file sender's watermarks. Probe associations are separate from file
-associations and may select different routes. The probe does not establish
-link capacity or prove that its choice wins for a full large file. Existing
-actual-file logs remain necessary for checking that predictive gap.
+The receiver retains each lane's byte/message count, first/last arrival,
+completion time, maximum gap and four largest gap intervals on a common local
+clock for that round. Sender samples retain per-lane queue wait count,
+cumulative/maximum queue wait, payload submitted and enqueue completion.
+Completed/cancelled lifecycle reports retain incoming summaries; cancellation
+also captures unfinished enqueue/progress/queue and receiver state. Partial
+observations never override the fallback. Browser stats remain local. No extra
+traffic is required for these summaries.
 
-Only outgoing evidence chooses outgoing transfers. Share captures the current
-selection when preparing a file for one agreed recipient. The selected limit
-travels with that source's authenticated inventory for that asset and receiver;
-the coordinator caps simultaneous assigned jobs for that exact pair. A third
-device can coordinate without receiving the file. The coordinator acknowledges
-the policy, producing a distinct `preflight-applied` log event. An older or
-unconfirmed coordinator retains the previous setup; logs never call that
-an applied measured choice. Multi-recipient sends retain the previous setup.
+## Reuse of the measured associations
 
-Scouting does not block sending: selecting a file cancels outstanding scouting
-on both peers. An incomplete scout falls back to the existing setup. The same
-cancellation happens when a file job arrives. Disconnect, exclusion, membership
-removal, leadership change and session close release probe resources and
-invalidate the applicable observation. At most one peer can be scouted locally
-at a time; no automatic retry queue is created. A silent peer may occupy that
-bounded slot until file selection, disconnect or close; it cannot hold a file
-send hostage. Samples are not reused across sessions and are not uploaded.
+After the completion handshake, both endpoints retain the three associations.
+File preparation does not destroy a completed pool. Assigned file jobs claim
+lanes from that pool and create file channels on the **same SCTP/DTLS/ICE
+associations**, preserving the routes that were measured. Existing file
+readiness, framing, verification and coordinator leases remain in use.
 
-`network.getTransferScout(peer)` exposes the outgoing result, including the
-coordinator support state. `network.getTransferPlan(peer).setup` includes it
-without changing the already negotiated chunk plan. Existing
-`distributionScout` events carry the full local measurements and explicit
-selected/applied phases into Share's existing log export. Raw browser stats
-stay local; only the bounded selection policy goes to the coordinator.
+The source sends the scout ID and lane over the authenticated control path.
+The receiver only binds it to an authorized coordinator job with the matching
+peer, scout pool and assigned range. Each lane can be claimed once. A pool is
+bound to one asset at its first claim, and cannot be reused by another asset.
+Unexpected incoming file channels are bounded to one per retained association
+until authenticated binding. A missing/failed pool rejects the handoff through
+the existing job failure path; it is never silently logged as a successful
+handoff to a different connection. Logs retain distinct claimed and bound
+`preflight-handoff` events with job IDs.
 
-Validation: `node --test tests/transfer-scout*.test.js` checks quotas,
-cancellation, old-peer fallback, and actual scheduler enforcement including an
-independent coordinator. Deterministic transport tests are protocol tests, not
-network-performance evidence. `tools/perf/transfer-scout-browser.mjs` exercises
-real Chromium associations and verifies a subsequent 4 MiB file byte-for-byte.
-It checks plumbing, cancellation and cleanup on loopback; WAN performance still
-requires the user's actual path.
+Unused associations remain bounded to the pool of three and are released on
+peer loss, exclusion, generation change, session close or explicit pool
+replacement. Claimed associations belong to file jobs and follow their normal
+cleanup. Once consumed, a pool is not presented as an available measured setup
+for a different file. Later sends may therefore use the compatible fallback;
+there is no automatic re-probing loop.
+
+Only outgoing evidence selects outgoing setup. The source's selected limit
+travels with its authenticated inventory for that asset and recipient. The
+coordinator caps assigned jobs for that exact pair, including when a third
+peer coordinates. `preflight-selected` and `preflight-applied` distinguish a
+request from coordinator acknowledgment; handoff events establish transport
+reuse separately. Old/unconfirmed coordinators retain their previous limits.
+Multi-recipient sends keep the compatible path.
+
+`network.getTransferScout(peer)` and `network.getTransferPlan(peer).setup`
+expose an available outgoing setup. Retained raw reports stay in Share's
+existing export, with completed/cancelled summaries and bounded handoff records
+preserved independently of raw report rotation. Nothing is uploaded.
+
+Validation: `node --test tests/transfer-scout*.test.js` covers policy, quotas,
+sender intent, cancellation, one-time lane/asset binding, cleanup and scheduler
+enforcement with an independent coordinator. The deterministic transport fixture
+is a protocol model, not a performance model. `tools/perf/transfer-scout-browser.mjs`
+checks real Chromium association identity through both background and outgoing
+scouts, a byte-for-byte 4 MiB file, cleanup and cancellation. Loopback checks
+plumbing; improvement on the user's network remains unproven.

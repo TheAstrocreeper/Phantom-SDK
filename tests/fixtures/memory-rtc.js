@@ -12,7 +12,13 @@ export function memoryRTC({emitCandidates=false,onSend=()=>true,maxMessageSize=2
   addEventListener(type,fn){if(!this.listeners.has(type))this.listeners.set(type,new Set());this.listeners.get(type).add(fn);}
   removeEventListener(type,fn){this.listeners.get(type)?.delete(fn);}
   fire(type,event={}){this['on'+type]?.(event);for(const fn of this.listeners.get(type)??[])fn(event);}
-  createDataChannel(label){const ch=new Channel(label);this.channels.push(ch);return ch;}
+  createDataChannel(label){const ch=new Channel(label);this.channels.push(ch);
+   if(this.connectionState==='connected'&&this.other)queueMicrotask(()=>{
+    if(this.connectionState!=='connected'||ch.readyState==='closed')return;
+    const remote=new Channel(label);ch.other=remote;remote.other=ch;this.other.channels.push(remote);this.other.fire('datachannel',{channel:remote});
+    for(const channel of [ch,remote]){channel.readyState='open';queueMicrotask(()=>channel.onopen?.());}
+   });return ch;}
+
   async createOffer(){offers.set(this.id,this);return {type:'offer',sdp:String(this.id)};}
   async createAnswer(){return {type:'answer',sdp:this.remoteDescription.sdp};}
   async setLocalDescription(value){this.localDescription=value;this.signalingState=value.type==='offer'?'have-local-offer':'stable';this.fire('signalingstatechange');if(emitCandidates)setTimeout(()=>{if(this.connectionState!=='closed')this.fire('icecandidate',{candidate:{candidate:`candidate:${this.id} 1 udp 1 192.0.2.1 ${10000+this.id} typ host`,sdpMid:'0',sdpMLineIndex:0}});},0);}
