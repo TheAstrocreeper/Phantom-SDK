@@ -1,6 +1,11 @@
 const DEFAULT_HIGH=16*1024*1024,DEFAULT_LOW=4*1024*1024;
 const key=lanes=>lanes.join(',');
 const range=values=>({min:Math.min(...values),max:Math.max(...values)});
+const lateRate=sample=>{
+ const points=sample.delivery;if(!Array.isArray(points)||points.length<3||points.length>6||points.some(p=>!p||!Number.isSafeInteger(p.bytes)||!Number.isFinite(p.elapsedMs)||p.elapsedMs<0)||points[0].bytes!==0||points[0].elapsedMs!==0)return null;
+ for(let i=1;i<points.length;i++)if(points[i].bytes<=points[i-1].bytes||points[i].elapsedMs<points[i-1].elapsedMs)return null;
+ const last=points.at(-1),middle=points.find(p=>p.bytes>=sample.bytes/2&&p.bytes<=sample.bytes*3/4);return last.bytes===sample.bytes&&last.elapsedMs===sample.elapsedMs&&middle&&last.elapsedMs>middle.elapsedMs?(last.bytes-middle.bytes)*1000/(last.elapsedMs-middle.elapsedMs):null;
+};
 const validLanes=lanes=>Array.isArray(lanes)&&lanes.length>0&&lanes.length<=3&&lanes.every((n,i)=>Number.isInteger(n)&&n>=0&&n<3&&(!i||n>lanes[i-1]));
 
 function receiverRows(samples,evidence){
@@ -34,12 +39,15 @@ function testedProfiles(result){
  * checks receiver delivery and stalls on the same profiles. Unknown native
  * socket state stays unknown; peer counter differences are never wire loss.
  */
-export function buildScoutConnectionPlan(result,{fallback=3}={}){
+export function buildScoutConnectionPlan(result,{fallback=3,maxRateReduction=0.1}={}){
+ if(!Number.isFinite(maxRateReduction)||maxRateReduction<0||maxRateReduction>0.1)throw TypeError('Invalid lane rate tradeoff');
  if(![1,2,3].includes(fallback))throw TypeError('Invalid connection plan fallback');
  const fallbackLanes=Array.from({length:fallback},(_,i)=>i);
  let lanes=fallbackLanes,laneReason=result?.reason??'sender_evidence_unavailable',laneEvidence=[];
+ const confirmations=(Array.isArray(result?.samples)?result.samples:[]).filter(s=>s?.stage==='confirm'),receiverConfirmations=receiverRows(confirmations,result?.receiverEvidence);
+ if(receiverConfirmations?.length===6)laneEvidence=[...new Set(receiverConfirmations.map(r=>key(r.lanes)))].map(k=>({lanes:receiverConfirmations.find(r=>key(r.lanes)===k).lanes,...envelope(receiverConfirmations.filter(r=>key(r.lanes)===k))}));
  if(result?.status==='measured'&&validLanes(result.lanes)){
-  const samples=(Array.isArray(result.samples)?result.samples:[]).filter(s=>s.stage==='confirm'),rows=receiverRows(samples,result.receiverEvidence);
+  const samples=(Array.isArray(result.samples)?result.samples:[]).filter(s=>s?.stage==='confirm'),rows=receiverRows(samples,result.receiverEvidence);
   if(!rows||rows.length!==6)laneReason='receiver_confirmation_unavailable';
   else{
    const profiles=[...new Set(rows.map(r=>key(r.lanes)))].map(k=>({lanes:rows.find(r=>key(r.lanes)===k).lanes,...envelope(rows.filter(r=>key(r.lanes)===k))}));
@@ -51,7 +59,25 @@ export function buildScoutConnectionPlan(result,{fallback=3}={}){
    else{lanes=[...result.lanes];laneReason='sender_and_receiver_confirm_lane_winner';}
   }
  }
- const laneMeasured=laneReason==='sender_and_receiver_confirm_lane_winner';
+ let laneStatus=laneReason==='sender_and_receiver_confirm_lane_winner'?'measured':'fallback';
+ const tradeoff={maxRateReduction,referenceLanes:fallbackLanes,claim:'bounded_observed_tradeoff_not_statistical_equivalence',candidates:[]};
+ // A fallback may deliberately use fewer connections, but only with complete
+ // larger-payload repetitions and explicit bounds at both endpoints and tails.
+ const screening=(Array.isArray(result?.samples)?result.samples:[]).filter(s=>s?.stage==='screen');
+ const comparable=screening.length===14&&screening.every(s=>validLanes(s.lanes))&&new Set(screening.map(s=>key(s.lanes))).size===7&&screening.every(s=>validLanes(s.lanes)&&Number.isFinite(s.elapsedMs)&&s.elapsedMs>0&&screening.filter(other=>key(other.lanes)===key(s.lanes)).length===2)&&new Set(screening.map(s=>s.bytes)).size===1&&confirmations.length===6&&confirmations.every(s=>validLanes(s.lanes)&&Number.isFinite(s.elapsedMs)&&s.elapsedMs>0&&s.bytes===screening[0].bytes*4&&Number.isFinite(lateRate(s))&&lateRate(s)>0)&&new Set([...screening,...confirmations].map(s=>s.round)).size===20;
+ if(laneStatus==='fallback'&&(result?.status==='measured'||['confirmation_ranges_overlap','late_delivery_does_not_confirm_winner'].includes(result?.reason))&&comparable&&receiverConfirmations?.length===6&&laneEvidence.length===3&&laneEvidence.every(p=>p.repetitions===2)&&new Set(laneEvidence.map(p=>p.lanes.length)).size===3){
+  const summaries=laneEvidence.map(profile=>{const rows=confirmations.filter(s=>key(s.lanes)===key(profile.lanes)),tails=rows.map(lateRate);return {...profile,senderRate:range(rows.map(s=>s.bytes*1000/s.elapsedMs)),senderLateRate:tails.every(n=>Number.isFinite(n)&&n>0)?range(tails):null};});
+  const reference=summaries.find(p=>key(p.lanes)===key(fallbackLanes));
+  if(reference?.senderLateRate){
+   for(const p of summaries.filter(p=>p.lanes.length<fallbackLanes.length)){
+    const reasons=[];if(p.senderRate.min<reference.senderRate.max*(1-maxRateReduction))reasons.push('sender_rate_outside_tradeoff');if(!p.senderLateRate||p.senderLateRate.min<reference.senderLateRate.max*(1-maxRateReduction))reasons.push('sender_late_rate_outside_tradeoff');if(p.bytesPerSecond.min<reference.bytesPerSecond.max*(1-maxRateReduction))reasons.push('receiver_rate_outside_tradeoff');if(p.maxGapMs.max>reference.maxGapMs.max)reasons.push('receiver_stalls_worse_than_reference');
+    tradeoff.candidates.push({lanes:p.lanes,eligible:!reasons.length,reasons,...p});
+   }
+   const chosen=tradeoff.candidates.filter(p=>p.eligible).sort((a,b)=>a.lanes.length-b.lanes.length||key(a.lanes).localeCompare(key(b.lanes)))[0];
+   if(chosen){lanes=[...chosen.lanes];laneStatus='bounded_tradeoff';laneReason='fewer_connections_within_explicit_rate_and_stall_bounds';}
+  }
+ }
+
  let queueReason=result?.comparison==='message'?'queue_held_fixed_for_message_comparison':result?.queuePolicy?.reason??'queue_evidence_unavailable',queueEvidence=[];
  let queuePolicy={status:'fallback',highWaterMark:DEFAULT_HIGH,lowWaterMark:DEFAULT_LOW};
  if(result?.queuePolicy?.status==='measured'){
@@ -82,12 +108,18 @@ export function buildScoutConnectionPlan(result,{fallback=3}={}){
    else{messagePolicy={status:'measured',maxPayloadBytes:16384};messageReason='sender_and_receiver_confirm_smaller_messages';}
   }
  }
- return {version:1,validFor:'current_peer_connection_generation',connections:lanes.length,lanes,
-  laneDecision:{status:laneMeasured?'measured':'fallback',reason:laneReason,evidence:laneEvidence},
+ const nativeLanes=lanes.map(lane=>{
+  const report=result?.localTransportPreparation?.find(row=>row.lane===lane)?.report,before=report?.before,after=report?.applied?.after;
+  const known=report?.scope==='owned_webview_udp_socket'&&before?.status==='observed'&&after?.status==='observed'&&before.inode===after.inode&&before.cookie===after.cookie&&before.port===after.port&&Number.isSafeInteger(after.receiveBufferBytes)&&after.receiveBufferBytes>0;
+  return {lane,status:known?'observed':'unknown',receiveBufferBytes:known?after.receiveBufferBytes:null,receiveDropsAtPreparation:known&&Number.isSafeInteger(after.receiveDrops)&&after.receiveDrops>=0?after.receiveDrops:null};
+ });
+ const nativeReceiveState={status:nativeLanes.every(row=>row.status==='observed')?'observed':'unknown',scope:'local_sockets_at_preflight_preparation',remoteState:'unknown',lanes:nativeLanes,reason:nativeLanes.every(row=>row.status==='observed')?'native_hook_readback':'native_readback_unavailable'};
+ return {version:1,validFor:'current_peer_connection_generation' ,connections:lanes.length,lanes,
+  laneDecision:{status:laneStatus,reason:laneReason,evidence:laneEvidence,tradeoff},
   messagePolicy:{...messagePolicy,reason:messageReason},messageDecision:{status:messagePolicy.status,reason:messageReason,evidence:messageEvidence},
   queuePolicy:{...queuePolicy,reason:queueReason},queueDecision:{status:queuePolicy.status,reason:queueReason,evidence:queueEvidence},
   receiverEvidence:{receivedRounds:result?.receiverEvidence?.receivedRounds??0,expectedRounds:result?.receiverEvidence?.expectedRounds??0},
   testedProfiles:testedProfiles(result),
-  nativeReceiveState:{status:'unknown',reason:'browser_api_does_not_expose_kernel_receive_drops_or_socket_buffer_limits'},
+  nativeReceiveState,
   limitations:['peer_reported_arrival_evidence','bounded_preflight_does_not_establish_link_capacity','packet_counters_are_not_aligned_wire_loss_measurements']};
 }

@@ -74,7 +74,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
   }
   const capabilityExchange=options.capabilityExchange===true?createCapabilityExchange({send:frame,allowed:peerAllowed,localReport:localCapability,onReport:(peer,report)=>{emit('distributionCapability',{peer,report});if(report.protocols.includes(TRANSFER_SCOUT_PROTOCOL))preflight?.start(peer);}}):null;
   const agreement=capabilityExchange?createPlanAgreement({send:frame,allowed:peerAllowed,localReport:localCapability,remoteReport:peer=>capabilityExchange.get(peer),newId:()=>crypto.randomUUID(),onDecision:result=>emit('distributionPlanDecision',result)}):null;
-  const preflight=scoutEnabled?createTransferScout({self,allowed:peerAllowed,send:frame,runtime,configuration:options.rtcConfiguration,comparison:options.scoutComparison,prepareTransport:options.prepareScoutTransport??null,sampleBytes:options.scoutSampleBytes,busy:()=>links.size>0,onReport:report=>emit('distributionScout',report)}):null;
+  const preflight=scoutEnabled?createTransferScout({self,allowed:peerAllowed,send:frame,runtime,configuration:options.rtcConfiguration,comparison:options.scoutComparison,prepareTransport:options.prepareScoutTransport??null,laneRateTradeoff:options.scoutLaneRateTradeoff,sampleBytes:options.scoutSampleBytes,busy:()=>links.size>0,onReport:report=>emit('distributionScout',report)}):null;
   function clearPeerSetup(peer){
     preflight?.drop(peer);
     for(const asset of assets.values()){
@@ -86,7 +86,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
     const result=preflight?.get(peer);if(!result?.transportAvailable)return null;
     const plan=result.connectionPlan;
     return {...result,senderSelection:{status:result.status,reason:result.reason,connections:result.connections,lanes:result.lanes},
-      ...(plan?{status:plan.laneDecision.status==='measured'?'measured':'inconclusive',reason:plan.laneDecision.reason,connections:plan.connections,lanes:[...plan.lanes],queuePolicy:plan.queuePolicy,messagePolicy:plan.messagePolicy}:{}),
+      ...(plan?{status:plan.laneDecision.status==='fallback'?'inconclusive':plan.laneDecision.status,reason:plan.laneDecision.reason,connections:plan.connections,lanes:[...plan.lanes],queuePolicy:plan.queuePolicy,messagePolicy:plan.messagePolicy}:{}),
       enforcement:scoutCoordinator===2?'coordinator_supported':'default_coordinator_unconfirmed',
       effectiveConnections:scoutCoordinator===2?(plan?.connections??result.connections):Math.min(3,maxConnections)};
   }

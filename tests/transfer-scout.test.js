@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createTransferScout,selectTransferSetup,screenTransferCandidates,scoutStopDecision,selectQueuePolicy} from '../packages/phantom-core/src/transfer-scout.js';
+import {createTransferScout,selectTransferSetup,screenTransferCandidates,selectQueuePolicy} from '../packages/phantom-core/src/transfer-scout.js';
 import {memoryRTC} from './fixtures/memory-rtc.js';
 import {scoutClock} from './fixtures/scout-clock.js';
 const ids=['1111111111111111','2222222222222222'];
@@ -15,15 +15,15 @@ function samples(winner=[0],screenTimes={},confirmTimes={}){
 }
 test('one, two or three connections require a confirmed exact lane set',()=>{
  for(const lanes of candidates){const picked=selectTransferSetup(samples(lanes));assert.equal(picked.status,'measured');assert.equal(picked.connections,lanes.length);assert.deepEqual(picked.lanes,lanes);assert.deepEqual(picked.lateDelivery.lanes,lanes);}
- assert.equal(selectTransferSetup(samples([0],{'0':[40,41],'0,1':[40,41]})).reason,'screen_ranges_overlap');
- assert.equal(selectTransferSetup(samples([0],{}, {'0':[200,201],'0,1':[40,44]})).reason,'winner_changed_with_sample_size');
+ assert.equal(selectTransferSetup(samples([0],{'0':[40,41],'0,1':[40,41]})).status,'measured');
+ assert.deepEqual(selectTransferSetup(samples([0],{}, {'0':[200,201],'0,1':[40,44]})).lanes,[0,1]);
  assert.equal(selectTransferSetup(samples([0],{}, {'0':[120,170],'0,1':[150,180]})).reason,'confirmation_ranges_overlap');
  for(const input of [[],samples().slice(0,14),samples().map(s=>({...s,elapsedMs:0})),samples().map((s,i)=>({...s,bytes:s.bytes+i})),samples().map(s=>({...s,lanes:[0,0]}))])assert.equal(selectTransferSetup(input).status,'inconclusive');
 });
 test('screening ranks repetitions conservatively and does not call a tied finalist a winner',()=>{
  const rows=samples([1,2]).filter(s=>s.stage==='screen');assert.deepEqual(screenTransferCandidates(rows),[[0],[1,2],[0,1,2]]);
  const tied=samples([0],{'0':[10,11],'1':[10,11]});assert.deepEqual(screenTransferCandidates(tied.filter(s=>s.stage==='screen'))[0],[0]);
- assert.equal(selectTransferSetup(tied).status,'inconclusive');assert.deepEqual(selectTransferSetup(tied).lanes,[0,1,2]);
+ assert.equal(selectTransferSetup(tied).status,'measured');assert.deepEqual(selectTransferSetup(tied).lanes,[0]);
  const malformed=samples([0]);malformed.at(-1).lanes=[1,2];assert.equal(selectTransferSetup(malformed).reason,'insufficient_comparable_samples');
 });
 test('a burst advantage cannot hide slower late delivery or missing progress evidence',()=>{
@@ -32,19 +32,19 @@ test('a burst advantage cannot hide slower late delivery or missing progress evi
  const absent=samples();delete absent[14].delivery;assert.equal(selectTransferSetup(absent).reason,'late_delivery_unavailable');
  const reordered=samples();reordered[14].delivery[1].elapsedMs=999;assert.equal(selectTransferSetup(reordered).status,'inconclusive');
 });
-function fixture({drop=false,maxMessageSize=262144,sampleBytes=98304,queueModel=false,freezeDrain=false,clockWinner=[0],dropEndAck=false,stats=null,dropEvidence=false,comparison='queue',dropMessage=false,prepareTransport=null}={}){
- const frames=[],reports=[],pcs=[],payloads=[],peaks=[],messages=[],channelRound=new Map();
+function fixture({drop=false,maxMessageSize=262144,sampleBytes=98304,queueModel=false,freezeDrain=false,clockWinner=[0],dropEndAck=false,stats=null,dropEvidence=false,comparison='queue',dropMessage=false,prepareTransport=null,syntheticClock=false}={}){
+ const frames=[],reports=[],pcs=[],payloads=[],peaks=[],messages=[],channelRound=new Map(),clocks=[];
  const upgrade=ch=>{if(ch.addEventListener)return;const events=new EventTarget();ch.addEventListener=events.addEventListener.bind(events);ch.removeEventListener=events.removeEventListener.bind(events);ch.dispatchEvent=events.dispatchEvent.bind(events);};
  const Base=memoryRTC({maxMessageSize,onSend(data,ch){
   if(queueModel){upgrade(ch);const n=typeof data==='string'?data.length:data.byteLength;ch.bufferedAmount+=n;peaks.push(ch.bufferedAmount);queueMicrotask(()=>{if(freezeDrain)return;const before=ch.bufferedAmount;ch.bufferedAmount-=n;if(before>(ch.bufferedAmountLowThreshold??0)&&ch.bufferedAmount<=(ch.bufferedAmountLowThreshold??0))ch.dispatchEvent(new Event('bufferedamountlow'));});}
-  if(typeof data==='string'){const body=JSON.parse(data),lane=pcs.findIndex(pc=>pc.channels.includes(ch))%3;messages.push({lane,...body});if(dropEndAck&&body.action==='endDirectionAck')return false;if(body.action==='sample')channelRound.set(ch,body.round);}
+  if(typeof data==='string'){const body=JSON.parse(data),lane=pcs.findIndex(pc=>pc.channels.includes(ch))%3;messages.push({lane,...body});if(dropEndAck&&body.action==='endDirectionAck')return false;if(body.action==='sample'){channelRound.set(ch,body.round);const owner=pcs.find(pc=>pc.channels.includes(ch))?.scoutNode;clocks[1-owner]?.receiveRound?.(body.round);}}
   if(data instanceof ArrayBuffer){payloads.push({bytes:data.byteLength,label:ch.label,lane:pcs.findIndex(pc=>pc.channels.includes(ch))%3,round:channelRound.get(ch)});if(drop||(dropMessage&&(channelRound.get(ch)??0)%25>=21))return false;}return true;
  }});
  class RTC extends Base{constructor(){super();pcs.push(this);if(stats)this.getStats=()=>stats(this);}fire(type,event={}){if(queueModel&&type==='datachannel')upgrade(event.channel);super.fire(type,event);}}
  const nodes=ids.map((id,i)=>{
   let serial=0;
-  const clock=queueModel?performance:scoutClock({maxMessageSize,sampleBytes,winner:clockWinner});
-  return createTransferScout({self:()=>id,allowed:p=>p===ids[1-i],runtime:{crypto,RTCPeerConnection:RTC,performance:clock},
+  const clock=queueModel&&!syntheticClock?performance:scoutClock({maxMessageSize,sampleBytes,winner:clockWinner});clocks[i]=clock;
+  return createTransferScout({self:()=>id,allowed:p=>p===ids[1-i],runtime:{crypto,RTCPeerConnection:class extends RTC{constructor(){super();this.scoutNode=i;}},performance:clock},
    send(peer,body){frames.push({from:id,peer,body});if(dropEvidence&&body.action==='receiverEvidence')return;queueMicrotask(()=>nodes[1-i].receive(id,body));},newId:()=> `scout-${i}-${serial++}-0`,sampleBytes,comparison,prepareTransport,onReport:r=>{clock.report?.(r);reports.push({i,...r});}});
  });
  return {nodes,frames,reports,pcs,payloads,peaks,messages,close:()=>nodes.forEach(n=>n.close())};
@@ -89,7 +89,7 @@ test('a silent receiver stays byte-bounded and file selection cancels and cleans
 });
 test('foreign, duplicate, oversized and unadmitted control messages do not allocate extra connections',async()=>{
  const f=fixture({drop:true});try{
-  const init={type:'transferScout',version:7,id:'foreign',action:'init',comparison:'queue',sampleBytes:98304,reverse:false,oneWay:false};
+  const init={type:'transferScout',version:8,id:'foreign',action:'init',comparison:'queue',sampleBytes:98304,reverse:false,oneWay:false};
   assert.equal(f.nodes[1].receive('3333333333333333',init),false);
   assert.equal(f.nodes[1].receive(ids[0],{...init,sampleBytes:4*1024*1024}),false);
   assert.equal(f.pcs.length,0);f.nodes[0].start(ids[1]);await settle(()=>f.pcs.length===6);
@@ -106,9 +106,9 @@ test('cancellation settles a confirmation waiting for native queue capacity',asy
   assert.equal(f.nodes[0].get(ids[1]),null);
  }finally{f.close();}
 });
-test('older control packets cannot start a v7 byte schedule',()=>{
+test('older control packets cannot start a v8 byte schedule',()=>{
  const f=fixture();try{
-  for(const version of [1,2,3,4,5,6])assert.equal(f.nodes[1].receive(ids[0],{type:'transferScout',version,id:'old-peer',action:'init',comparison:'queue',sampleBytes:98304,reverse:false,oneWay:false}),false);
+  for(const version of [1,2,3,4,5,6,7])assert.equal(f.nodes[1].receive(ids[0],{type:'transferScout',version,id:'old-peer',action:'init',comparison:'queue',sampleBytes:98304,reverse:false,oneWay:false}),false);
   assert.equal(f.pcs.length,0);
  }finally{f.close();}
 });
@@ -210,40 +210,25 @@ test('screening rotates all seven exact lane sets and acknowledgments use a part
  }finally{f.close();}
 });
 
-test('irrecoverable envelopes stop but untested candidates and a viable smaller winner keep their evidence budget',()=>{
- const full=samples([0]);
- for(let i=1;i<=full.length;i++)assert.equal(scoutStopDecision(full.slice(0,i)),null,'a valid smaller profile is never cut short');
- const tied=samples([0],{'0':[10,30],'1':[20,21]});
- assert.equal(scoutStopDecision(tied.filter(s=>s.stage==='screen')).reason,'screen_ranges_overlap_irrecoverable');
- const notSeenAll=tied.filter(s=>s.stage==='screen'&&key(s.lanes)!=='0,2');assert.equal(scoutStopDecision(notSeenAll),null);
- const changed=samples([0],{}, {'0':[200,201],'0,1':[40,44]});
- assert.equal(scoutStopDecision(changed.slice(0,17)).reason,'confirmation_cannot_confirm_screen_winner');
- const missing=samples([0]);delete missing[14].delivery;assert.equal(scoutStopDecision(missing.slice(0,15)).reason,'late_delivery_unavailable');
+test('screen overlap nominates finalists and never substitutes for larger confirmation evidence',()=>{
+ const tied=samples([0],{'0':[10,21],'1':[20,22]});assert.equal(selectTransferSetup(tied.slice(0,14)).status,'inconclusive');assert.equal(selectTransferSetup(tied).status,'measured');
 });
-test('an early fallback completes both direction handshakes and retains usable associations without confirmation traffic',async()=>{
+test('a qualified default lane set still receives full repeated confirmation',async()=>{
  const f=fixture({clockWinner:[0,1,2]});try{
   f.nodes[0].start(ids[1]);await settle(()=>f.frames.some(frame=>frame.body.action==='complete'));
-  for(const [i,node]of f.nodes.entries()){
-   const result=node.get(ids[1-i]);assert.equal(result.stoppedEarly,true);assert.equal(result.status,'inconclusive');assert.equal(result.reason,'only_fallback_can_still_qualify');
-   assert.equal(result.samples.length,7);assert.equal(result.unrunSamples,13);assert.equal(result.directionPayloadBytes,56*98304);assert.equal(result.directionPayloadAvoidedBytes,31*98304);
-   assert.equal(result.samples.some(s=>s.stage==='confirm'),false);assert.equal(result.transportAvailable,true);
-  }
-  assert.equal(f.payloads.reduce((n,p)=>n+p.bytes,0),112*98304);
-  assert.equal(f.frames.some(frame=>frame.body.action==='finalists'),false);
-  const source=f.nodes[0].take(ids[1],null,0,'file'),target=f.nodes[1].take(ids[0],null,0,'file');assert.equal(source.pc.other,target.pc);source.pc.close();
+  for(const [i,node]of f.nodes.entries()){const result=node.get(ids[1-i]);assert.equal(result.stoppedEarly,false);assert.equal(result.status,'measured');assert.equal(result.samples.length,20);assert.equal(result.samples.filter(s=>s.stage==='confirm').length,6);assert.equal(result.unrunSamples,0);assert.equal(result.transportAvailable,true);}
+  assert.equal(f.payloads.reduce((n,p)=>n+p.bytes,0),174*98304);assert.equal(f.messages.some(frame=>frame.action==='finalists'),true);
  }finally{f.close();}
 });
-test('last captured sender run stops before all larger confirmations under the unchanged qualification rule',async()=>{
- // Recorded timing envelopes, stripped of file/device identifiers and queue data.
- const rows=[
-  [[0],3665.1],[[1,2],306.9],[[0,1,2],510],[[1],666.5],[[0,2],783.1],[[2],782.9],[[0,1],1010.3],
-  [[0,1],1087],[[2],1563.6],[[0,2],1322.9],[[1],1039.1],[[0,1,2],1166.3],[[1,2],1379],[[0],3041.9],
- ].map(([lanes,ms])=>sample(lanes,786432,ms,'screen'));
- assert.equal(scoutStopDecision(rows.slice(0,12)),null);
- assert.equal(scoutStopDecision(rows.slice(0,13)).reason,'screen_ranges_overlap_irrecoverable');
+test('unresolved larger trials skip profile traffic and retain associations in both directions',async()=>{
+ const f=fixture({clockWinner:[],dropEvidence:true});try{
+  f.nodes[0].start(ids[1]);await settle(()=>f.frames.some(frame=>frame.body.action==='complete'));
+  for(const [i,node]of f.nodes.entries()){const result=node.get(ids[1-i]);assert.equal(result.samples.length,20);assert.equal(result.profileComparison.status,'skipped');assert.equal(result.queueSamples.length,0);assert.equal(result.messageSamples.length,0);assert.equal(result.directionPayloadBytes,39*98304);assert.equal(result.directionPayloadAvoidedBytes,48*98304);assert.equal(result.transportAvailable,true);}
+  assert.equal(f.payloads.reduce((n,p)=>n+p.bytes,0),78*98304);assert.equal(f.messages.filter(frame=>frame.action==='endDirection').length,2);
+ }finally{f.close();}
 });
 test('skipping a silent early-end acknowledgment settles preparation and closes every association',async()=>{
- const f=fixture({clockWinner:[0,1,2],dropEndAck:true});try{
+ const f=fixture({clockWinner:[],dropEvidence:true,dropEndAck:true});try{
   const waiting=f.nodes[0].forSend(ids[1]);await settle(()=>f.messages.some(m=>m.action==='endDirectionAck'));
   f.nodes[0].suspend('send_without_waiting');assert.equal(await waiting,null);
   await settle(()=>f.pcs.every(pc=>pc.connectionState==='closed'));assert.equal(f.nodes[0].get(ids[1]),null);
@@ -268,10 +253,10 @@ test('queue policy requires repeated total and late improvement on an identical 
  assert.equal(selectQueuePolicy(queueSamples().slice(0,3)).status,'inconclusive');
 });
 test('queue passes hold lane identity, bytes and message sizes fixed and retain all comparison evidence',async()=>{
- const f=fixture({sampleBytes:786432,queueModel:true});try{
+ const f=fixture({sampleBytes:786432,queueModel:true,syntheticClock:true});try{
   f.nodes[0].start(ids[1]);await settle(()=>f.frames.some(f=>f.body.action==='complete'));
   for(const i of [0,1]){
-   const result=f.nodes[i].get(ids[1-i]);assert.equal(result.version,7);assert.equal(result.queueSamples.length,4);assert.equal(result.queueComparisonPayloadBytes,36*1024*1024);
+   const result=f.nodes[i].get(ids[1-i]);assert.equal(result.version,8);assert.equal(result.queueSamples.length,4);assert.equal(result.queueComparisonPayloadBytes,36*1024*1024);
    const rows=result.queueSamples;assert.deepEqual(rows.map(s=>s.queueHighBytes),[16777216,1048576,1048576,16777216]);
    assert.ok(rows.every(s=>s.bytes===9437184&&key(s.lanes)===key(result.lanes)&&JSON.stringify(s.messageBytes)===JSON.stringify(rows[0].messageBytes)));
    assert.ok(rows.filter(s=>s.queueHighBytes===1048576).every(s=>s.queues.every(q=>q.waitCount>=1)));
@@ -349,7 +334,7 @@ test('missing and late receiver reports do not block handoff and cannot cross ge
 test('message comparison replaces queue comparison at the same byte budget and fixed queue depth',async()=>{
  const f=fixture({comparison:'message',maxMessageSize:262144});try{
   const waiting=f.nodes[0].forSend(ids[1]);const result=await waiting;await settle(()=>f.frames.some(r=>r.body.action==='complete'));
-  assert.equal(result.version,7);assert.equal(result.comparison,'message');assert.equal(result.queueSamples.length,0);assert.equal(result.messageSamples.length,4);assert.equal(result.messageComparisonPayloadBytes,12*98304*4);
+  assert.equal(result.version,8);assert.equal(result.comparison,'message');assert.equal(result.queueSamples.length,0);assert.equal(result.messageSamples.length,4);assert.equal(result.messageComparisonPayloadBytes,12*98304*4);
   assert.deepEqual(result.messageSamples.map(s=>s.messageCeilingBytes),[262144,16384,16384,262144]);
   assert.ok(result.messageSamples.every(s=>s.queueHighBytes===16777216&&s.queueLowBytes===4194304));
   assert.equal(result.receiverEvidence.status,'complete');assert.equal(result.directionPayloadBytes+result.directionPayloadAvoidedBytes,87*98304);
