@@ -1,4 +1,4 @@
-import {createFileDistribution} from './files.js';
+import {createFileDistribution,FILE_RECEIVE_SLOTS} from './files.js';
 import {sendFileChannelPayload,coalesceQueuedFileChunk} from './file-channel-payload.js';
 /** Isolated synthetic file, using the production request/read/hash/write service.
  * The memory sink deliberately does not claim native Android storage coverage.
@@ -7,6 +7,7 @@ export function createScoutFileWorkload({peer,lanes,channels,pcs,bytes,chunkSize
  if(!Number.isSafeInteger(bytes)||bytes<1||bytes>144*1024*1024||!Number.isInteger(chunkSize)||chunkSize<1024||chunkSize>262144||bytes%(lanes.length*chunkSize)||!Number.isInteger(batchSize)||batchSize<1||batchSize>64)throw TypeError('Invalid scout file workload');
  const listeners=new Set(),pending=new Map(),stored=new Map(),received=new Set(),submitted=new Map(lanes.map(l=>[l,0])),queued=new Map(lanes.map(l=>[l,new Map()]));let closed=false,manifest=null,requested=false,wireId=null;
  const chunksPerLane=bytes/chunkSize/lanes.length;
+ const laneRequestWindow=Math.max(1,Math.min(requestWindow,Math.floor(FILE_RECEIVE_SLOTS/lanes.length)));
  const laneFor=index=>lanes[Math.floor(index/chunksPerLane)];
  const fire=(type,payload)=>{for(const fn of listeners)fn({type,payload});};
  const send=(lane,data)=>{if(closed||signal?.aborted)throw Error('Scout file workload stopped');channels[lane].send(data);submitted.set(lane,submitted.get(lane)+(typeof data==='string'?new TextEncoder().encode(data).byteLength:data.byteLength));};
@@ -24,7 +25,7 @@ export function createScoutFileWorkload({peer,lanes,channels,pcs,bytes,chunkSize
   emit(type,payload){if(type==='fileOffer'&&!requested){requested=true;manifest=payload.manifest;if(manifest.size!==bytes||manifest.chunkSize!==chunkSize){onError(Error('Scout workload manifest mismatch'));return;}
     void Promise.all(lanes.map(async lane=>{const start=lanes.indexOf(lane)*chunksPerLane;for(let base=start;base<start+chunksPerLane;base+=batchSize){
       const indexes=Array.from({length:Math.min(batchSize,start+chunksPerLane-base)},(_,i)=>base+i);
-      await service.request(manifest.id,{peers:[peer],indexes,signal,concurrentRanges:true});
+      await service.request(manifest.id,{peers:[peer],indexes,signal,concurrentRanges:true,requestWindow:laneRequestWindow});
     }onLaneComplete(lane);} )).then(()=>onComplete(),onError);
    }else if(type==='fileRetry')onRetry(laneFor(payload.index),payload);
    else if(type==='fileError')onError(Error(payload.error??'Scout file service failed'));}

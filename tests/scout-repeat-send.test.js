@@ -21,7 +21,7 @@ test('successive agreed files, including a reversed send, qualify and use fresh 
       onEvent(fn){callbacks.set(id,fn);return()=>callbacks.delete(id);},
       command(type,{frame}){if(type==='PHANTOM_DIST_SEND'){frames.push(frame);queueMicrotask(()=>callbacks.get(frame.to)?.({type:'PHANTOM_DIST',payload:{from:frame.from,frame}}));}}},
     lifecycle:{issue:(action,target,fields)=>admin.sign({networkId:'repeat-scout',action,target,...fields,operationId:crypto.randomUUID()})},
-    options:{intervalMs:10,jobTimeoutMs:2000,requestTimeoutMs:1000,batchSize:2,requestWindow:2,
+    options:{intervalMs:10,jobTimeoutMs:2000,requestTimeoutMs:1000,batchSize:32,requestWindow:32,
       capabilityExchange:true,transferScout:true,scoutBeforeSend:true,scoutQueueComparison:true,assignedRanges:true,maxChunkBytes:65536},
     emit:(type,data)=>events.push({i,type,data})
   }));
@@ -33,7 +33,7 @@ test('successive agreed files, including a reversed send, qualify and use fresh 
     for(const [round,sender]of [0,0,1].entries()){
       const receiver=1-sender,source=services[sender],target=services[receiver];
       const plan=source.proposePlan(ids[receiver]);await until(()=>source.getPlan(ids[receiver])?.id===plan);
-      const bytes=Uint8Array.from({length:65536*8+17},(_,i)=>(i+round)%251),file=new Blob([bytes]);
+      const bytes=Uint8Array.from({length:65536*80+17},(_,i)=>(i+round)%251),file=new Blob([bytes]);
       const eventStart=events.length,frameStart=frames.length;
       const manifest=await source.prepareAgreed(file,ids[receiver]);
       const qualified=events.slice(eventStart).filter(e=>e.i===sender&&e.type==='distributionScout'&&e.data.phase==='preflight-file-workload'&&e.data.status==='complete');

@@ -3,12 +3,13 @@ import {createSourceBlockReader} from './source-block-reader.js';
 const hex=b=>Array.from(new Uint8Array(b),x=>x.toString(16).padStart(2,'0')).join('');
 const digest=async(b,crypto)=>hex(await crypto.subtle.digest('SHA-256',b));
 const descriptor=m=>[m.name,m.type,m.size,m.chunkSize,m.total,m.hashRoot,m.distributionId];
+export const FILE_RECEIVE_SLOTS=32;
 export function createMemoryChunkStore(){const data=new Map();return {async get(id,index){return data.get(id+':'+index);},async put(id,index,bytes){data.set(id+':'+index,bytes.slice(0));}};}
 /** Chunked file exchange over the peer data channel with backpressure. */
 export function createFileDistribution({core,crypto=globalThis.crypto,emit=()=>{},allowed=()=>true,canUsePeer=()=>true,chunkStore=createMemoryChunkStore(),requestTimeoutMs=10000,requestWindow=8,maxAttemptsPerPeer=2,maxFileBytes=Number.MAX_SAFE_INTEGER,maxChunkBytes=65536}) {
  const manifests=new Map(),sources=new Map(),offers=new Map(),downloads=new Map(),startingDownloads=new Map(),sendTimings=new Map(),activeSends=new Set(),peerGenerations=new Map();let closed=false;
  const sendQueue=createPreparedSendQueue({maxPerPeer:32}),sourceReader=createSourceBlockReader({onRead:p=>emit('fileSourceRead',p)}),writeQueue=[];let activeWrites=0,queuedWrites=0;
- const maxReceiveSlots=32,writeConcurrency=4;
+ const maxReceiveSlots=FILE_RECEIVE_SLOTS,writeConcurrency=4;
  const now=()=>performance.now();
  function senderMetrics(to,id){const key=to+':'+id;let row=sendTimings.get(key);if(!row){row={to,id,total:0,timings:createFileTimings()};sendTimings.set(key,row);}return row;}
  function flushTimings(to,id){for(const [key,row]of sendTimings)if((!to||row.to===to)&&(!id||row.id===id)){if(row.total)emit('fileTransferTiming',{id:row.id,to:row.to,phase:'send',total:row.total,metrics:row.timings.summary()});sendTimings.delete(key);}}

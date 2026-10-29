@@ -442,7 +442,7 @@ test('cancellation during a restriction barrier settles without polling or anoth
 });
 
 test('automatic queue study repeats the identical workload on clean retained associations and verifies its selected policy',async()=>{
- const f=fixture({queueModel:true,fileWorkloadLimits:{queueComparison:true,batchSize:8,requestWindow:8}});try{
+ const f=fixture({queueModel:true,fileWorkloadLimits:{queueComparison:true,batchSize:32,requestWindow:32}});try{
   await f.nodes[0].forSend(ids[1],{connectionOnly:true});const before=f.pcs.length;
   const report=await f.nodes[0].qualifyFileWorkload(ids[1],{chunkSize:65536,fileBytes:4*1024*1024});
   const result=f.nodes[0].get(ids[1]),trials=result.fileWorkloads;
@@ -457,8 +457,23 @@ test('automatic queue study repeats the identical workload on clean retained ass
  }finally{f.close();}
 });
 test('a queue trial with a stalled lane retires it before repeating a verified smaller-queue subset',async()=>{
- const f=fixture({queueModel:true,dropWorkloadLane:0,fileWorkloadLimits:{queueComparison:true,batchSize:2,requestWindow:2,requestTimeoutMs:200}});try{
-  await f.nodes[0].forSend(ids[1],{connectionOnly:true});const report=await f.nodes[0].qualifyFileWorkload(ids[1],{chunkSize:65536,fileBytes:1048576});
-  const result=f.nodes[0].get(ids[1]);assert.equal(report.status,'complete');assert.deepEqual(report.profile.lanes,[1,2]);assert.equal(report.profile.queueTrial,'reverify');assert.equal(result.fileWorkloadQueueComparison.status,'incomplete');assert.equal(result.fileWorkloads.length,2);assert.equal(result.connectionPlan.queuePolicy.highWaterMark,1048576);
+ const f=fixture({queueModel:true,dropWorkloadLane:0,fileWorkloadLimits:{queueComparison:true,batchSize:32,requestWindow:32,requestTimeoutMs:400}});try{
+  await f.nodes[0].forSend(ids[1],{connectionOnly:true});const report=await f.nodes[0].qualifyFileWorkload(ids[1],{chunkSize:65536,fileBytes:8*1024*1024});
+  const result=f.nodes[0].get(ids[1]);assert.equal(report.status,'complete',JSON.stringify(result.fileWorkloads.map(r=>({status:r.status,reason:r.reason,lanes:r.profile.lanes,rx:r.receiver?.lanes}))));assert.deepEqual(report.profile.lanes,[1,2]);assert.equal(report.profile.queueTrial,'reverify');assert.equal(result.fileWorkloadQueueComparison.status,'incomplete');assert.equal(result.fileWorkloads.length,2);assert.equal(result.connectionPlan.queuePolicy.highWaterMark,1048576);
+ }finally{f.close();}
+});
+
+test('tiny diagnostic files get one qualification instead of queue trials they cannot exercise',async()=>{
+ const f=fixture({queueModel:true,fileWorkloadLimits:{queueComparison:true,batchSize:32,requestWindow:32}});try{
+  await f.nodes[0].forSend(ids[1],{connectionOnly:true});const report=await f.nodes[0].qualifyFileWorkload(ids[1],{chunkSize:65536,fileBytes:1048576});const result=f.nodes[0].get(ids[1]);
+  assert.equal(report.status,'complete');assert.equal(result.fileWorkloads.length,1);assert.equal(result.fileWorkloadQueueComparison.status,'skipped');assert.equal(result.fileWorkloadQueueComparison.reason,'payload_cannot_exercise_queue_boundary');assert.equal(f.frames.filter(r=>r.body.action==='fileWorkload').length,1);
+ }finally{f.close();}
+});
+test('workload cancellation preserves the initiating reason at both endpoints',async()=>{
+ const f=fixture({queueModel:true,dropWorkloadReady:true});try{
+  await f.nodes[0].forSend(ids[1],{connectionOnly:true});const pending=f.nodes[0].qualifyFileWorkload(ids[1],{chunkSize:65536,fileBytes:1048576});await settle(()=>f.reports.some(r=>r.i===1&&r.phase==='preflight-file-workload'&&r.status==='started'));f.nodes[0].suspend('explicit_test_cancel');
+  const report=await pending;assert.equal(report.status,'cancelled');assert.equal(report.reason,'workload_cancelled:explicit_test_cancel');
+  await settle(()=>f.reports.some(r=>r.i===1&&r.phase==='preflight-file-workload'&&r.status==='cancelled'));
+  assert.ok(f.reports.some(r=>r.i===1&&['preflight-file-workload','preflight-pool'].includes(r.phase)&&r.reason==='peer_released:workload_cancelled:explicit_test_cancel'));
  }finally{f.close();}
 });

@@ -49,3 +49,13 @@ A failed trial is never followed by another policy behind the stalled queue. Exi
 Each endpoint requests start/end `getStats` observations tagged with scout ID, trial and lane, including selected-pair send-discard counters and observation timing. These observations do not gate file data or pretend to expose kernel queues, congestion windows, or wire loss. Unavailable stats remain explicit. Exports retain up to seven workload reports.
 
 The shared payload sender serializes admission per data channel and reserves the binary payload plus its header. Previously simultaneous callers could all pass the same capacity check before any sent data, and fragmented chunks could interleave on one channel. Tests reproduce both failures against the prior implementation. Read/hash preparation remains independent across channels. Cancellation and existing drain-failure deadlines are retained; no polling or pacing timer is added.
+
+## Retained cancellation and receive-slot evidence
+
+Pool release passes its initiating reason into workload cancellation and over the authenticated release message. If native connection closure arrives before that message, both observations are retained instead of replacing the local failure reason. File closing snapshots include the existing idle deadline/budget, last activity time/reason, queue bytes, and submitted/drained counters; timer behavior is unchanged.
+
+A queue comparison is skipped when the bounded per-lane payload cannot reach the smaller queue boundary. Such a small file still gets one ordinary qualification, with an explicit skipped-comparison reason. This prevents diagnostic exports from running several trials that cannot measure queue depth.
+
+Concurrent scout ranges share the production file service's 32 receive slots. Each lane's request window is capped at its share of that existing pool, so an entirely stalled first lane cannot occupy every slot before the other lanes are tested. Configured and effective per-lane windows are reported separately; no receive-memory capacity is increased. A regression drops the first lane with a full 32-chunk batch and verifies that the other lanes complete and can be retested.
+
+Share retains the latest 16 scout IDs, rather than replacing a peer's prior scout when a returned log starts another send. Per-trial start/end counters, cancellation/release reasons, and file-closing counters survive raw-report rotation and reload.

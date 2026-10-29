@@ -43,6 +43,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
     for(const [lane,pc] of pcs.entries()){
       const dc=Array.isArray(link.pc?.channels)?link.pc.channels[lane]:link.dc;
       const context={phase,lane,jobId:link.job.id,role:link.job.source===self()?'source':'receiver',at:Date.now()};
+      if(phase==='closing')context.lifecycle={batch:link.job.batch??0,asset:link.job.asset,deadlineAt:link.job.deadline,idleBudgetMs:jobTimeoutMs,lastActivityAt:link.lastActivityAt??null,lastActivityReason:link.lastActivityReason??null,idleMs:link.lastActivityAt===undefined?null:context.at-link.lastActivityAt,bufferedBytes:dc?.bufferedAmount??null,submittedBytes:link.submittedBytes??null,drainedBytes:link.drainedBytes??null};
       void scoutConnection(pc,{channel:dc}).then(report=>emit('distributionScout',{...context,report})).catch(()=>emit('distributionScout',{...context,error:'scout_failed'}));
     }
   }
@@ -131,7 +132,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
   const files=createFileDistribution({core:transport,canUsePeer,crypto,allowed,emit:(type,payload)=>{
     if(type==='fileOffer'){const asset=assets.get(payload.manifest.id);if(!asset||asset.total!==payload.manifest.total||asset.distributionId!==payload.manifest.distributionId){error(Error('Authorized manifest metadata mismatch'));return;}if(assignedRanges&&!asset.holders.has(self())){asset.holders.set(self(),new Set());report();}for(const link of links.values())if(link.job.asset===payload.manifest.id&&link.job.receiver===self()&&link.peer===payload.from)startReceiver(link);}
     if(type==='fileTransferTiming'){emit('distributionTransferTiming',payload);return;}
-    if(type==='fileProgress'){for(const link of links.values())if(link.job.asset===payload.id&&link.job.receiver===self()&&link.peer===payload.from)progress(link);const asset=assets.get(payload.id);if(asset){let indexes=progressIndexes.get(payload.id);if(!indexes){indexes=new Set(asset.holders.get(self())??[]);progressIndexes.set(payload.id,indexes);}indexes.add(payload.index);payload={...payload,received:indexes.size};}}
+    if(type==='fileProgress'){for(const link of links.values())if(link.job.asset===payload.id&&link.job.receiver===self()&&link.peer===payload.from)progress(link,'verified_chunk');const asset=assets.get(payload.id);if(asset){let indexes=progressIndexes.get(payload.id);if(!indexes){indexes=new Set(asset.holders.get(self())??[]);progressIndexes.set(payload.id,indexes);}indexes.add(payload.index);payload={...payload,received:indexes.size};}}
     emit(type==='fileProgress'?'distributionProgress':type==='fileError'?'distributionError':'distributionFileEvent',{fileEvent:type,...payload});
   },chunkStore,...Object.fromEntries(Object.entries(options).filter(([key])=>['chunkStore','requestTimeoutMs','requestWindow','maxAttemptsPerPeer','maxFileBytes','maxChunkBytes'].includes(key)))});
   async function sendBinary(link,payload){let ok=false,reason='Distribution connection unavailable',bufferWaitMs=0;try{
@@ -151,15 +152,16 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
     ok=true;
   }catch(e){reason=e.message;}fire('FILE_BIN_CHUNK_SENT',{...payload,ok,bufferWaitMs,error:ok?undefined:reason});}
   // Job timeout is an idle budget. Control keepalives alone cannot renew it.
-  function progress(link){
+  function progress(link,reason='payload_activity'){
     if(links.get(link.job.id)!==link)return;
-    link.activity=(link.activity??0)+1;link.job.deadline=Date.now()+jobTimeoutMs;
+    link.lastActivityAt=Date.now();link.lastActivityReason=reason;
+    link.activity=(link.activity??0)+1;link.job.deadline=link.lastActivityAt+jobTimeoutMs;
     if(isLeader()){const job=jobs.get(link.job.id);if(job)job.deadline=link.job.deadline;}
   }
   function observeDrain(link){
     if(!link.dc)return;
     const drained=Math.min(link.payloadEnd??0,Math.max(0,(link.submittedBytes??0)-link.dc.bufferedAmount));
-    if(drained>(link.drainedBytes??0)){link.drainedBytes=drained;progress(link);}
+    if(drained>(link.drainedBytes??0)){link.drainedBytes=drained;progress(link,'sender_queue_drain');}
     timeline(link,'queue',{bufferedBytes:link.dc.bufferedAmount,submittedBytes:link.submittedBytes??0,drainedBytes:link.drainedBytes??0});
     if((link.activity??0)!==(link.announcedActivity??0)&&Date.now()-(link.lastAnnouncement??0)>=Math.min(1000,jobTimeoutMs/3)){
       link.lastAnnouncement=Date.now();link.announcedActivity=link.activity;
