@@ -3,7 +3,7 @@ import {sendFileChannelPayload,coalesceQueuedFileChunk} from './file-channel-pay
 /** Isolated synthetic file, using the production request/read/hash/write service.
  * The memory sink deliberately does not claim native Android storage coverage.
  */
-export function createScoutFileWorkload({peer,lanes,channels,pcs,bytes,chunkSize,batchSize,sourceReadBlockBytes=0,requestWindow,requestTimeoutMs=10000,maxAttemptsPerPeer=2,queuePolicy,messageBytes=null,crypto=globalThis.crypto,signal,onChunk=()=>{},onSend=()=>{},onComplete=()=>{},onError=()=>{}}){
+export function createScoutFileWorkload({peer,lanes,channels,pcs,bytes,chunkSize,batchSize,sourceReadBlockBytes=0,requestWindow,requestTimeoutMs=10000,sendTimeoutMs=15000,maxAttemptsPerPeer=2,queuePolicy,messageBytes=null,crypto=globalThis.crypto,signal,onChunk=()=>{},onSend=()=>{},onComplete=()=>{},onError=()=>{}}){
  if(!Number.isSafeInteger(bytes)||bytes<1||bytes>144*1024*1024||!Number.isInteger(chunkSize)||chunkSize<1024||chunkSize>262144||bytes%(lanes.length*chunkSize)||!Number.isInteger(batchSize)||batchSize<1||batchSize>64)throw TypeError('Invalid scout file workload');
  const listeners=new Set(),pending=new Map(),stored=new Map(),received=new Set(),submitted=new Map(lanes.map(l=>[l,0])),queued=new Map(lanes.map(l=>[l,new Map()]));let closed=false,manifest=null,requested=false,wireId=null;
  const chunksPerLane=bytes/chunkSize/lanes.length;
@@ -15,7 +15,7 @@ export function createScoutFileWorkload({peer,lanes,channels,pcs,bytes,chunkSize
   if(type==='SEND_FILE_BIN_CHUNK'){
    const lane=laneFor(payload.file.index);
    if(coalesceQueuedFileChunk({dc:channels[lane],submittedBytes:submitted.get(lane),queuedChunks:queued.get(lane),index:payload.file.index})){onSend(lane,{coalesced:true});fire('FILE_BIN_CHUNK_SENT',{...payload,ok:true,bufferWaitMs:0});return;}
-   void sendFileChannelPayload({dc:channels[lane],pcs:[pcs[lane]],bytes:payload.bytes,file:payload.file,send:data=>send(lane,data),fragments:true,queuePolicy,messageBytes,timeoutMs:requestTimeoutMs,signal,assertLive(){if(closed||signal?.aborted)throw Error('Scout file workload stopped');}})
+   void sendFileChannelPayload({dc:channels[lane],pcs:[pcs[lane]],bytes:payload.bytes,file:payload.file,send:data=>send(lane,data),fragments:true,queuePolicy,messageBytes,timeoutMs:sendTimeoutMs,signal,assertLive(){if(closed||signal?.aborted)throw Error('Scout file workload stopped');}})
     .then(({bufferWaitMs})=>{queued.get(lane).set(payload.file.index,submitted.get(lane));onSend(lane,{bytes:payload.bytes.byteLength,bufferedBytes:channels[lane].bufferedAmount,bufferWaitMs});fire('FILE_BIN_CHUNK_SENT',{...payload,ok:true,bufferWaitMs});},error=>{fire('FILE_BIN_CHUNK_SENT',{...payload,ok:false,error:error.message});onError(error);});
   }
  }};
