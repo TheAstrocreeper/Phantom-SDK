@@ -4,11 +4,11 @@ import {makeReceiverEvidence,readReceiverEvidence} from './scout-receiver-eviden
 import {compareWorkloadQueues,workloadQueuePolicy} from './workload-queue-comparison.js';
 import {decideFileWorkload} from './file-workload-decision.js';
 import {createScoutFileWorkload} from './scout-file-workload.js';
-import {requestWindowCandidates,requestWindowOrder,compareRequestWindows} from './request-window-comparison.js';
+import {requestWindowCandidates,requestWindowOrder,compareRequestWindows,readRequestWindowDelivery} from './request-window-comparison.js';
 import {FILE_RECEIVE_SLOTS} from './files.js';
 import {buildScoutConnectionPlan} from './scout-connection-plan.js';
 
-export const FILE_WORKLOAD_PROTOCOL='phantom-file-workload-v6';
+export const FILE_WORKLOAD_PROTOCOL='phantom-file-workload-v7';
 export const TRANSFER_SCOUT_PROTOCOL = 'phantom-transfer-scout-v8';
 const LANES = 3, MAX_BYTES = 3 * 1024 * 1024, DEFAULT_BYTES = 768 * 1024;
 const CONFIRM_SCALE = 4, SCREEN_ROUNDS = 14, CONFIRM_ROUNDS = 6, LANE_ROUNDS = 21, QUEUE_ROUNDS = 4, ROUNDS = 25, QUEUE_BYTES = 768 * 1024;
@@ -148,8 +148,8 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
   requestWindowCandidates(workloadLimits.windowCandidates,workloadLimits.requestWindow);
   if(typeof workloadLimits.windowComparison!=='boolean'||typeof workloadLimits.progressiveAdmission!=='boolean'||!['association','peer'].includes(workloadLimits.queueBudgetScope)||typeof workloadLimits.queueComparison!=='boolean'||!Number.isInteger(workloadLimits.maxConnections)||workloadLimits.maxConnections<1||workloadLimits.maxConnections>3||!Number.isInteger(workloadLimits.batchSize)||workloadLimits.batchSize<1||workloadLimits.batchSize>64||!Number.isInteger(workloadLimits.requestWindow)||workloadLimits.requestWindow<1||workloadLimits.requestWindow>32||!Number.isFinite(workloadLimits.requestTimeoutMs)||workloadLimits.requestTimeoutMs<=0||!Number.isFinite(workloadLimits.sendTimeoutMs)||workloadLimits.sendTimeoutMs<=0||!Number.isInteger(workloadLimits.maxAttemptsPerPeer)||workloadLimits.maxAttemptsPerPeer<1||workloadLimits.maxAttemptsPerPeer>3||!Number.isInteger(workloadLimits.maxChunkBytes)||workloadLimits.maxChunkBytes<1024||workloadLimits.maxChunkBytes>262144)throw TypeError('Invalid scout file workload limits');
   function validWindowProfile(p){
-    if(p.windowTrial===undefined)return p.requestWindow===undefined&&p.windowCandidates===undefined&&p.windowStep===undefined;
-    if(!['measure','selected','repair'].includes(p.windowTrial)||!validLanes(p.lanes)||!Number.isInteger(p.chunksPerLane)||p.chunksPerLane<1||!Number.isInteger(p.windowStep)||p.windowStep<0||!Number.isInteger(p.requestWindow))return false;
+    if(p.windowTrial===undefined)return p.requestWindow===undefined&&p.windowCandidates===undefined&&p.windowStep===undefined&&p.deliveryWindowCount===undefined;
+    if(p.deliveryWindowCount!==Math.min(4,p.chunksPerLane)||!['measure','selected','repair'].includes(p.windowTrial)||!validLanes(p.lanes)||!Number.isInteger(p.chunksPerLane)||p.chunksPerLane<1||!Number.isInteger(p.windowStep)||p.windowStep<0||!Number.isInteger(p.requestWindow))return false;
     try{const candidates=requestWindowCandidates(p.windowCandidates,Math.min(workloadLimits.requestWindow,Math.floor(FILE_RECEIVE_SLOTS/p.lanes.length),p.chunksPerLane));return JSON.stringify(candidates)===JSON.stringify(p.windowCandidates)&&candidates.includes(p.requestWindow)&&p.windowStep<=candidates.length*2;}catch{return false;}
   }
   function validWorkload(p){return p&&validWindowProfile(p)&&(p.laneAdmission===undefined||p.laneAdmission===true&&workloadLimits.progressiveAdmission&&p.lanes?.length<workloadLimits.maxConnections)&&(!p.queueTrial?(!p.queueBudgetScope||p.queueBudgetScope==='association'):(workloadQueuePolicy(p)&&p.queuePolicy?.highWaterMark===workloadQueuePolicy(p).highWaterMark&&p.queuePolicy?.lowWaterMark===workloadQueuePolicy(p).lowWaterMark))&&validLanes(p.lanes)&&p.lanes.length<=workloadLimits.maxConnections&&Number.isInteger(p.chunkSize)&&p.chunkSize>=1024&&p.chunkSize<=workloadLimits.maxChunkBytes&&Number.isInteger(p.batchSize)&&p.batchSize===workloadLimits.batchSize&&Number.isInteger(p.chunksPerLane)&&p.chunksPerLane>=1&&p.chunksPerLane<=p.batchSize&&p.bytes===p.chunksPerLane*p.chunkSize*p.lanes.length&&p.bytes<=48*1024*1024&&[0,4*1024*1024].includes(p.sourceReadBlockBytes)&&Number.isInteger(p.queuePolicy?.highWaterMark)&&p.queuePolicy.highWaterMark>=p.chunkSize&&p.queuePolicy.highWaterMark<=16*1024*1024&&Number.isInteger(p.queuePolicy.lowWaterMark)&&p.queuePolicy.lowWaterMark>=0&&p.queuePolicy.lowWaterMark<p.queuePolicy.highWaterMark&&(p.messageBytes===null||[16384,262144].includes(p.messageBytes));}
@@ -168,12 +168,12 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
   function cleanWorkload(pool){return pool.fileWorkload?.report?.status==='complete'&&pool.fileWorkload.driver.snapshot().every(row=>row.bufferedBytes===0);}
   function startWorkload(pool,profile,source){
     const controller=new AbortController(),started=performance.now(),arrivals=profile.lanes.map(lane=>({lane,bytes:0,messages:0,firstAtMs:null,lastAtMs:null,maxGapMs:0,verified:false})),submissions=profile.lanes.map(lane=>({lane,bytes:0,messages:0,coalescedRetries:0,peakBufferedBytes:0,bufferWaitMs:0}));
-    const retries=[];
+    const retries=[],deliveryWindows=[];let deliveredMessages=0,deliveredBytes=0;
     let settled=false,resolve;const completed=new Promise(r=>resolve=r);
     const state={profile,source,trial:(pool.workloadReports?.length??0)+1,settled:false,controller,completed,driver:null,stop(reason){finish('cancelled',reason);}};pool.fileWorkload=state;pool.workloadGuard=true;pool.qualifiedLanes=null;
     function finish(status,reason,remote=null){
       if(settled)return;settled=true;state.settled=true;
-      const report={version:2,trial:state.trial,status,reason,profile,sourceLimits:source?{requestTimeoutMs:workloadLimits.requestTimeoutMs,sendTimeoutMs:workloadLimits.sendTimeoutMs}:null,sourceSubmission:source?submissions.map(row=>({...row,finalQueue:state.driver?.snapshot().find(q=>q.lane===row.lane)??null})):null,...(state.sourcePressure?{sourcePressure:state.sourcePressure}:{}),receiver:source?(remote?{...remote,provenance:'peer_reported'}:null):{clock:'receiver_monotonic',elapsedMs:performance.now()-started,lanes:arrivals,retries,queues:state.driver?.snapshot()??[],requestWindow:profile.requestWindow??workloadLimits.requestWindow,laneRequestWindow:Math.max(1,Math.min(profile.requestWindow??workloadLimits.requestWindow,Math.floor(FILE_RECEIVE_SLOTS/profile.lanes.length))),requestTimeoutMs:workloadLimits.requestTimeoutMs,maxAttemptsPerPeer:workloadLimits.maxAttemptsPerPeer},storage:'verified_memory_sink',coverage:'production_file_service_and_channel_sender',limitation:'one_bounded_batch_per_lane_is_not_a_link_capacity_or_long_file_guarantee'};
+      const report={version:2,trial:state.trial,status,reason,profile,sourceLimits:source?{requestTimeoutMs:workloadLimits.requestTimeoutMs,sendTimeoutMs:workloadLimits.sendTimeoutMs}:null,sourceSubmission:source?submissions.map(row=>({...row,finalQueue:state.driver?.snapshot().find(q=>q.lane===row.lane)??null})):null,...(state.sourcePressure?{sourcePressure:state.sourcePressure}:{}),receiver:source?(remote?{...remote,provenance:'peer_reported'}:null):{clock:'receiver_monotonic',elapsedMs:performance.now()-started,lanes:arrivals,retries,...(profile.windowTrial?{deliveryWindows}:{}),queues:state.driver?.snapshot()??[],requestWindow:profile.requestWindow??workloadLimits.requestWindow,laneRequestWindow:Math.max(1,Math.min(profile.requestWindow??workloadLimits.requestWindow,Math.floor(FILE_RECEIVE_SLOTS/profile.lanes.length))),requestTimeoutMs:workloadLimits.requestTimeoutMs,maxAttemptsPerPeer:workloadLimits.maxAttemptsPerPeer},storage:'verified_memory_sink',coverage:'production_file_service_and_channel_sender',limitation:'bounded_byte_windows_do_not_establish_link_capacity_or_guarantee_long_file_performance'};
       state.report=structuredClone(report);pool.workloadReports=[...(pool.workloadReports??[]),state.report].slice(-9);pool.workloadGuard=true;pool.qualifiedLanes=status==='complete'?[...profile.lanes]:null;
       state.endTransport=workloadTransport(pool,profile,state.trial,'end');controller.abort();state.driver?.close();for(const row of pool.lanes)row.dc.onmessage=null;
       if(parked===pool&&!closed&&trusted(pool.peer)){
@@ -210,7 +210,9 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
       fail(Error('local_send_discards_after_verified_lane'));
     };
     const driver=createScoutFileWorkload({peer:pool.peer,lanes:profile.lanes,channels:pool.lanes.map(r=>r.dc),pcs:pool.lanes.map(r=>r.pc),bytes:profile.bytes,chunkSize:profile.chunkSize,batchSize:profile.batchSize,sourceReadBlockBytes:profile.sourceReadBlockBytes,requestWindow:profile.requestWindow??workloadLimits.requestWindow,requestTimeoutMs:workloadLimits.requestTimeoutMs,sendTimeoutMs:workloadLimits.sendTimeoutMs,maxAttemptsPerPeer:workloadLimits.maxAttemptsPerPeer,queuePolicy:profile.queuePolicy,messageBytes:profile.messageBytes,scopeId:'scout:'+pool.id+':'+state.trial,crypto,signal:controller.signal,
-      onChunk(lane,bytes){const row=arrivals.find(r=>r.lane===lane),at=performance.now()-started;if(row.lastAtMs!==null)row.maxGapMs=Math.max(row.maxGapMs,at-row.lastAtMs);row.firstAtMs??=at;row.lastAtMs=at;row.bytes+=bytes.byteLength;row.messages++;},
+      onChunk(lane,bytes){const row=arrivals.find(r=>r.lane===lane),at=performance.now()-started;if(row.lastAtMs!==null)row.maxGapMs=Math.max(row.maxGapMs,at-row.lastAtMs);row.firstAtMs??=at;row.lastAtMs=at;row.bytes+=bytes.byteLength;row.messages++;
+        if(profile.windowTrial){deliveredMessages++;deliveredBytes+=bytes.byteLength;const count=profile.deliveryWindowCount,total=profile.chunksPerLane*profile.lanes.length;if(deliveredMessages===Math.ceil(total*(deliveryWindows.length+1)/count))deliveryWindows.push({messages:deliveredMessages,bytes:deliveredBytes,elapsedMs:at});}
+      },
       onSend(lane,sample){const row=submissions.find(r=>r.lane===lane);if(sample.coalesced){row.coalescedRetries++;return;}row.bytes+=sample.bytes;row.messages++;row.peakBufferedBytes=Math.max(row.peakBufferedBytes,sample.bufferedBytes);row.bufferWaitMs+=sample.bufferWaitMs;},
       onLaneComplete(lane){arrivals.find(row=>row.lane===lane).verified=true;if(!settled&&!source)send(pool.peer,{type:'transferScout',version:8,id:pool.id,action:'fileWorkloadLaneVerified',trial:state.trial,lane});},
       onRetry(lane,payload){
@@ -228,12 +230,12 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
   async function qualifyRequestWindows(pool,result,{chunkSize,fileBytes,sourceReadBlockBytes}){
     if(!Number.isInteger(chunkSize)||chunkSize<1024||chunkSize>workloadLimits.maxChunkBytes)return null;
     let lanes=[...(result.connectionPlan?.lanes??result.lanes)],last=null,step=0,stage='measure',chosen=null;
-    const chunksPerLane=Math.min(workloadLimits.batchSize,Math.floor(fileBytes/(chunkSize*lanes.length)),Math.max(8,...workloadLimits.windowCandidates.map(n=>n*2)));
+    const chunksPerLane=Math.min(workloadLimits.batchSize,Math.floor(fileBytes/(chunkSize*lanes.length)));
     if(chunksPerLane<1)return {version:2,status:'skipped',reason:'file_smaller_than_one_agreed_chunk_per_lane'};
     let candidates=requestWindowCandidates(workloadLimits.windowCandidates,Math.min(workloadLimits.requestWindow,Math.floor(FILE_RECEIVE_SLOTS/lanes.length),chunksPerLane)),order=requestWindowOrder(candidates);
     const reports=[];
     for(let attempt=0;attempt<9;attempt++){
-      const profile={lanes:[...lanes],chunkSize,sourceReadBlockBytes,batchSize:workloadLimits.batchSize,chunksPerLane,bytes:chunksPerLane*chunkSize*lanes.length,queuePolicy:{highWaterMark:1048576,lowWaterMark:524288},messageBytes:null,requestWindow:stage==='measure'?order[step]:chosen,windowCandidates:[...candidates],windowTrial:stage,windowStep:stage==='measure'?step:stage==='selected'?order.length:0};
+      const profile={lanes:[...lanes],chunkSize,sourceReadBlockBytes,batchSize:workloadLimits.batchSize,chunksPerLane,bytes:chunksPerLane*chunkSize*lanes.length,queuePolicy:{highWaterMark:1048576,lowWaterMark:524288},messageBytes:null,deliveryWindowCount:Math.min(4,chunksPerLane),requestWindow:stage==='measure'?order[step]:chosen,windowCandidates:[...candidates],windowTrial:stage,windowStep:stage==='measure'?step:stage==='selected'?order.length:0};
       if(!validWorkload(profile))return null;
       const state=startWorkload(pool,profile,true);
       send(pool.peer,{type:'transferScout',version:8,id:pool.id,action:'fileWorkload',trial:state.trial,profile});
@@ -667,7 +669,7 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
         }
         if(!['complete','failed','cancelled'].includes(body.status)||typeof body.reason!=='string'||body.reason.length>256)return false;
         const r=body.receiver;
-        if(body.status==='complete'&&(!r||r.clock!=='receiver_monotonic'||!Number.isInteger(r.requestWindow)||r.requestWindow<1||r.requestWindow>32||(w.profile.windowTrial&&(r.requestWindow!==w.profile.requestWindow||r.laneRequestWindow!==w.profile.requestWindow))||!Number.isFinite(r.elapsedMs)||r.elapsedMs<=0||!Array.isArray(r.lanes)||r.lanes.length!==w.profile.lanes.length||r.lanes.some((l,i)=>l.lane!==w.profile.lanes[i]||l.bytes!==w.profile.bytes/w.profile.lanes.length||l.verified!==true||!Number.isInteger(l.messages)||l.messages<1||!Number.isFinite(l.maxGapMs)||l.maxGapMs<0||l.maxGapMs>r.elapsedMs)))return false;
+        if(body.status==='complete'&&(w.profile.windowTrial&&!readRequestWindowDelivery(w.profile,r)||!r||r.clock!=='receiver_monotonic'||!Number.isInteger(r.requestWindow)||r.requestWindow<1||r.requestWindow>32||(w.profile.windowTrial&&(r.requestWindow!==w.profile.requestWindow||r.laneRequestWindow!==w.profile.requestWindow))||!Number.isFinite(r.elapsedMs)||r.elapsedMs<=0||!Array.isArray(r.lanes)||r.lanes.length!==w.profile.lanes.length||r.lanes.some((l,i)=>l.lane!==w.profile.lanes[i]||l.bytes!==w.profile.bytes/w.profile.lanes.length||l.verified!==true||!Number.isInteger(l.messages)||l.messages<1||!Number.isFinite(l.maxGapMs)||l.maxGapMs<0||l.maxGapMs>r.elapsedMs)))return false;
         w.finish(w.sourceFailure?'failed':body.status,w.sourceFailure??body.reason,r);return true;
       }
       if(body.action==='release'){

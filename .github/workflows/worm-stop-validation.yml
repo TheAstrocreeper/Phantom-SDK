@@ -1,4 +1,4 @@
-name: Selected request window enforcement validation
+name: Sustained request window validation
 on:
   push:
     branches: ['codex/worm-stop-validation']

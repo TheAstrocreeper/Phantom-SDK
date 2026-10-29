@@ -106,7 +106,7 @@ unchanged per-lane workload, queue-policy rule, and settled clean prior trial.
 This requires `phantom-file-workload-v5`; ordinary file compatibility is unchanged.
 The SDK leaves the option off by default so callers can select the experiment.
 
-### Measured request windows (opt-in, workload v6)
+### Measured request windows (opt-in, workload v7)
 
 `scoutRequestWindowComparison: true` replaces the existing queue-depth study with
 request-window measurements; it does not append both studies. The SDK defaults
@@ -117,9 +117,16 @@ These are candidate settings, not a universal optimum or permanent selected valu
 
 The scout repeats candidates in ascending then descending order on identical
 retained associations and payloads. Only the per-lane request window changes;
-queue boundaries remain 1 MiB / 512 KiB. Samples use at least eight chunks per
-lane when the file and batch limits permit (more for larger candidate windows),
-instead of always sending the maximum batch. Both repetitions must verify and
+queue boundaries remain 1 MiB / 512 KiB. Samples use a full configured batch per lane, rounded down only for available
+file bytes. Each receiver records four equal-message byte windows on its own
+monotonic clock; the first window includes startup. Selection compares the slowest
+of the later three window rates across both repetitions, alongside the existing
+maximum receive-gap bound. Whole-trial rates remain visible but cannot carry a
+slow tail. Missing, forged, incomplete or reordered boundaries cannot establish
+a measured winner; short workloads with fewer than four windows and zero-duration
+windows remain inconclusive. With Share settings each trial now carries 24 MiB
+rather than 6 MiB. Four trials use 96 MiB, plus 24 MiB if selection needs re-verification.
+These are byte-bounded observations, not a minimum-duration or long-file guarantee. Both repetitions must verify and
 empty both ends' application queues. A candidate is eligible for a performance
 selection only with observed zero new selected-route send discards in both
 repetitions and no application retries. Missing or reset transport counters are
@@ -144,7 +151,8 @@ than silently applying a measured policy to a fresh connection. The sender and
 coordinator cannot simply advertise a number as enforced.
 
 Reports expose `fileWorkloadWindowComparison`, `connectionPlan.requestPolicy`,
-per-trial `sourceTransport`, and `preflight-window-applied` at the receiver.
+per-trial receiver `deliveryWindows`, whole-trial and late-window rate ranges,
+`sourceTransport`, and `preflight-window-applied` at the receiver.
 `distributionBatchStarted.requestWindow` records the selected cap on each batch.
-This mode requires `phantom-file-workload-v6`; ordinary file compatibility remains.
+This mode requires `phantom-file-workload-v7`; ordinary file compatibility remains.
 Native Android transport remains outside this change.

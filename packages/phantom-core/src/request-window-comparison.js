@@ -5,7 +5,22 @@ export function requestWindowCandidates(values,limit){
  return [...new Set(values.map(n=>Math.min(n,limit)))].sort((a,b)=>a-b);
 }
 export function requestWindowOrder(candidates){return [...candidates,...candidates.toReversed()];}
-const signature=p=>JSON.stringify([p.lanes,p.chunkSize,p.bytes,p.batchSize,p.chunksPerLane,p.sourceReadBlockBytes,p.messageBytes,p.queuePolicy]);
+const signature=p=>JSON.stringify([p.lanes,p.chunkSize,p.bytes,p.batchSize,p.chunksPerLane,p.sourceReadBlockBytes,p.messageBytes,p.queuePolicy,p.deliveryWindowCount]);
+/** Four byte-bounded windows on one receiver clock. The first includes startup;
+ * subsequent windows expose slow delivery that a whole-trial average can hide.
+ * Zero-duration windows are valid observations but cannot establish a rate. */
+export function readRequestWindowDelivery(profile,receiver){
+ const count=profile?.deliveryWindowCount,windows=receiver?.deliveryWindows,total=profile?.chunksPerLane*profile?.lanes?.length;
+ if(!Number.isInteger(count)||count!==Math.min(4,profile?.chunksPerLane)||count<1||!Array.isArray(windows)||windows.length!==count||!Number.isFinite(receiver?.elapsedMs)||receiver.elapsedMs<=0)return null;
+ let previous={bytes:0,messages:0,elapsedMs:0};const rates=[];
+ for(const [i,w]of windows.entries()){
+  const expected=Math.ceil(total*(i+1)/count);
+  if(!w||w.messages!==expected||w.bytes!==expected*profile.chunkSize||!Number.isFinite(w.elapsedMs)||w.elapsedMs<previous.elapsedMs||w.elapsedMs>receiver.elapsedMs)return null;
+  const elapsed=w.elapsedMs-previous.elapsedMs;rates.push(elapsed>0?(w.bytes-previous.bytes)*1000/elapsed:null);previous=w;
+ }
+ if(previous.bytes!==profile.bytes)return null;
+ return {windows:structuredClone(windows),rates,lateRateMin:count===4&&rates.slice(1).every(n=>Number.isFinite(n)&&n>0)?Math.min(...rates.slice(1)):null};
+}
 /** Compare receiver-local delivery on identical, verified workloads. Sender
  * selected-route deltas are local rejection evidence, never wire-loss estimates. */
 export function compareRequestWindows(reports,candidates,{maxRateReduction=0.1,maxGapIncrease=0.1}={}){
@@ -20,15 +35,16 @@ export function compareRequestWindows(reports,candidates,{maxRateReduction=0.1,m
  for(const [i,r]of reports.entries()){
   const p=r?.profile,rx=r?.receiver;
   if(r?.status!=='complete'||!p||p.windowTrial!=='measure'||p.windowStep!==i||p.requestWindow!==order[i]||JSON.stringify(p.windowCandidates)!==JSON.stringify(candidates)||signature(p)!==signature(first)||rx?.clock!=='receiver_monotonic'||rx.requestWindow!==p.requestWindow||rx.laneRequestWindow!==p.requestWindow||!Number.isFinite(rx.elapsedMs)||rx.elapsedMs<=0||!Array.isArray(rx.lanes)||rx.lanes.length!==p.lanes.length||rx.lanes.some((l,n)=>l.lane!==p.lanes[n]||l.verified!==true||l.bytes!==p.bytes/p.lanes.length||l.messages!==p.chunksPerLane||!Number.isFinite(l.maxGapMs)||l.maxGapMs<0||l.maxGapMs>rx.elapsedMs))return fallback('window_trials_incomparable_or_unverified');
+  const delivery=readRequestWindowDelivery(p,rx);if(!delivery)return fallback('window_delivery_evidence_invalid');
   const cleanQueues=Array.isArray(r.sourceSubmission)&&r.sourceSubmission.length===p.lanes.length&&r.sourceSubmission.every((l,n)=>l.lane===p.lanes[n]&&l.finalQueue?.bufferedBytes===0)&&Array.isArray(rx.queues)&&rx.queues.length===p.lanes.length&&rx.queues.every((l,n)=>l.lane===p.lanes[n]&&l.bufferedBytes===0);
   const cleanTransport=Array.isArray(r.sourceTransport)&&r.sourceTransport.length===p.lanes.length&&r.sourceTransport.every((l,n)=>l.lane===p.lanes[n]&&l.change?.counters?.packetsDiscardedOnSend?.status==='observed'&&l.change.counters.packetsDiscardedOnSend.value===0);
-  rows.push({requestWindow:p.requestWindow,bytesPerSecond:p.bytes*1000/rx.elapsedMs,maxGapMs:Math.max(...rx.lanes.map(l=>l.maxGapMs)),eligible:cleanQueues&&cleanTransport&&Array.isArray(rx.retries)&&rx.retries.length===0});
+  rows.push({requestWindow:p.requestWindow,bytesPerSecond:delivery.lateRateMin,totalBytesPerSecond:p.bytes*1000/rx.elapsedMs,deliveryWindows:delivery.windows,windowRates:delivery.rates,maxGapMs:Math.max(...rx.lanes.map(l=>l.maxGapMs)),eligible:delivery.lateRateMin!==null&&cleanQueues&&cleanTransport&&Array.isArray(rx.retries)&&rx.retries.length===0});
  }
- const summaries=candidates.map(requestWindow=>{const own=rows.filter(r=>r.requestWindow===requestWindow);return {requestWindow,eligible:own.length===2&&own.every(r=>r.eligible),rateMin:Math.min(...own.map(r=>r.bytesPerSecond)),rateMax:Math.max(...own.map(r=>r.bytesPerSecond)),gapMax:Math.max(...own.map(r=>r.maxGapMs))};});
+ const summaries=candidates.map(requestWindow=>{const own=rows.filter(r=>r.requestWindow===requestWindow);return {requestWindow,eligible:own.length===2&&own.every(r=>r.eligible),rateMin:own.every(r=>r.bytesPerSecond!==null)?Math.min(...own.map(r=>r.bytesPerSecond)):null,rateMax:own.every(r=>r.bytesPerSecond!==null)?Math.max(...own.map(r=>r.bytesPerSecond)):null,gapMax:Math.max(...own.map(r=>r.maxGapMs)),totalRateMin:Math.min(...own.map(r=>r.totalBytesPerSecond)),totalRateMax:Math.max(...own.map(r=>r.totalBytesPerSecond)),trials:own.map(r=>({deliveryWindows:r.deliveryWindows,windowRates:r.windowRates}))};});
  const clean=summaries.filter(s=>s.eligible);
  if(!clean.length)return {...fallback('clean_window_transport_evidence_unavailable'),evidence:summaries};
  const winner=clean.find(s=>clean.every(other=>other===s||s.rateMin>other.rateMax)&&clean.every(other=>s.gapMax<=other.gapMax*(1+maxGapIncrease)));
- if(winner)return {status:'measured',reason:clean.length===1&&summaries.length>1?'only_repeated_clean_window':'repeated_verified_rate_and_stall_winner',requestWindow:winner.requestWindow,candidates:[...candidates],evidence:summaries,maxRateReduction,maxGapIncrease};
+ if(winner)return {status:'measured',reason:clean.length===1&&summaries.length>1?'only_repeated_clean_window':'repeated_verified_late_window_and_stall_winner',requestWindow:winner.requestWindow,candidates:[...candidates],evidence:summaries,maxRateReduction,maxGapIncrease};
  const fastestRate=Math.max(...clean.map(s=>s.rateMax)),bestGap=Math.min(...clean.map(s=>s.gapMax));
  const bounded=clean.find(s=>s.rateMin>=fastestRate*(1-maxRateReduction)&&s.gapMax<=bestGap*(1+maxGapIncrease));
  return bounded?{status:'bounded_tradeoff',reason:'smaller_window_within_observed_rate_budget',requestWindow:bounded.requestWindow,candidates:[...candidates],evidence:summaries,maxRateReduction,maxGapIncrease}:{...fallback('window_rate_or_stall_ranges_inconclusive'),requestWindow:clean[0].requestWindow,evidence:summaries};
