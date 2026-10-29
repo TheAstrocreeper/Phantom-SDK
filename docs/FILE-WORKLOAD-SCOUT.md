@@ -29,3 +29,11 @@ This selects a working bounded configuration. It does not prove that configurati
 The isolated workload forwards the production file service's `fileRetry` event. When a different lane has already completed and verified its entire batch, the receiver ends that trial immediately, before the retry is sent. The failed report preserves the retry's lane, chunk index, attempt, receiver-relative time, and verified alternatives. Existing queue/verification checks still determine whether any alternative can be nominated, and the retirement barrier and repeated subset verification remain mandatory.
 
 A retry with no verified alternative does not end the trial early. Ordinary user-file retry settings are unchanged. This removes the second request-deadline wait from qualifying failures; it adds no timer and makes no claim that a retry proves a broken network or the root cause of slow delivery.
+
+## Qualification belongs to a retained association set
+
+An explicit next-file preparation can start a new outgoing qualification after the previous file has released its connections. The old consumed pool is retired at both endpoints, and its peer-demand guard is cleared. File selection does not resume background exploration; only a new send intent can begin another pass. The receiver accepts that fresh one-way intent when it has no active file links, including after a previous send in the opposite direction.
+
+The new pass creates a new scout ID and new associations; only those newly verified sockets are handed to the next file. A bounded retired-ID history rejects delayed init packets from disposed passes. Existing active/busy checks still prevent a new pass from interrupting a file in progress. No periodic rescouting or recovery timer is added.
+
+Regression coverage sends two distinct files in one direction and a third in reverse, verifies their contents, checks a separate qualification and owned handoff for each, and releases their file sockets. The same sequence runs through native Chrome with an independent coordinator.

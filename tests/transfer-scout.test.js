@@ -194,6 +194,18 @@ test('an unused retained pool is released on generation invalidation on both pee
   assert.equal(f.nodes[0].take(ids[1],null,0,'asset'),null);
  }finally{f.close();}
 });
+test('retired send intents cannot recreate an old pool after the next file finishes',async()=>{
+ const f=fixture({queueModel:true});try{
+  const first=await f.nodes[0].forSend(ids[1],{connectionOnly:true});
+  const oldInit=f.frames.find(r=>r.body.action==='init').body;
+  const source=f.nodes[0].take(ids[1],first.id,0,'first-file','first-job');
+  const target=f.nodes[1].take(ids[0],first.id,0,'first-file','first-job');
+  assert.ok(source&&target);f.nodes.forEach(node=>node.suspend());source.pc.close();
+  const second=await f.nodes[0].forSend(ids[1],{connectionOnly:true});assert.notEqual(second.id,first.id);
+  f.nodes[0].clear();await settle(()=>f.pcs.every(pc=>pc.connectionState==='closed'));
+  const before=f.pcs.length;assert.equal(f.nodes[1].receive(ids[0],oldInit),false);assert.equal(f.pcs.length,before);
+ }finally{f.close();}
+});
 test('screening rotates all seven exact lane sets and acknowledgments use a participating lane',async()=>{
  const f=fixture();try{
   await f.nodes[0].forSend(ids[1]);await settle(()=>f.reports.filter(r=>r.phase==='preflight'&&r.status==='complete').length===2);
