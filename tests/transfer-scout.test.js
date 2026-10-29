@@ -609,7 +609,7 @@ test('receiver rejects expansion before the first workload has verified',async()
 test('request-window study uses the receiver window on every trial and preserves it at handoff',async()=>{
  const f=fixture({queueModel:true,fileWorkloadLimits:{windowComparison:true,batchSize:8,requestWindow:32}});try{
   await f.nodes[0].forSend(ids[1],{connectionOnly:true});const report=await f.nodes[0].qualifyFileWorkload(ids[1],{chunkSize:65536,fileBytes:4*1024*1024}),result=f.nodes[0].get(ids[1]);
-  assert.equal(report.status,'complete');assert.deepEqual(result.fileWorkloads.slice(0,4).map(r=>r.profile.requestWindow),[1,2,2,1]);
+  assert.equal(report.status,'complete');assert.deepEqual(result.fileWorkloads.slice(0,2).map(r=>r.profile.requestWindow),[1,2]);assert.equal(result.fileWorkloadWindowComparison.adaptive,true);
   for(const r of result.fileWorkloads){assert.equal(r.receiver.requestWindow,r.profile.requestWindow);assert.equal(r.receiver.laneRequestWindow,r.profile.requestWindow);assert.ok(r.receiver.lanes.every(l=>l.verified));}
   const selected=result.connectionPlan.requestPolicy;assert.equal(selected.status,'workload_verified');assert.equal(selected.requestWindow,report.profile.requestWindow);
   assert.equal(f.nodes[1].take(ids[0],result.id,0,'asset','bad',[0,1,2],selected.requestWindow+1),null,'mismatch cannot claim or consume the association');
@@ -620,7 +620,7 @@ test('request-window study uses the receiver window on every trial and preserves
 test('callers can select different window candidates and the receiver agrees on the bounded schedule',async()=>{
  const f=fixture({queueModel:true,fileWorkloadLimits:[{windowComparison:true,windowCandidates:[1,4],batchSize:8,requestWindow:32},{batchSize:8,requestWindow:32}]});try{
   await f.nodes[0].forSend(ids[1],{connectionOnly:true});const report=await f.nodes[0].qualifyFileWorkload(ids[1],{chunkSize:65536,fileBytes:4*1024*1024});
-  assert.equal(report.status,'complete');assert.deepEqual(f.nodes[0].get(ids[1]).fileWorkloads.slice(0,4).map(r=>r.profile.requestWindow),[1,4,4,1]);
+  assert.equal(report.status,'complete');assert.deepEqual(f.nodes[0].get(ids[1]).fileWorkloads.slice(0,2).map(r=>r.profile.requestWindow),[1,4]);
  }finally{f.close();}
 });
 
@@ -634,7 +634,7 @@ test('failed request-window workload re-verifies only a verified clean subset',a
 test('synthetic repeated metrics can select four slots and both handoffs retain that selection',async()=>{
  const f=fixture({queueModel:true,stats:pressureStats({old:true}),windowTimes:{1:200,4:100},fileWorkloadLimits:{windowComparison:true,windowCandidates:[1,4],batchSize:8,requestWindow:32}});try{
   await f.nodes[0].forSend(ids[1],{connectionOnly:true});const report=await f.nodes[0].qualifyFileWorkload(ids[1],{chunkSize:65536,fileBytes:4*1024*1024}),result=f.nodes[0].get(ids[1]);
-  assert.equal(result.fileWorkloadWindowComparison.status,'measured');assert.equal(result.fileWorkloadWindowComparison.requestWindow,4);assert.equal(report.profile.windowTrial,'selected');assert.equal(result.fileWorkloads.length,5);
+  assert.equal(result.fileWorkloadWindowComparison.status,'measured');assert.equal(result.fileWorkloadWindowComparison.requestWindow,4);assert.equal(report.profile.windowTrial,'measure');assert.deepEqual(result.fileWorkloads.map(r=>r.profile.requestWindow),[1,4,4]);
   assert.equal(result.connectionPlan.requestPolicy.requestWindow,4);
   assert.equal(f.nodes[0].take(ids[1],result.id,0,'asset','source',[0,1,2],4).requestWindow,4);assert.equal(f.nodes[1].take(ids[0],result.id,0,'asset','receiver',[0,1,2],4).requestWindow,4);
  }finally{f.close();}
@@ -658,4 +658,25 @@ test('sample-volume override keeps batch size, candidate window and receiver lim
 });
 test('invalid sample-volume bounds fail before allocating a scout connection',()=>{
  for(const windowSampleChunks of [0,-1,65,1.5,'8'])assert.throws(()=>fixture({fileWorkloadLimits:{windowSampleChunks}}),/sample chunks/);
+});
+
+test('first-contact smaller winner is confirmed immediately without an extra losing-window trial',async()=>{
+ const f=fixture({queueModel:true,stats:pressureStats({old:true}),windowTimes:{1:100,4:200},fileWorkloadLimits:{windowComparison:true,windowCandidates:[1,4],batchSize:8,requestWindow:32}});try{
+  await f.nodes[0].forSend(ids[1],{connectionOnly:true});await f.nodes[0].qualifyFileWorkload(ids[1],{chunkSize:65536,fileBytes:4*1024*1024});const result=f.nodes[0].get(ids[1]);assert.deepEqual(result.fileWorkloads.map(r=>r.profile.requestWindow),[1,4,1]);assert.equal(result.connectionPlan.requestPolicy.requestWindow,1);assert.equal(result.fileWorkloadWindowComparison.reason,'confirmed_leader_over_observed_alternatives');
+ }finally{f.close();}
+});
+
+test('three configured candidates stay within six measurements and one exact selection handoff',async()=>{
+ const f=fixture({queueModel:true,stats:pressureStats({old:true}),windowTimes:{1:100,2:100,4:100},fileWorkloadLimits:{windowComparison:true,windowCandidates:[1,2,4],batchSize:8,requestWindow:32}});try{
+  await f.nodes[0].forSend(ids[1],{connectionOnly:true});await f.nodes[0].qualifyFileWorkload(ids[1],{chunkSize:65536,fileBytes:4*1024*1024});const result=f.nodes[0].get(ids[1]),measure=result.fileWorkloads.filter(r=>r.profile.windowTrial==='measure');assert.equal(measure.length,6);for(const n of [1,2,4])assert.equal(measure.filter(r=>r.profile.requestWindow===n).length,2);assert.ok(result.fileWorkloads.length<=7);assert.equal(f.nodes[1].take(ids[0],result.id,0,'asset','budget',[0,1,2],result.connectionPlan.requestPolicy.requestWindow).requestWindow,result.connectionPlan.requestPolicy.requestWindow);
+ }finally{f.close();}
+});
+
+test('receiver rejects a third candidate measurement and skipped adaptive step before payload allocation',async()=>{
+ const f=fixture({queueModel:true,stats:pressureStats({old:true}),windowTimes:{1:200,4:100},fileWorkloadLimits:{windowComparison:true,windowCandidates:[1,4],batchSize:8,requestWindow:32}});try{
+  await f.nodes[0].forSend(ids[1],{connectionOnly:true});await f.nodes[0].qualifyFileWorkload(ids[1],{chunkSize:65536,fileBytes:4*1024*1024});const result=f.nodes[0].get(ids[1]),last=result.fileWorkloads.at(-1),profile={...last.profile,windowStep:3};
+  assert.equal(f.nodes[1].receive(ids[0],{type:'transferScout',version:8,id:result.id,action:'fileWorkload',trial:4,profile}),false);
+  assert.equal(f.nodes[1].receive(ids[0],{type:'transferScout',version:8,id:result.id,action:'fileWorkload',trial:4,profile:{...profile,requestWindow:1,windowStep:4}}),false);
+  assert.equal(f.nodes[1].take(ids[0],result.id,0,'asset','still-qualified',[0,1,2],4).requestWindow,4);
+ }finally{f.close();}
 });

@@ -106,7 +106,7 @@ unchanged per-lane workload, queue-policy rule, and settled clean prior trial.
 This requires `phantom-file-workload-v5`; ordinary file compatibility is unchanged.
 The SDK leaves the option off by default so callers can select the experiment.
 
-### Measured request windows (opt-in, workload v7)
+### Measured request windows (opt-in, workload v8)
 
 `scoutRequestWindowComparison: true` replaces the existing queue-depth study with
 request-window measurements; it does not append both studies. The SDK defaults
@@ -115,32 +115,38 @@ candidates between 1 and 32, default `[1, 2]`. Candidates are capped by configur
 receive limits, live lane count, and available sample chunks, then deduplicated.
 These are candidate settings, not a universal optimum or permanent selected value.
 
-The scout repeats candidates in ascending then descending order on identical
-retained associations and payloads. Only the per-lane request window changes;
-queue boundaries remain 1 MiB / 512 KiB. Samples use a full configured batch per lane, rounded down only for available
-file bytes. Each receiver records four equal-message byte windows on its own
-monotonic clock; the first window includes startup. Selection compares the slowest
-of the later three window rates across both repetitions, alongside the existing
-maximum receive-gap bound. Whole-trial rates remain visible but cannot carry a
-slow tail. Missing, forged, incomplete or reordered boundaries cannot establish
-a measured winner; short workloads with fewer than four windows and zero-duration
-windows remain inconclusive. With Share settings each trial now carries 24 MiB
-rather than 6 MiB. Four trials use 96 MiB, plus 24 MiB if selection needs re-verification.
-These are byte-bounded observations, not a minimum-duration or long-file guarantee. Both repetitions must verify and
-empty both ends' application queues. A candidate is eligible for a performance
-selection only with observed zero new selected-route send discards in both
-repetitions and no application retries. Missing or reset transport counters are
-not zero. Repeated receiver-local throughput and delivery-gap envelopes determine
-the selection; the bounded tradeoff allows at most 10% rate reduction and 10%
-relative maximum-gap increase. Inconclusive evidence retains an explicit verified
-candidate without calling it the fastest or claiming clean native transport.
+The scout uses evidence from the current retained connection generation only.
+It surveys each configured candidate once, then confirms a leader whose slowest
+late delivery window exceeds every alternative's fastest late window without
+regressing the maximum receive gap beyond the configured 10% allowance. Confirmation
+must also meet that condition, with observed zero selected-route send discards,
+verified chunks, no application retries and empty queues on both sides. A clear
+leader can therefore finish after `1,2,2` or `1,2,1`; the losing candidate does not
+need a mandatory repeat. Alternatives are observed once, not falsely described as
+repeatedly excluded. This is a bounded current-connection observation, not proof
+of a universal optimum or a statistical confidence interval.
+
+If no clear leader emerges, the next unconfirmed candidate is chosen from current
+late-rate and transport evidence. Each candidate receives at most two measurements;
+overlap, missing counters or zero-duration windows cannot produce an early measured
+winner. At the measurement budget, an explicit bounded tradeoff or inconclusive
+verified fallback settles the study. No device history, saved profile, pacing delay,
+new retry timer or absolute throughput target participates.
+
+Samples use a full configured batch unless capped by
+`scoutRequestWindowSampleChunks` or available file bytes. Four receiver-local byte
+windows expose late delivery; the first window includes startup and is not used
+to rank sustained delivery. Whole-trial rates remain available. Queue boundaries
+stay at 1 MiB / 512 KiB throughout the comparison. Reports preserve each decision
+through `preflight-window-decision`, including the next requested window, reason,
+completed-trial count and observations supporting it.
 
 If the chosen window is not the final trial's current window, it is re-verified
 on the same associations before handoff. A failed trial may use the existing
 verified clean-subset restriction, then verify the lowest configured candidate
 on that subset. It cannot reuse the earlier throughput ranking on changed lanes.
 A cancelled, nonclean, or unverified workload cannot qualify a window. The existing
-nine-trial bound covers at most six comparison trials, one selection verification,
+nine-trial bound covers at most six adaptive measurement trials, one selection verification,
 and two shrinking repairs. No recovery or pacing timer is introduced.
 
 The selected window is retained with the scout's exact connection generation.
@@ -154,7 +160,7 @@ Reports expose `fileWorkloadWindowComparison`, `connectionPlan.requestPolicy`,
 per-trial receiver `deliveryWindows`, whole-trial and late-window rate ranges,
 `sourceTransport`, and `preflight-window-applied` at the receiver.
 `distributionBatchStarted.requestWindow` records the selected cap on each batch.
-This mode requires `phantom-file-workload-v7`; ordinary file compatibility remains.
+This mode requires `phantom-file-workload-v8`; ordinary file compatibility remains.
 Native Android transport remains outside this change.
 
 ### Controlled preflight-volume comparison
@@ -164,7 +170,7 @@ study (integer 1–64, further bounded by the configured batch and available fil
 Omitting it keeps full-batch qualification. It changes synthetic sample volume only:
 actual file batch size, negotiated chunk size, queue boundaries, receive slots and
 selected request-window enforcement remain unchanged. The receiver validates the
-existing workload-v7 profile; it need not enable the initiating source's sample cap.
+existing workload profile; it need not enable the initiating source's sample cap.
 
 To isolate volume from settings, both diagnostic arms use candidates `[2]`, repeated
 twice. Eight chunks per lane give 12 MiB total scout payload; 32 give 48 MiB with
@@ -183,3 +189,14 @@ compatibility transfer transitions report preparing, sharing and sent timestamps
 SDK browser checks additionally report source-clock preparation, transfer and total
 milliseconds. Internet performance still requires the real peer path; local Chrome
 checks establish protocol, byte-budget and handoff correctness only.
+
+### Adaptive first contact (Share 0.1.82)
+
+Workload v8 agrees on an adaptive measurement profile and sequential trial budget.
+The receiver rejects replayed/skipped step numbers and more than two measurements
+of a candidate. Selection can follow a completed adaptive study; its exact window
+and qualified associations remain mandatory at handoff and in later file batches.
+Share keeps the eight-chunk cap and SDK candidate configuration; no fixed two-chunk
+production profile or repeat-device history is introduced. Both endpoints need the
+updated workload capability for adaptive qualification. The older fixed comparison
+function remains available for interpreting earlier experiment results only.

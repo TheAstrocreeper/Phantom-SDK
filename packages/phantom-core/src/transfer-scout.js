@@ -4,11 +4,11 @@ import {makeReceiverEvidence,readReceiverEvidence} from './scout-receiver-eviden
 import {compareWorkloadQueues,workloadQueuePolicy} from './workload-queue-comparison.js';
 import {decideFileWorkload} from './file-workload-decision.js';
 import {createScoutFileWorkload} from './scout-file-workload.js';
-import {requestWindowCandidates,requestWindowOrder,compareRequestWindows,readRequestWindowDelivery} from './request-window-comparison.js';
+import {requestWindowCandidates,requestWindowOrder,nextRequestWindowProbe,readRequestWindowDelivery} from './request-window-comparison.js';
 import {FILE_RECEIVE_SLOTS} from './files.js';
 import {buildScoutConnectionPlan} from './scout-connection-plan.js';
 
-export const FILE_WORKLOAD_PROTOCOL='phantom-file-workload-v7';
+export const FILE_WORKLOAD_PROTOCOL='phantom-file-workload-v8';
 export const TRANSFER_SCOUT_PROTOCOL = 'phantom-transfer-scout-v8';
 const LANES = 3, MAX_BYTES = 3 * 1024 * 1024, DEFAULT_BYTES = 768 * 1024;
 const CONFIRM_SCALE = 4, SCREEN_ROUNDS = 14, CONFIRM_ROUNDS = 6, LANE_ROUNDS = 21, QUEUE_ROUNDS = 4, ROUNDS = 25, QUEUE_BYTES = 768 * 1024;
@@ -149,8 +149,8 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
   if(workloadLimits.windowSampleChunks!==null&&(!Number.isInteger(workloadLimits.windowSampleChunks)||workloadLimits.windowSampleChunks<1||workloadLimits.windowSampleChunks>64))throw TypeError('Invalid scout request window sample chunks');
   if(typeof workloadLimits.windowComparison!=='boolean'||typeof workloadLimits.progressiveAdmission!=='boolean'||!['association','peer'].includes(workloadLimits.queueBudgetScope)||typeof workloadLimits.queueComparison!=='boolean'||!Number.isInteger(workloadLimits.maxConnections)||workloadLimits.maxConnections<1||workloadLimits.maxConnections>3||!Number.isInteger(workloadLimits.batchSize)||workloadLimits.batchSize<1||workloadLimits.batchSize>64||!Number.isInteger(workloadLimits.requestWindow)||workloadLimits.requestWindow<1||workloadLimits.requestWindow>32||!Number.isFinite(workloadLimits.requestTimeoutMs)||workloadLimits.requestTimeoutMs<=0||!Number.isFinite(workloadLimits.sendTimeoutMs)||workloadLimits.sendTimeoutMs<=0||!Number.isInteger(workloadLimits.maxAttemptsPerPeer)||workloadLimits.maxAttemptsPerPeer<1||workloadLimits.maxAttemptsPerPeer>3||!Number.isInteger(workloadLimits.maxChunkBytes)||workloadLimits.maxChunkBytes<1024||workloadLimits.maxChunkBytes>262144)throw TypeError('Invalid scout file workload limits');
   function validWindowProfile(p){
-    if(p.windowTrial===undefined)return p.requestWindow===undefined&&p.windowCandidates===undefined&&p.windowStep===undefined&&p.deliveryWindowCount===undefined;
-    if(p.deliveryWindowCount!==Math.min(4,p.chunksPerLane)||!['measure','selected','repair'].includes(p.windowTrial)||!validLanes(p.lanes)||!Number.isInteger(p.chunksPerLane)||p.chunksPerLane<1||!Number.isInteger(p.windowStep)||p.windowStep<0||!Number.isInteger(p.requestWindow))return false;
+    if(p.windowTrial===undefined)return p.requestWindow===undefined&&p.windowCandidates===undefined&&p.windowStep===undefined&&p.deliveryWindowCount===undefined&&p.windowAdaptive===undefined;
+    if(p.windowAdaptive!==true||p.deliveryWindowCount!==Math.min(4,p.chunksPerLane)||!['measure','selected','repair'].includes(p.windowTrial)||!validLanes(p.lanes)||!Number.isInteger(p.chunksPerLane)||p.chunksPerLane<1||!Number.isInteger(p.windowStep)||p.windowStep<0||!Number.isInteger(p.requestWindow))return false;
     try{const candidates=requestWindowCandidates(p.windowCandidates,Math.min(workloadLimits.requestWindow,Math.floor(FILE_RECEIVE_SLOTS/p.lanes.length),p.chunksPerLane));return JSON.stringify(candidates)===JSON.stringify(p.windowCandidates)&&candidates.includes(p.requestWindow)&&p.windowStep<=candidates.length*2;}catch{return false;}
   }
   function validWorkload(p){return p&&validWindowProfile(p)&&(p.laneAdmission===undefined||p.laneAdmission===true&&workloadLimits.progressiveAdmission&&p.lanes?.length<workloadLimits.maxConnections)&&(!p.queueTrial?(!p.queueBudgetScope||p.queueBudgetScope==='association'):(workloadQueuePolicy(p)&&p.queuePolicy?.highWaterMark===workloadQueuePolicy(p).highWaterMark&&p.queuePolicy?.lowWaterMark===workloadQueuePolicy(p).lowWaterMark))&&validLanes(p.lanes)&&p.lanes.length<=workloadLimits.maxConnections&&Number.isInteger(p.chunkSize)&&p.chunkSize>=1024&&p.chunkSize<=workloadLimits.maxChunkBytes&&Number.isInteger(p.batchSize)&&p.batchSize===workloadLimits.batchSize&&Number.isInteger(p.chunksPerLane)&&p.chunksPerLane>=1&&p.chunksPerLane<=p.batchSize&&p.bytes===p.chunksPerLane*p.chunkSize*p.lanes.length&&p.bytes<=48*1024*1024&&[0,4*1024*1024].includes(p.sourceReadBlockBytes)&&Number.isInteger(p.queuePolicy?.highWaterMark)&&p.queuePolicy.highWaterMark>=p.chunkSize&&p.queuePolicy.highWaterMark<=16*1024*1024&&Number.isInteger(p.queuePolicy.lowWaterMark)&&p.queuePolicy.lowWaterMark>=0&&p.queuePolicy.lowWaterMark<p.queuePolicy.highWaterMark&&(p.messageBytes===null||[16384,262144].includes(p.messageBytes));}
@@ -233,10 +233,10 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
     let lanes=[...(result.connectionPlan?.lanes??result.lanes)],last=null,step=0,stage='measure',chosen=null;
     const chunksPerLane=Math.min(workloadLimits.batchSize,workloadLimits.windowSampleChunks??workloadLimits.batchSize,Math.floor(fileBytes/(chunkSize*lanes.length)));
     if(chunksPerLane<1)return {version:2,status:'skipped',reason:'file_smaller_than_one_agreed_chunk_per_lane'};
-    let candidates=requestWindowCandidates(workloadLimits.windowCandidates,Math.min(workloadLimits.requestWindow,Math.floor(FILE_RECEIVE_SLOTS/lanes.length),chunksPerLane)),order=requestWindowOrder(candidates);
+    let candidates=requestWindowCandidates(workloadLimits.windowCandidates,Math.min(workloadLimits.requestWindow,Math.floor(FILE_RECEIVE_SLOTS/lanes.length),chunksPerLane)),nextCandidate=candidates[0];
     const reports=[];
     for(let attempt=0;attempt<9;attempt++){
-      const profile={lanes:[...lanes],chunkSize,sourceReadBlockBytes,batchSize:workloadLimits.batchSize,chunksPerLane,bytes:chunksPerLane*chunkSize*lanes.length,queuePolicy:{highWaterMark:1048576,lowWaterMark:524288},messageBytes:null,deliveryWindowCount:Math.min(4,chunksPerLane),requestWindow:stage==='measure'?order[step]:chosen,windowCandidates:[...candidates],windowTrial:stage,windowStep:stage==='measure'?step:stage==='selected'?order.length:0};
+      const profile={lanes:[...lanes],chunkSize,sourceReadBlockBytes,batchSize:workloadLimits.batchSize,chunksPerLane,bytes:chunksPerLane*chunkSize*lanes.length,queuePolicy:{highWaterMark:1048576,lowWaterMark:524288},messageBytes:null,deliveryWindowCount:Math.min(4,chunksPerLane),windowAdaptive:true,requestWindow:stage==='measure'?nextCandidate:chosen,windowCandidates:[...candidates],windowTrial:stage,windowStep:stage==='repair'?0:step};
       if(!validWorkload(profile))return null;
       const state=startWorkload(pool,profile,true);
       send(pool.peer,{type:'transferScout',version:8,id:pool.id,action:'fileWorkload',trial:state.trial,profile});
@@ -248,8 +248,11 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
       if(decision.status==='complete'&&cleanWorkload(pool)&&Array.isArray(report.receiver?.queues)&&report.receiver.queues.length===lanes.length&&report.receiver.queues.every((q,i)=>q.lane===lanes[i]&&q.bufferedBytes===0)){
         if(stage==='measure'){
           reports.push(report);
-          if(++step<order.length)continue;
-          result.fileWorkloadWindowComparison=compareRequestWindows(reports,candidates,{maxRateReduction:laneRateTradeoff});chosen=result.fileWorkloadWindowComparison.requestWindow;
+          step++;
+          const next=nextRequestWindowProbe(reports,candidates,{maxRateReduction:laneRateTradeoff});result.fileWorkloadWindowComparison=next;
+          notify(pool,{phase:'preflight-window-decision',...structuredClone(next),completedTrials:reports.length});
+          if(next.action==='probe'){nextCandidate=next.requestWindow;continue;}
+          chosen=next.requestWindow;
           if(chosen!==profile.requestWindow){stage='selected';continue;}
         }
         result.fileWorkload=structuredClone(report);result.fileWorkloads=structuredClone(pool.workloadReports);
@@ -647,7 +650,8 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
           const next=body.profile??{},prior=previous?.profile;
           const nextAdmission=workloadLimits.progressiveAdmission&&validLanes(next.lanes)&&previous?.settled&&prior.laneAdmission===true&&cleanWorkload(pool)&&next.lanes?.length===prior.lanes.length+1&&prior.lanes.every((lane,i)=>next.lanes[i]===lane)&&!pool.lanes[next.lanes.at(-1)]?.rejected&&(prior.queueTrial||next.queuePolicy?.highWaterMark===prior.queuePolicy.highWaterMark&&next.queuePolicy?.lowWaterMark===prior.queuePolicy.lowWaterMark)&&JSON.stringify([next.chunkSize,next.chunksPerLane,next.batchSize,next.sourceReadBlockBytes,next.messageBytes,next.queueTrial,next.queueBudgetScope])===JSON.stringify([prior.chunkSize,prior.chunksPerLane,prior.batchSize,prior.sourceReadBlockBytes,prior.messageBytes,prior.queueTrial,prior.queueBudgetScope]);
           const windowOrder=next.windowTrial&&validWindowProfile(next)?requestWindowOrder(next.windowCandidates):[];
-          const nextWindow=previous?.settled&&prior.windowTrial==='measure'&&cleanWorkload(pool)&&sameWorkload(prior,next)&&JSON.stringify(prior.windowCandidates)===JSON.stringify(next.windowCandidates)&&((next.windowTrial==='measure'&&next.windowStep===prior.windowStep+1&&next.requestWindow===windowOrder[next.windowStep])||(next.windowTrial==='selected'&&prior.windowStep===windowOrder.length-1&&next.windowStep===windowOrder.length));
+          const windowTrials=(pool.workloadReports??[]).filter(r=>r.profile?.windowTrial==='measure');
+          const nextWindow=previous?.settled&&prior.windowTrial==='measure'&&cleanWorkload(pool)&&sameWorkload(prior,next)&&JSON.stringify(prior.windowCandidates)===JSON.stringify(next.windowCandidates)&&next.windowStep===prior.windowStep+1&&((next.windowTrial==='measure'&&windowTrials.filter(r=>r.profile.requestWindow===next.requestWindow).length<2)||(next.windowTrial==='selected'&&next.windowCandidates.every(n=>windowTrials.some(r=>r.profile.requestWindow===n))));
           const reduced=previous?.settled&&previous.report?.status==='failed'&&pool.activeWorkloadLanes&&JSON.stringify(pool.activeWorkloadLanes)===JSON.stringify(body.profile?.lanes)&&body.profile.lanes.length<previous.profile.lanes.length;
           if(!previous&&body.profile?.windowTrial&&(body.profile.windowTrial!=='measure'||body.profile.windowStep!==0||body.profile.requestWindow!==windowOrder[0]))return false;
           if(body.trial!==(pool.workloadReports?.length??0)+1||body.trial>9||(!previous&&body.profile?.laneAdmission&&body.profile.lanes?.length!==1)||(previous&&!nextComparison&&!nextAdmission&&!nextWindow&&!reduced))return false;if(!validWorkload(body.profile)){send(peer,{type:'transferScout',version:8,id:pool.id,action:'fileWorkloadResult',trial:body.trial,status:'failed',reason:'file_workload_profile_not_supported',receiver:null});return true;}
