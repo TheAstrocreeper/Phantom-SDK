@@ -137,6 +137,20 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
   },chunkStore,...Object.fromEntries(Object.entries(options).filter(([key])=>['chunkStore','requestTimeoutMs','requestWindow','maxAttemptsPerPeer','maxFileBytes','maxChunkBytes'].includes(key)))});
   async function sendBinary(link,payload){let ok=false,reason='Distribution connection unavailable',bufferWaitMs=0;try{
     const striped=Array.isArray(link.pc?.pcs),pcs=striped?link.pc.pcs:[link.pc],overhead=striped?9:0;
+    // A retry must not append a second copy behind the original on the same
+    // reliable ordered channel. This is local queue ownership, not delivery ACK.
+    // Aggregate striped queues do not provide a FIFO byte cursor.
+    const retryQueue=!striped&&link.dc.ordered!==false&&link.dc.maxRetransmits==null&&link.dc.maxPacketLifeTime==null;
+    if(retryQueue){
+      link.queuedChunks??=new Map();
+      const drained=Math.max(0,(link.submittedBytes??0)-link.dc.bufferedAmount);
+      for(const [index,end]of link.queuedChunks)if(end<=drained)link.queuedChunks.delete(index);
+      if(link.queuedChunks.has(payload.file.index)){
+        timeline(link,'retry-coalesced',{index:payload.file.index,bufferedBytes:link.dc.bufferedAmount});
+        fire('FILE_BIN_CHUNK_SENT',{...payload,ok:true,bufferWaitMs:0});return;
+      }
+    }
+
     const header=JSON.stringify({kind:'binary',file:payload.file}),headerBytes=new TextEncoder().encode(header).byteLength;
     const selectedMessageBytes=link.messagePolicy?.maxPayloadBytes??null;
     const direct=(!selectedMessageBytes||payload.bytes.byteLength<=selectedMessageBytes)&&fitsMessageLimits({connections:pcs,payloadBytes:payload.bytes.byteLength,headerBytes,wrapperBytes:overhead});
@@ -155,6 +169,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
       if(closed||links.get(link.job.id)!==link||!canUsePeer(link.peer)||!allowed(payload.file.id,payload.file.distributionId)||link.dc.readyState!=='open')throw Error('Distribution revoked or disconnected');
       payloadSend(link,meta);payloadSend(link,direct?payload.bytes:payload.bytes.slice(offset,offset+length));offset+=length;
     }
+    if(retryQueue)link.queuedChunks.set(payload.file.index,link.submittedBytes);
     ok=true;
   }catch(e){reason=e.message;}fire('FILE_BIN_CHUNK_SENT',{...payload,ok,bufferWaitMs,error:ok?undefined:reason});}
   // Job timeout is an idle budget. Control keepalives alone cannot renew it.
