@@ -14,7 +14,7 @@ const server=createServer(async(req,res)=>{try{
 await new Promise(r=>server.listen(0,'127.0.0.1',r));let browser;
 try{
  browser=await chromium.launch({headless:true,executablePath:process.env.PHANTOM_CHROMIUM_EXECUTABLE,args:['--no-sandbox']});
- const page=await browser.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));await page.goto(`http://127.0.0.1:${server.address().port}/`);
+ const page=await browser.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.stack??e.message));await page.goto(`http://127.0.0.1:${server.address().port}/`);
  for(const mode of ['complete','cancel','send','pair','baseline','queue','message','tradeoff','workload']){
   const result=await page.evaluate(async mode=>{
    const {createNetworkDistribution}=await import('/packages/phantom-core/src/network-distribution.js');
