@@ -3,7 +3,7 @@ import {sendFileChannelPayload,coalesceQueuedFileChunk} from './file-channel-pay
 /** Isolated synthetic file, using the production request/read/hash/write service.
  * The memory sink deliberately does not claim native Android storage coverage.
  */
-export function createScoutFileWorkload({peer,lanes,channels,pcs,bytes,chunkSize,batchSize,sourceReadBlockBytes=0,requestWindow,requestTimeoutMs=10000,sendTimeoutMs=15000,maxAttemptsPerPeer=2,queuePolicy,messageBytes=null,crypto=globalThis.crypto,signal,onChunk=()=>{},onSend=()=>{},onComplete=()=>{},onError=()=>{}}){
+export function createScoutFileWorkload({peer,lanes,channels,pcs,bytes,chunkSize,batchSize,sourceReadBlockBytes=0,requestWindow,requestTimeoutMs=10000,sendTimeoutMs=15000,maxAttemptsPerPeer=2,queuePolicy,messageBytes=null,crypto=globalThis.crypto,signal,onChunk=()=>{},onSend=()=>{},onLaneComplete=()=>{},onComplete=()=>{},onError=()=>{}}){
  if(!Number.isSafeInteger(bytes)||bytes<1||bytes>144*1024*1024||!Number.isInteger(chunkSize)||chunkSize<1024||chunkSize>262144||bytes%(lanes.length*chunkSize)||!Number.isInteger(batchSize)||batchSize<1||batchSize>64)throw TypeError('Invalid scout file workload');
  const listeners=new Set(),pending=new Map(),stored=new Map(),received=new Set(),submitted=new Map(lanes.map(l=>[l,0])),queued=new Map(lanes.map(l=>[l,new Map()]));let closed=false,manifest=null,requested=false,wireId=null;
  const chunksPerLane=bytes/chunkSize/lanes.length;
@@ -25,7 +25,7 @@ export function createScoutFileWorkload({peer,lanes,channels,pcs,bytes,chunkSize
     void Promise.all(lanes.map(async lane=>{const start=lanes.indexOf(lane)*chunksPerLane;for(let base=start;base<start+chunksPerLane;base+=batchSize){
       const indexes=Array.from({length:Math.min(batchSize,start+chunksPerLane-base)},(_,i)=>base+i);
       await service.request(manifest.id,{peers:[peer],indexes,signal,concurrentRanges:true});
-    }})).then(()=>onComplete(),onError);
+    }onLaneComplete(lane);} )).then(()=>onComplete(),onError);
    }else if(type==='fileError')onError(Error(payload.error??'Scout file service failed'));}
  });
  const abort=()=>api.close();signal?.addEventListener('abort',abort,{once:true});

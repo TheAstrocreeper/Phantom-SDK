@@ -32,20 +32,21 @@ test('a burst advantage cannot hide slower late delivery or missing progress evi
  const absent=samples();delete absent[14].delivery;assert.equal(selectTransferSetup(absent).reason,'late_delivery_unavailable');
  const reordered=samples();reordered[14].delivery[1].elapsedMs=999;assert.equal(selectTransferSetup(reordered).status,'inconclusive');
 });
-function fixture({drop=false,maxMessageSize=262144,sampleBytes=98304,queueModel=false,freezeDrain=false,clockWinner=[0],dropEndAck=false,stats=null,dropEvidence=false,comparison='queue',dropMessage=false,prepareTransport=null,syntheticClock=false,fileWorkloadLimits={},dropWorkloadLane=null,dropWorkloadReady=false}={}){
- const frames=[],reports=[],pcs=[],payloads=[],peaks=[],messages=[],channelRound=new Map(),clocks=[],workloadChannels=new Set();
+function fixture({drop=false,maxMessageSize=262144,sampleBytes=98304,queueModel=false,freezeDrain=false,clockWinner=[0],dropEndAck=false,stats=null,dropEvidence=false,comparison='queue',dropMessage=false,prepareTransport=null,syntheticClock=false,fileWorkloadLimits={},dropWorkloadLane=null,dropWorkloadReady=false,dropRestrictReady=false}={}){
+ const frames=[],reports=[],pcs=[],payloads=[],peaks=[],messages=[],channelRound=new Map(),clocks=[],workloadChannels=new Set();let workloadTrial=0;
+ const dropsLane=lane=>typeof dropWorkloadLane==='function'?dropWorkloadLane(lane,workloadTrial):Array.isArray(dropWorkloadLane)?dropWorkloadLane.includes(lane):lane===dropWorkloadLane;
  const upgrade=ch=>{if(ch.addEventListener)return;const events=new EventTarget();ch.addEventListener=events.addEventListener.bind(events);ch.removeEventListener=events.removeEventListener.bind(events);ch.dispatchEvent=events.dispatchEvent.bind(events);};
  const Base=memoryRTC({maxMessageSize,onSend(data,ch){
   if(queueModel){upgrade(ch);const n=typeof data==='string'?data.length:data.byteLength;ch.bufferedAmount+=n;peaks.push(ch.bufferedAmount);queueMicrotask(()=>{if(freezeDrain)return;const before=ch.bufferedAmount;ch.bufferedAmount-=n;if(before>(ch.bufferedAmountLowThreshold??0)&&ch.bufferedAmount<=(ch.bufferedAmountLowThreshold??0))ch.dispatchEvent(new Event('bufferedamountlow'));});}
-  if(typeof data==='string'){const body=JSON.parse(data),lane=pcs.findIndex(pc=>pc.channels.includes(ch))%3;messages.push({lane,...body});if(dropEndAck&&body.action==='endDirectionAck')return false;if(body.kind==='binary'||body.kind==='binary-fragment'){workloadChannels.add(ch);if(lane===dropWorkloadLane)return false;}if(body.action==='sample'){channelRound.set(ch,body.round);const owner=pcs.find(pc=>pc.channels.includes(ch))?.scoutNode;clocks[1-owner]?.receiveRound?.(body.round);}}
-  if(data instanceof ArrayBuffer){payloads.push({bytes:data.byteLength,label:ch.label,lane:pcs.findIndex(pc=>pc.channels.includes(ch))%3,round:channelRound.get(ch)});if(workloadChannels.has(ch)&&dropWorkloadLane===pcs.findIndex(pc=>pc.channels.includes(ch))%3)return false;if(drop||(dropMessage&&(channelRound.get(ch)??0)%25>=21))return false;}return true;
+  if(typeof data==='string'){const body=JSON.parse(data),lane=pcs.findIndex(pc=>pc.channels.includes(ch))%3;messages.push({lane,...body});if(dropEndAck&&body.action==='endDirectionAck')return false;if(body.kind==='binary'||body.kind==='binary-fragment'){workloadChannels.add(ch);if(dropsLane(lane))return false;}if(body.action==='sample'){channelRound.set(ch,body.round);const owner=pcs.find(pc=>pc.channels.includes(ch))?.scoutNode;clocks[1-owner]?.receiveRound?.(body.round);}}
+  if(data instanceof ArrayBuffer){payloads.push({bytes:data.byteLength,label:ch.label,lane:pcs.findIndex(pc=>pc.channels.includes(ch))%3,round:channelRound.get(ch)});if(workloadChannels.has(ch)&&dropsLane(pcs.findIndex(pc=>pc.channels.includes(ch))%3))return false;if(drop||(dropMessage&&(channelRound.get(ch)??0)%25>=21))return false;}return true;
  }});
  class RTC extends Base{constructor(){super();pcs.push(this);if(stats)this.getStats=()=>stats(this);}fire(type,event={}){if(queueModel&&type==='datachannel')upgrade(event.channel);super.fire(type,event);}}
  const nodes=ids.map((id,i)=>{
   let serial=0;
   const clock=queueModel&&!syntheticClock?performance:scoutClock({maxMessageSize,sampleBytes,winner:clockWinner});clocks[i]=clock;
   return createTransferScout({self:()=>id,allowed:p=>p===ids[1-i],runtime:{crypto,RTCPeerConnection:class extends RTC{constructor(){super();this.scoutNode=i;}},performance:clock},
-   send(peer,body){frames.push({from:id,peer,body});if(dropWorkloadReady&&body.action==='fileWorkloadReady')return;if(dropEvidence&&body.action==='receiverEvidence')return;queueMicrotask(()=>nodes[1-i].receive(id,body));},newId:()=> `scout-${i}-${serial++}-0`,sampleBytes,comparison,prepareTransport,fileWorkloadLimits:Array.isArray(fileWorkloadLimits)?fileWorkloadLimits[i]:fileWorkloadLimits,onReport:r=>{clock.report?.(r);reports.push({i,...r});}});
+   send(peer,body){frames.push({from:id,peer,body});if(body.action==='fileWorkload')workloadTrial=body.trial;if(dropRestrictReady&&body.action==='fileWorkloadRestrictReady')return;if(dropWorkloadReady&&body.action==='fileWorkloadReady')return;if(dropEvidence&&body.action==='receiverEvidence')return;queueMicrotask(()=>nodes[1-i].receive(id,body));},newId:()=> `scout-${i}-${serial++}-0`,sampleBytes,comparison,prepareTransport,fileWorkloadLimits:Array.isArray(fileWorkloadLimits)?fileWorkloadLimits[i]:fileWorkloadLimits,onReport:r=>{clock.report?.(r);reports.push({i,...r});}});
  });
  return {nodes,frames,reports,pcs,payloads,peaks,messages,close:()=>nodes.forEach(n=>n.close())};
 }
@@ -388,10 +389,14 @@ test('file workload uses production request service, agreed chunks, batch bytes 
   assert.ok(f.messages.some(m=>m.sys==='PHANTOM_FILE_REQUEST'));assert.ok(f.messages.some(m=>m.kind==='binary'&&m.file.bytes===262144));assert.equal(f.nodes[0].get(ids[1]).fileWorkload.status,'complete');
  }finally{f.close();}
 });
-test('failed real file workload retains partial evidence and never claims qualification',async()=>{
- const f=fixture({queueModel:true,dropWorkloadLane:0,fileWorkloadLimits:{batchSize:2,requestWindow:2,requestTimeoutMs:30,maxChunkBytes:65536}});try{
+test('failed association is retired at both ends and the verified subset is retested before handoff',async()=>{
+ const f=fixture({queueModel:true,dropWorkloadLane:0,fileWorkloadLimits:{batchSize:2,requestWindow:2,requestTimeoutMs:200,maxChunkBytes:65536}});try{
   await f.nodes[0].forSend(ids[1],{connectionOnly:true});const report=await f.nodes[0].qualifyFileWorkload(ids[1],{chunkSize:65536,fileBytes:1048576});
-  assert.equal(report.status,'failed');assert.match(report.reason,/No source supplied|timed out/);assert.ok(report.receiver.lanes.some(l=>l.bytes<report.profile.bytes/report.profile.lanes.length));assert.equal(f.nodes[0].get(ids[1]).fileWorkload.status,'failed');
+  assert.equal(report.status,'complete');assert.deepEqual(report.profile.lanes,[1,2]);const result=f.nodes[0].get(ids[1]);assert.equal(result.fileWorkloads.length,2);assert.equal(result.fileWorkloads[0].status,'failed');assert.deepEqual(result.fileWorkloadSelection.lanes,[1,2]);assert.deepEqual(result.connectionPlan.lanes,[1,2]);assert.equal(result.connectionPlan.laneDecision.status,'workload_verified');
+  assert.ok(f.pcs.filter(pc=>pc.channels.some(ch=>ch.label==='phantom-distribution-scout')).filter(pc=>pc.connectionState==='closed').length===2);
+  for(const [i,node]of f.nodes.entries())assert.equal(node.take(ids[1-i],result.id,0,'asset','forbidden'),null);
+  assert.equal(f.nodes[0].receive(ids[1],{type:'transferScout',version:8,id:result.id,action:'fileWorkloadResult',trial:1,status:'failed',reason:'stale',receiver:null}),false);
+  assert.equal(f.nodes[0].get(ids[1]).fileWorkload.status,'complete');
  }finally{f.close();}
 });
 
@@ -405,4 +410,21 @@ test('different workload limits fail explicitly without sending synthetic file d
  const f=fixture({queueModel:true,fileWorkloadLimits:[{batchSize:2},{batchSize:1}]});try{
   await f.nodes[0].forSend(ids[1],{connectionOnly:true});const before=f.payloads.length;const report=await f.nodes[0].qualifyFileWorkload(ids[1],{chunkSize:65536,fileBytes:1048576});assert.equal(report.status,'failed');assert.equal(report.reason,'file_workload_profile_not_supported');assert.equal(report.receiver,null);assert.equal(f.payloads.length,before);
  }finally{f.close();}
+});
+
+test('workload repair shrinks monotonically through at most three verified attempts',async()=>{
+ const f=fixture({queueModel:true,dropWorkloadLane:(lane,trial)=>(trial===1&&lane===1)||(trial===2&&lane===0),fileWorkloadLimits:{batchSize:2,requestWindow:2,requestTimeoutMs:200}});try{
+  await f.nodes[0].forSend(ids[1],{connectionOnly:true});const report=await f.nodes[0].qualifyFileWorkload(ids[1],{chunkSize:65536,fileBytes:1048576});const result=f.nodes[0].get(ids[1]);
+  assert.equal(report.status,'complete');assert.deepEqual(result.fileWorkloads.map(r=>r.profile.lanes),[[0,1,2],[0,2],[2]]);assert.deepEqual(result.connectionPlan.lanes,[2]);assert.deepEqual(result.fileWorkloadSelection.rejected,[0,1]);assert.equal(f.frames.filter(r=>r.body.action==='fileWorkload').length,3);
+ }finally{f.close();}
+});
+test('all failed workload lanes block handoff instead of returning them to fallback',async()=>{
+ const f=fixture({queueModel:true,dropWorkloadLane:[0,1,2],fileWorkloadLimits:{batchSize:2,requestWindow:2,requestTimeoutMs:200}});try{
+  await f.nodes[0].forSend(ids[1],{connectionOnly:true});const report=await f.nodes[0].qualifyFileWorkload(ids[1],{chunkSize:65536,fileBytes:1048576});const result=f.nodes[0].get(ids[1]);assert.equal(report.status,'failed');assert.equal(result.fileWorkloadSelection.status,'blocked');assert.ok(f.pcs.every(pc=>pc.connectionState==='closed'));for(let lane=0;lane<3;lane++)assert.equal(f.nodes[0].take(ids[1],result.id,lane,'asset','forbidden'),null);
+ }finally{f.close();}
+});
+test('cancellation during a restriction barrier settles without polling or another trial',async()=>{
+ const f=fixture({queueModel:true,dropWorkloadLane:0,dropRestrictReady:true,fileWorkloadLimits:{batchSize:2,requestWindow:2,requestTimeoutMs:200}});
+ await f.nodes[0].forSend(ids[1],{connectionOnly:true});const pending=f.nodes[0].qualifyFileWorkload(ids[1],{chunkSize:65536,fileBytes:1048576});
+ for(let i=0;i<1000&&!f.frames.some(r=>r.body.action==='fileWorkloadRestrictReady');i++)await new Promise(r=>setTimeout(r,2));assert.ok(f.frames.some(r=>r.body.action==='fileWorkloadRestrictReady'));f.close();assert.equal((await pending).status,'cancelled');assert.ok(f.pcs.every(pc=>pc.connectionState==='closed'));
 });

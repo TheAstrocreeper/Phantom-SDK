@@ -493,7 +493,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
       if(options.scoutBeforeSend===true&&capabilityExchange?.get(peer)?.protocols.includes(TRANSFER_SCOUT_PROTOCOL)){
         const workload=assignedRanges&&scoutCoordinator===2&&capabilityExchange.get(peer).protocols.includes(FILE_WORKLOAD_PROTOCOL);
         await preflight?.forSend(peer,{connectionOnly:workload});
-        if(workload)await preflight?.qualifyFileWorkload(peer,{chunkSize:agreed.plan.payloadBytes,fileBytes:file.size,sourceReadBlockBytes:settings.sourceReadBlockBytes??0});
+        if(workload){await preflight?.qualifyFileWorkload(peer,{chunkSize:agreed.plan.payloadBytes,fileBytes:file.size,sourceReadBlockBytes:settings.sourceReadBlockBytes??0});if(preflight?.get(peer)?.fileWorkloadSelection?.status==='blocked')throw Error('Could not verify a working file connection. Reconnect and try again.');}
       }
       const setup=selectedSetup(peer);preflight?.suspend();
       if(closed||!peerAllowed(peer))throw Error('Peer unavailable');

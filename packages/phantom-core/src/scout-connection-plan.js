@@ -108,6 +108,13 @@ export function buildScoutConnectionPlan(result,{fallback=3,maxRateReduction=0.1
    else{messagePolicy={status:'measured',maxPayloadBytes:16384};messageReason='sender_and_receiver_confirm_smaller_messages';}
   }
  }
+ const selection=result?.fileWorkloadSelection,workload=result?.fileWorkload,workloadLanes=workload?.profile?.lanes;
+ if(selection?.version===1&&selection.status==='verified'&&workload?.version===2&&workload.status==='complete'&&selection.trial===workload.trial&&validLanes(selection.lanes)&&validLanes(workloadLanes)&&key(selection.lanes)===key(workloadLanes)&&workload.receiver?.lanes?.length===selection.lanes.length&&workload.receiver.lanes.every((row,i)=>row.lane===selection.lanes[i]&&row.verified===true&&row.bytes===workload.profile.bytes/selection.lanes.length)){
+  lanes=[...selection.lanes];laneStatus='workload_verified';laneReason=selection.reason;
+  // A repaired set is exercised with the baseline policy; never inherit an
+  // optimization measured on a different set of associations.
+  if(selection.rejected?.length){queuePolicy={status:'fallback',highWaterMark:DEFAULT_HIGH,lowWaterMark:DEFAULT_LOW};queueReason='baseline_policy_verified_on_reduced_workload';messagePolicy={status:'fallback',maxPayloadBytes:null};messageReason='baseline_policy_verified_on_reduced_workload';}
+ }
  const nativeLanes=lanes.map(lane=>{
   const report=result?.localTransportPreparation?.find(row=>row.lane===lane)?.report,before=report?.before,after=report?.applied?.after;
   const known=report?.scope==='owned_webview_udp_socket'&&before?.status==='observed'&&after?.status==='observed'&&typeof before.inode==='string'&&before.inode.length>0&&Number.isInteger(before.port)&&before.port>0&&before.port<=65535&&before.inode===after.inode&&before.cookie===after.cookie&&before.port===after.port&&Number.isSafeInteger(after.receiveBufferBytes)&&after.receiveBufferBytes>0;
@@ -120,6 +127,6 @@ export function buildScoutConnectionPlan(result,{fallback=3,maxRateReduction=0.1
   queuePolicy:{...queuePolicy,reason:queueReason},queueDecision:{status:queuePolicy.status,reason:queueReason,evidence:queueEvidence},
   receiverEvidence:{receivedRounds:result?.receiverEvidence?.receivedRounds??0,expectedRounds:result?.receiverEvidence?.expectedRounds??0},
   testedProfiles:testedProfiles(result),
-  nativeReceiveState,
+  nativeReceiveState,fileWorkloadSelection:selection??null,
   limitations:['peer_reported_arrival_evidence','bounded_preflight_does_not_establish_link_capacity','packet_counters_are_not_aligned_wire_loss_measurements']};
 }

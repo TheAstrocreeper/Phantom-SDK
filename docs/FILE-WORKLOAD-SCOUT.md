@@ -13,3 +13,13 @@ The result records the workload settings, source submissions, coalesced retries,
 No new lane ranking or queue tuning policy is inferred from one trial. Unknown or failed measurements do not manufacture a winning profile; ordinary file-transfer fallback remains available. New peers do not use a low-queue synthetic result as evidence for a different production feeding profile.
 
 Validation covers connection-only setup without synthetic payloads, actual 256 KiB chunks and 4 MiB source reads, a complete real file-service workload on retained associations, failed delivery with partial evidence, cancellation before readiness, ordinary file-transfer regressions, and native Chrome/app file transfers.
+
+## Verified subset selection (workload protocol v2)
+
+A failed workload is no longer handed to the coordinator as a usable fallback association. Receiver rows explicitly record per-lane verification after the real file service completes that lane's range. A repair candidate must have received and verified the entire batch, with zero queued bytes at both endpoints. Arrival counts by themselves, unavailable verification, and stale protocol reports cannot nominate a survivor.
+
+For a nonempty strict subset, both endpoints detach the rejected association's pool-wide failure handlers before either closes it. A prepare/commit/ack exchange retires its native resources and queued synthetic data without releasing the survivors. The subset is then measured again using the baseline queue and message policy, on the same remaining associations. Only successful repeated verification updates the connection plan and coordinator limit. Explicit handoff guards refuse rejected or unverified lanes at either endpoint.
+
+Attempts shrink monotonically and are bounded to three. Trials, rejections and final selection remain in the export. A fully demonstrated failure with no verified subset blocks agreed preparation. Unsupported/missing evidence stays unavailable and can use fresh ordinary connections; it never reuses a failed retained association. Cancellation/generation teardown settles a pending restriction barrier without new polling or recovery timers.
+
+This selects a working bounded configuration. It does not prove that configuration is fastest or that a long internet transfer cannot stall later. Protocol v2 is separately advertised, so a v1 peer is not asked to perform an unsupported retirement exchange.
