@@ -32,20 +32,20 @@ test('a burst advantage cannot hide slower late delivery or missing progress evi
  const absent=samples();delete absent[14].delivery;assert.equal(selectTransferSetup(absent).reason,'late_delivery_unavailable');
  const reordered=samples();reordered[14].delivery[1].elapsedMs=999;assert.equal(selectTransferSetup(reordered).status,'inconclusive');
 });
-function fixture({drop=false,maxMessageSize=262144,sampleBytes=98304,queueModel=false,freezeDrain=false,clockWinner=[0],dropEndAck=false,stats=null,dropEvidence=false,comparison='queue',dropMessage=false,prepareTransport=null,syntheticClock=false}={}){
- const frames=[],reports=[],pcs=[],payloads=[],peaks=[],messages=[],channelRound=new Map(),clocks=[];
+function fixture({drop=false,maxMessageSize=262144,sampleBytes=98304,queueModel=false,freezeDrain=false,clockWinner=[0],dropEndAck=false,stats=null,dropEvidence=false,comparison='queue',dropMessage=false,prepareTransport=null,syntheticClock=false,fileWorkloadLimits={},dropWorkloadLane=null,dropWorkloadReady=false}={}){
+ const frames=[],reports=[],pcs=[],payloads=[],peaks=[],messages=[],channelRound=new Map(),clocks=[],workloadChannels=new Set();
  const upgrade=ch=>{if(ch.addEventListener)return;const events=new EventTarget();ch.addEventListener=events.addEventListener.bind(events);ch.removeEventListener=events.removeEventListener.bind(events);ch.dispatchEvent=events.dispatchEvent.bind(events);};
  const Base=memoryRTC({maxMessageSize,onSend(data,ch){
   if(queueModel){upgrade(ch);const n=typeof data==='string'?data.length:data.byteLength;ch.bufferedAmount+=n;peaks.push(ch.bufferedAmount);queueMicrotask(()=>{if(freezeDrain)return;const before=ch.bufferedAmount;ch.bufferedAmount-=n;if(before>(ch.bufferedAmountLowThreshold??0)&&ch.bufferedAmount<=(ch.bufferedAmountLowThreshold??0))ch.dispatchEvent(new Event('bufferedamountlow'));});}
-  if(typeof data==='string'){const body=JSON.parse(data),lane=pcs.findIndex(pc=>pc.channels.includes(ch))%3;messages.push({lane,...body});if(dropEndAck&&body.action==='endDirectionAck')return false;if(body.action==='sample'){channelRound.set(ch,body.round);const owner=pcs.find(pc=>pc.channels.includes(ch))?.scoutNode;clocks[1-owner]?.receiveRound?.(body.round);}}
-  if(data instanceof ArrayBuffer){payloads.push({bytes:data.byteLength,label:ch.label,lane:pcs.findIndex(pc=>pc.channels.includes(ch))%3,round:channelRound.get(ch)});if(drop||(dropMessage&&(channelRound.get(ch)??0)%25>=21))return false;}return true;
+  if(typeof data==='string'){const body=JSON.parse(data),lane=pcs.findIndex(pc=>pc.channels.includes(ch))%3;messages.push({lane,...body});if(dropEndAck&&body.action==='endDirectionAck')return false;if(body.kind==='binary'||body.kind==='binary-fragment'){workloadChannels.add(ch);if(lane===dropWorkloadLane)return false;}if(body.action==='sample'){channelRound.set(ch,body.round);const owner=pcs.find(pc=>pc.channels.includes(ch))?.scoutNode;clocks[1-owner]?.receiveRound?.(body.round);}}
+  if(data instanceof ArrayBuffer){payloads.push({bytes:data.byteLength,label:ch.label,lane:pcs.findIndex(pc=>pc.channels.includes(ch))%3,round:channelRound.get(ch)});if(workloadChannels.has(ch)&&dropWorkloadLane===pcs.findIndex(pc=>pc.channels.includes(ch))%3)return false;if(drop||(dropMessage&&(channelRound.get(ch)??0)%25>=21))return false;}return true;
  }});
  class RTC extends Base{constructor(){super();pcs.push(this);if(stats)this.getStats=()=>stats(this);}fire(type,event={}){if(queueModel&&type==='datachannel')upgrade(event.channel);super.fire(type,event);}}
  const nodes=ids.map((id,i)=>{
   let serial=0;
   const clock=queueModel&&!syntheticClock?performance:scoutClock({maxMessageSize,sampleBytes,winner:clockWinner});clocks[i]=clock;
   return createTransferScout({self:()=>id,allowed:p=>p===ids[1-i],runtime:{crypto,RTCPeerConnection:class extends RTC{constructor(){super();this.scoutNode=i;}},performance:clock},
-   send(peer,body){frames.push({from:id,peer,body});if(dropEvidence&&body.action==='receiverEvidence')return;queueMicrotask(()=>nodes[1-i].receive(id,body));},newId:()=> `scout-${i}-${serial++}-0`,sampleBytes,comparison,prepareTransport,onReport:r=>{clock.report?.(r);reports.push({i,...r});}});
+   send(peer,body){frames.push({from:id,peer,body});if(dropWorkloadReady&&body.action==='fileWorkloadReady')return;if(dropEvidence&&body.action==='receiverEvidence')return;queueMicrotask(()=>nodes[1-i].receive(id,body));},newId:()=> `scout-${i}-${serial++}-0`,sampleBytes,comparison,prepareTransport,fileWorkloadLimits:Array.isArray(fileWorkloadLimits)?fileWorkloadLimits[i]:fileWorkloadLimits,onReport:r=>{clock.report?.(r);reports.push({i,...r});}});
  });
  return {nodes,frames,reports,pcs,payloads,peaks,messages,close:()=>nodes.forEach(n=>n.close())};
 }
@@ -376,5 +376,33 @@ test('cancelling pending native preparation settles send intent and releases lat
 test('an unavailable native observer is reported and does not prevent the browser scout',async()=>{
  const f=fixture({prepareTransport:async()=>{throw Error('not supported');}});try{
   const result=await f.nodes[0].forSend(ids[1]);assert.ok(result);assert.ok(f.reports.some(r=>r.phase==='preflight-native-socket'&&r.reason==='native_preparation_failed'));
+ }finally{f.close();}
+});
+
+test('file workload uses production request service, agreed chunks, batch bytes and queue on retained associations',async()=>{
+ const f=fixture({queueModel:true,fileWorkloadLimits:{batchSize:32,requestWindow:32,maxChunkBytes:262144}});try{
+  await f.nodes[0].forSend(ids[1],{connectionOnly:true});assert.equal(f.nodes[0].get(ids[1]).samples.length,0);assert.equal(f.payloads.length,0);const before=f.pcs.length;
+  const report=await f.nodes[0].qualifyFileWorkload(ids[1],{chunkSize:262144,fileBytes:83187441,sourceReadBlockBytes:4*1024*1024});
+  assert.equal(report.status,'complete');assert.equal(f.pcs.length,before);assert.equal(report.profile.chunkSize,262144);assert.equal(report.profile.sourceReadBlockBytes,4194304);assert.equal(report.profile.batchSize,32);assert.equal(report.profile.chunksPerLane,32);assert.equal(report.profile.bytes,report.profile.lanes.length*8388608);
+  assert.equal(report.profile.queuePolicy.highWaterMark,16777216);assert.equal(report.receiver.requestWindow,32);assert.equal(report.receiver.lanes.reduce((n,l)=>n+l.bytes,0),report.profile.bytes);
+  assert.ok(f.messages.some(m=>m.sys==='PHANTOM_FILE_REQUEST'));assert.ok(f.messages.some(m=>m.kind==='binary'&&m.file.bytes===262144));assert.equal(f.nodes[0].get(ids[1]).fileWorkload.status,'complete');
+ }finally{f.close();}
+});
+test('failed real file workload retains partial evidence and never claims qualification',async()=>{
+ const f=fixture({queueModel:true,dropWorkloadLane:0,fileWorkloadLimits:{batchSize:2,requestWindow:2,requestTimeoutMs:30,maxChunkBytes:65536}});try{
+  await f.nodes[0].forSend(ids[1],{connectionOnly:true});const report=await f.nodes[0].qualifyFileWorkload(ids[1],{chunkSize:65536,fileBytes:1048576});
+  assert.equal(report.status,'failed');assert.match(report.reason,/No source supplied|timed out/);assert.ok(report.receiver.lanes.some(l=>l.bytes<report.profile.bytes/report.profile.lanes.length));assert.equal(f.nodes[0].get(ids[1]).fileWorkload.status,'failed');
+ }finally{f.close();}
+});
+
+test('cancelling during file workload readiness settles preparation and releases every association',async()=>{
+ const f=fixture({queueModel:true,dropWorkloadReady:true,fileWorkloadLimits:{batchSize:2,requestWindow:2}});
+ await f.nodes[0].forSend(ids[1],{connectionOnly:true});const pending=f.nodes[0].qualifyFileWorkload(ids[1],{chunkSize:65536,fileBytes:1048576});
+ f.close();assert.equal((await pending).status,'cancelled');assert.ok(f.pcs.every(pc=>pc.connectionState==='closed'));
+});
+
+test('different workload limits fail explicitly without sending synthetic file data',async()=>{
+ const f=fixture({queueModel:true,fileWorkloadLimits:[{batchSize:2},{batchSize:1}]});try{
+  await f.nodes[0].forSend(ids[1],{connectionOnly:true});const before=f.payloads.length;const report=await f.nodes[0].qualifyFileWorkload(ids[1],{chunkSize:65536,fileBytes:1048576});assert.equal(report.status,'failed');assert.equal(report.reason,'file_workload_profile_not_supported');assert.equal(report.receiver,null);assert.equal(f.payloads.length,before);
  }finally{f.close();}
 });

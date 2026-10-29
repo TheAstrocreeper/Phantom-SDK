@@ -1,12 +1,11 @@
 import {createStripedRTC} from './striped-distribution-rtc.js';
 import {defaultRTCConfiguration} from './rtc-configuration.js';
-import {waitForDataChannelCapacity} from './data-channel-capacity.js';
 import {scoutConnection} from './connection-scout.js';
-import {fitsMessageLimits,maxMessagePayload} from './message-size-guard.js';
+import {sendFileChannelPayload,coalesceQueuedFileChunk} from './file-channel-payload.js';
 import {createCapabilityExchange} from './capability-exchange.js';
 import {createCapabilityReport} from './connection-planner.js';
 import {createPlanAgreement} from './plan-agreement.js';
-import {createTransferScout,TRANSFER_SCOUT_PROTOCOL} from './transfer-scout.js';
+import {createTransferScout,TRANSFER_SCOUT_PROTOCOL,FILE_WORKLOAD_PROTOCOL} from './transfer-scout.js';
 import {createFileDistribution,createMemoryChunkStore} from './files.js';
 import {createAdminAuthorization} from './authorization.js';
 
@@ -55,7 +54,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
   // The facade supplies the committed roster projection. Reading it never changes it.
   let roster=[];
   const controlObservations=new Map(),controlGenerations=new Map(),controlPending=new Map();let controlSequence=0;
-  const localCapability=peer=>createCapabilityReport(controlObservations.get(peer)??{version:1,messageLimit:{status:'unknown',bytes:null}},{protocols:['phantom-file-v1','phantom-file-fragments-v1',...(scoutEnabled?[TRANSFER_SCOUT_PROTOCOL]:[])],maxChunkBytes:options.maxChunkBytes??65536});
+  const localCapability=peer=>createCapabilityReport(controlObservations.get(peer)??{version:1,messageLimit:{status:'unknown',bytes:null}},{protocols:['phantom-file-v1','phantom-file-fragments-v1',...(scoutEnabled?[TRANSFER_SCOUT_PROTOCOL,FILE_WORKLOAD_PROTOCOL]:[])],maxChunkBytes:options.maxChunkBytes??65536});
   const peerAllowed=peer=>roster.includes(peer)&&canUsePeer(peer);
   function observeControl(peer){
     if(controlPending.has(peer))return controlPending.get(peer);
@@ -72,9 +71,9 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
     void pending.then(release,release);
     return pending;
   }
-  const capabilityExchange=options.capabilityExchange===true?createCapabilityExchange({send:frame,allowed:peerAllowed,localReport:localCapability,onReport:(peer,report)=>{emit('distributionCapability',{peer,report});if(report.protocols.includes(TRANSFER_SCOUT_PROTOCOL))preflight?.start(peer);}}):null;
+  const capabilityExchange=options.capabilityExchange===true?createCapabilityExchange({send:frame,allowed:peerAllowed,localReport:localCapability,onReport:(peer,report)=>{emit('distributionCapability',{peer,report});if(report.protocols.includes(TRANSFER_SCOUT_PROTOCOL)&&!(options.scoutBeforeSend===true&&report.protocols.includes(FILE_WORKLOAD_PROTOCOL)))preflight?.start(peer);}}):null;
   const agreement=capabilityExchange?createPlanAgreement({send:frame,allowed:peerAllowed,localReport:localCapability,remoteReport:peer=>capabilityExchange.get(peer),newId:()=>crypto.randomUUID(),onDecision:result=>emit('distributionPlanDecision',result)}):null;
-  const preflight=scoutEnabled?createTransferScout({self,allowed:peerAllowed,send:frame,runtime,configuration:options.rtcConfiguration,comparison:options.scoutComparison,prepareTransport:options.prepareScoutTransport??null,laneRateTradeoff:options.scoutLaneRateTradeoff,sampleBytes:options.scoutSampleBytes,busy:()=>links.size>0,onReport:report=>emit('distributionScout',report)}):null;
+  const preflight=scoutEnabled?createTransferScout({self,allowed:peerAllowed,send:frame,runtime,configuration:options.rtcConfiguration,comparison:options.scoutComparison,prepareTransport:options.prepareScoutTransport??null,laneRateTradeoff:options.scoutLaneRateTradeoff,sampleBytes:options.scoutSampleBytes,fileWorkloadLimits:{batchSize,requestWindow:options.requestWindow??8,requestTimeoutMs:options.requestTimeoutMs??10000,maxAttemptsPerPeer:options.maxAttemptsPerPeer??2,maxChunkBytes:options.maxChunkBytes??65536},busy:()=>links.size>0,onReport:report=>emit('distributionScout',report)}):null;
   function clearPeerSetup(peer){
     preflight?.drop(peer);
     for(const asset of assets.values()){
@@ -137,39 +136,18 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
   },chunkStore,...Object.fromEntries(Object.entries(options).filter(([key])=>['chunkStore','requestTimeoutMs','requestWindow','maxAttemptsPerPeer','maxFileBytes','maxChunkBytes'].includes(key)))});
   async function sendBinary(link,payload){let ok=false,reason='Distribution connection unavailable',bufferWaitMs=0;try{
     const striped=Array.isArray(link.pc?.pcs),pcs=striped?link.pc.pcs:[link.pc],overhead=striped?9:0;
-    // A retry must not append a second copy behind the original on the same
-    // reliable ordered channel. This is local queue ownership, not delivery ACK.
-    // Aggregate striped queues do not provide a FIFO byte cursor.
-    const retryQueue=!striped&&link.dc.ordered===true&&link.dc.maxRetransmits===null&&link.dc.maxPacketLifeTime===null;
-    if(retryQueue){
-      link.queuedChunks??=new Map();
-      const drained=Math.max(0,(link.submittedBytes??0)-link.dc.bufferedAmount);
-      for(const [index,end]of link.queuedChunks)if(end<=drained)link.queuedChunks.delete(index);
-      if(link.queuedChunks.has(payload.file.index)){
-        timeline(link,'retry-coalesced',{index:payload.file.index,bufferedBytes:link.dc.bufferedAmount});
-        fire('FILE_BIN_CHUNK_SENT',{...payload,ok:true,bufferWaitMs:0});return;
-      }
+    link.queuedChunks??=new Map();
+    if(coalesceQueuedFileChunk({dc:link.dc,striped,submittedBytes:link.submittedBytes??0,queuedChunks:link.queuedChunks,index:payload.file.index})){
+      timeline(link,'retry-coalesced',{index:payload.file.index,bufferedBytes:link.dc.bufferedAmount});
+      fire('FILE_BIN_CHUNK_SENT',{...payload,ok:true,bufferWaitMs:0});return;
     }
 
-    const header=JSON.stringify({kind:'binary',file:payload.file}),headerBytes=new TextEncoder().encode(header).byteLength;
-    const selectedMessageBytes=link.messagePolicy?.maxPayloadBytes??null;
-    const direct=(!selectedMessageBytes||payload.bytes.byteLength<=selectedMessageBytes)&&fitsMessageLimits({connections:pcs,payloadBytes:payload.bytes.byteLength,headerBytes,wrapperBytes:overhead});
-    const peerSupportsFragments=capabilityExchange?.get(link.peer)?.protocols.includes('phantom-file-fragments-v1')===true;
-    if(!direct&&!peerSupportsFragments)throw Error('File message exceeds the connection message limit');
-    const maxPayload=direct?payload.bytes.byteLength:Math.min(maxMessagePayload(pcs,overhead),selectedMessageBytes??Infinity);
-    if(!direct&&maxPayload<1024)throw Error('Connection message limit is too small');
-    for(let offset=0;offset<payload.bytes.byteLength;){
-      const length=Math.min(maxPayload,payload.bytes.byteLength-offset);
-      const meta=direct?header:JSON.stringify({kind:'binary-fragment',file:payload.file,offset,length});
-      if(!fitsMessageLimits({connections:pcs,payloadBytes:length,headerBytes:new TextEncoder().encode(meta).byteLength,wrapperBytes:overhead,unknownPayloadLimit:direct?65536:65536-overhead}))throw Error('File fragment exceeds the connection message limit');
-      const waitAt=performance.now();
-      const queuePolicy=link.queuePolicy;
-      await waitForDataChannelCapacity(link.dc,{bytes:length,timeoutMs:jobTimeoutMs,signal:link.sendController.signal,...(queuePolicy?{highWaterMark:Math.max(length,queuePolicy.highWaterMark),lowWaterMark:Math.min(queuePolicy.lowWaterMark,Math.max(length,queuePolicy.highWaterMark)-length)}:{})});
-      bufferWaitMs+=performance.now()-waitAt;
-      if(closed||links.get(link.job.id)!==link||!canUsePeer(link.peer)||!allowed(payload.file.id,payload.file.distributionId)||link.dc.readyState!=='open')throw Error('Distribution revoked or disconnected');
-      payloadSend(link,meta);payloadSend(link,direct?payload.bytes:payload.bytes.slice(offset,offset+length));offset+=length;
-    }
-    if(retryQueue)link.queuedChunks.set(payload.file.index,link.submittedBytes);
+    ({bufferWaitMs}=await sendFileChannelPayload({dc:link.dc,pcs,bytes:payload.bytes,file:payload.file,send:data=>payloadSend(link,data),overhead,
+      messageBytes:link.messagePolicy?.maxPayloadBytes??null,fragments:capabilityExchange?.get(link.peer)?.protocols.includes('phantom-file-fragments-v1')===true,
+      queuePolicy:link.queuePolicy,timeoutMs:jobTimeoutMs,signal:link.sendController.signal,assertLive(){
+        if(closed||links.get(link.job.id)!==link||!canUsePeer(link.peer)||!allowed(payload.file.id,payload.file.distributionId)||link.dc.readyState!=='open')throw Error('Distribution revoked or disconnected');
+      }}));
+    if(!striped&&link.dc.ordered===true&&link.dc.maxRetransmits===null&&link.dc.maxPacketLifeTime===null)link.queuedChunks.set(payload.file.index,link.submittedBytes);
     ok=true;
   }catch(e){reason=e.message;}fire('FILE_BIN_CHUNK_SENT',{...payload,ok,bufferWaitMs,error:ok?undefined:reason});}
   // Job timeout is an idle budget. Control keepalives alone cannot renew it.
@@ -509,7 +487,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
     restore,
     async getFile(id){await restore();const asset=assets.get(id);if(closed||!asset||asset.holders.get(self())?.size!==asset.total)throw Error('No complete local distribution copy');return files.getFile(id);},
     async prepare(file,settings={}){preflight?.suspend();if(closed)throw Error('Distribution closed');await restore();const manifest=await files.publish(file,settings);preparedFiles.set(manifest,{file,id:manifest.id});return manifest;},
-    async prepareAgreed(file,peer,settings={}){if(options.scoutBeforeSend===true&&capabilityExchange?.get(peer)?.protocols.includes(TRANSFER_SCOUT_PROTOCOL))await preflight?.forSend(peer);const setup=selectedSetup(peer);preflight?.suspend();if(closed||!peerAllowed(peer))throw Error('Peer unavailable');const agreed=agreement?.get(peer);if(!agreed)throw Error('No agreed plan');if('chunkSize' in settings)throw TypeError('Chunk size comes from the agreed plan');await restore();const manifest=await files.publish(file,{...settings,chunkSize:agreed.plan.payloadBytes});if(closed||!peerAllowed(peer)||agreement.get(peer)?.id!==agreed.id)throw Error('Agreed plan no longer valid');preparedFiles.set(manifest,{file,id:manifest.id,peer,planId:agreed.id,setup});return manifest;},
+    async prepareAgreed(file,peer,settings={}){if(options.scoutBeforeSend===true&&capabilityExchange?.get(peer)?.protocols.includes(TRANSFER_SCOUT_PROTOCOL)){await preflight?.forSend(peer,{connectionOnly:capabilityExchange.get(peer)?.protocols.includes(FILE_WORKLOAD_PROTOCOL)});if(scoutCoordinator===2&&assignedRanges&&rangePeers.has(peer)&&capabilityExchange.get(peer)?.protocols.includes(FILE_WORKLOAD_PROTOCOL)){const prior=agreement?.get(peer),chunkSize=prior?.plan.payloadBytes;if(chunkSize){await preflight?.qualifyFileWorkload(peer,{chunkSize,fileBytes:file.size,sourceReadBlockBytes:settings.sourceReadBlockBytes??0});if(agreement?.get(peer)?.id!==prior.id)throw Error('Agreed plan changed during file workload measurement');}}}const setup=selectedSetup(peer);preflight?.suspend();if(closed||!peerAllowed(peer))throw Error('Peer unavailable');const agreed=agreement?.get(peer);if(!agreed)throw Error('No agreed plan');if('chunkSize' in settings)throw TypeError('Chunk size comes from the agreed plan');await restore();const manifest=await files.publish(file,{...settings,chunkSize:agreed.plan.payloadBytes});if(closed||!peerAllowed(peer)||agreement.get(peer)?.id!==agreed.id)throw Error('Agreed plan no longer valid');preparedFiles.set(manifest,{file,id:manifest.id,peer,planId:agreed.id,setup});return manifest;},
     async publish(file,{authorization,recipients,prepared,...settings}={}){if(closed)throw Error('Distribution closed');if(!state().admitted)throw Error('Wait for network admission before distributing');if(!policy)throw Error('Distribution requires an admin authority');await restore();if(closed)throw Error('Distribution closed');
       if(recipients!==undefined){
         if(!Array.isArray(recipients)||recipients.length>128||recipients.some(id=>typeof id!=='string'||! /^[0-9a-f]{16}$/.test(id)))throw new TypeError('Invalid publication recipients');
