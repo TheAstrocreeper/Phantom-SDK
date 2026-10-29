@@ -200,7 +200,7 @@ test('retired send intents cannot recreate an old pool after the next file finis
   const oldInit=f.frames.find(r=>r.body.action==='init').body;
   const source=f.nodes[0].take(ids[1],first.id,0,'first-file','first-job');
   const target=f.nodes[1].take(ids[0],first.id,0,'first-file','first-job');
-  assert.ok(source&&target);f.nodes.forEach(node=>node.suspend());source.pc.close();
+  assert.ok(source&&target);f.nodes.forEach(node=>node.suspend());source.pc.close();target.pc.close();
   const second=await f.nodes[0].forSend(ids[1],{connectionOnly:true});assert.notEqual(second.id,first.id);
   f.nodes[0].clear();await settle(()=>f.pcs.every(pc=>pc.connectionState==='closed'));
   const before=f.pcs.length;assert.equal(f.nodes[1].receive(ids[0],oldInit),false);assert.equal(f.pcs.length,before);
