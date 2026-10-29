@@ -113,6 +113,7 @@ try{
    const p=result.selection.fileWorkload.profile,w=result.selection.connectionPlan.requestPolicy;
    assert.equal(result.selection.fileWorkload.status,'complete');assert.equal(w.status,'workload_verified');assert.equal(w.requestWindow,p.requestWindow);
    assert.deepEqual(result.selection.fileWorkloads.slice(0,4).map(r=>r.profile.requestWindow),[1,2,2,1]);
+   for(const trial of result.selection.fileWorkloads){assert.equal(trial.profile.chunksPerLane,32);assert.equal(trial.profile.deliveryWindowCount,4);assert.equal(trial.receiver.deliveryWindows.length,4);assert.equal(trial.receiver.deliveryWindows.at(-1).bytes,trial.profile.bytes);assert.equal(trial.receiver.deliveryWindows.at(-1).messages,trial.profile.chunksPerLane*trial.profile.lanes.length);}
    assert.equal(result.windowApplications.length,result.selection.lanes.length);assert.ok(result.windowApplications.every(r=>r.requestWindow===w.requestWindow));
    assert.ok(result.batchWindows.length>result.windowApplications.length,'must exercise later batches');assert.ok(result.batchWindows.every(r=>r.requestWindow===w.requestWindow));
    assert.ok(result.receiverRequestPeaks.length>0&&result.receiverRequestPeaks.every(n=>n<=w.requestWindow));assert.ok(result.receiverRequestPeaks.some(n=>n===w.requestWindow));

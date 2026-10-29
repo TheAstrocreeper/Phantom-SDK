@@ -46,7 +46,7 @@ function fixture({drop=false,maxMessageSize=262144,sampleBytes=98304,queueModel=
   let serial=0;
   const clock=queueModel&&!syntheticClock?performance:scoutClock({maxMessageSize,sampleBytes,winner:clockWinner});clocks[i]=clock;
   return createTransferScout({self:()=>id,allowed:p=>p===ids[1-i],runtime:{crypto,RTCPeerConnection:class extends RTC{constructor(){super();this.scoutNode=i;}},performance:clock},
-   send(peer,body){if(windowTimes&&body.action==='fileWorkloadResult'&&body.status==='complete'){body=structuredClone(body);body.receiver.elapsedMs=windowTimes[body.receiver.requestWindow];for(const row of body.receiver.lanes)row.maxGapMs=1;}frames.push({from:id,peer,body});if(body.action==='fileWorkload')workloadTrial=body.trial;if(dropWorkloadStop&&body.action==='fileWorkloadStop')return;if(dropRestrictReady&&body.action==='fileWorkloadRestrictReady')return;if(dropWorkloadReady&&body.action==='fileWorkloadReady')return;if(dropEvidence&&body.action==='receiverEvidence')return;queueMicrotask(()=>nodes[1-i].receive(id,body));},newId:()=> `scout-${i}-${serial++}-0`,sampleBytes,comparison,prepareTransport,fileWorkloadLimits:Array.isArray(fileWorkloadLimits)?fileWorkloadLimits[i]:fileWorkloadLimits,onReport:r=>{clock.report?.(r);reports.push({i,...r});}});
+   send(peer,body){if(windowTimes&&body.action==='fileWorkloadResult'&&body.status==='complete'){body=structuredClone(body);body.receiver.elapsedMs=windowTimes[body.receiver.requestWindow];body.receiver.deliveryWindows=body.receiver.deliveryWindows.map((w,i,a)=>({...w,elapsedMs:body.receiver.elapsedMs*(i+1)/a.length}));for(const row of body.receiver.lanes)row.maxGapMs=1;}frames.push({from:id,peer,body});if(body.action==='fileWorkload')workloadTrial=body.trial;if(dropWorkloadStop&&body.action==='fileWorkloadStop')return;if(dropRestrictReady&&body.action==='fileWorkloadRestrictReady')return;if(dropWorkloadReady&&body.action==='fileWorkloadReady')return;if(dropEvidence&&body.action==='receiverEvidence')return;queueMicrotask(()=>nodes[1-i].receive(id,body));},newId:()=> `scout-${i}-${serial++}-0`,sampleBytes,comparison,prepareTransport,fileWorkloadLimits:Array.isArray(fileWorkloadLimits)?fileWorkloadLimits[i]:fileWorkloadLimits,onReport:r=>{clock.report?.(r);reports.push({i,...r});}});
  });
  return {nodes,frames,reports,pcs,payloads,peaks,messages,close:()=>nodes.forEach(n=>n.close())};
 }
@@ -637,5 +637,12 @@ test('synthetic repeated metrics can select four slots and both handoffs retain 
   assert.equal(result.fileWorkloadWindowComparison.status,'measured');assert.equal(result.fileWorkloadWindowComparison.requestWindow,4);assert.equal(report.profile.windowTrial,'selected');assert.equal(result.fileWorkloads.length,5);
   assert.equal(result.connectionPlan.requestPolicy.requestWindow,4);
   assert.equal(f.nodes[0].take(ids[1],result.id,0,'asset','source',[0,1,2],4).requestWindow,4);assert.equal(f.nodes[1].take(ids[0],result.id,0,'asset','receiver',[0,1,2],4).requestWindow,4);
+ }finally{f.close();}
+});
+
+test('window qualification exercises a full configured batch and records four receiver-local byte windows',async()=>{
+ const f=fixture({queueModel:true,fileWorkloadLimits:{windowComparison:true,batchSize:32,requestWindow:32}});try{
+  await f.nodes[0].forSend(ids[1],{connectionOnly:true});await f.nodes[0].qualifyFileWorkload(ids[1],{chunkSize:65536,fileBytes:8*1024*1024});
+  for(const r of f.nodes[0].get(ids[1]).fileWorkloads){assert.equal(r.profile.chunksPerLane,32);assert.equal(r.profile.deliveryWindowCount,4);assert.deepEqual(r.receiver.deliveryWindows.map(w=>w.messages),[24,48,72,96]);assert.deepEqual(r.receiver.deliveryWindows.map(w=>w.bytes),[24,48,72,96].map(n=>n*65536));assert.ok(r.receiver.deliveryWindows.every((w,i,a)=>w.elapsedMs>=(a[i-1]?.elapsedMs??0)&&w.elapsedMs<=r.receiver.elapsedMs));}
  }finally{f.close();}
 });
