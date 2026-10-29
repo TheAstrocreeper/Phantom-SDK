@@ -23,3 +23,9 @@ For a nonempty strict subset, both endpoints detach the rejected association's p
 Attempts shrink monotonically and are bounded to three. Trials, rejections and final selection remain in the export. A fully demonstrated failure with no verified subset blocks agreed preparation. Unsupported/missing evidence stays unavailable and can use fresh ordinary connections; it never reuses a failed retained association. Cancellation/generation teardown settles a pending restriction barrier without new polling or recovery timers.
 
 This selects a working bounded configuration. It does not prove that configuration is fastest or that a long internet transfer cannot stall later. Protocol v2 is separately advertised, so a v1 peer is not asked to perform an unsupported retirement exchange.
+
+## Stop a retrying qualification when a verified alternative exists
+
+The isolated workload forwards the production file service's `fileRetry` event. When a different lane has already completed and verified its entire batch, the receiver ends that trial immediately, before the retry is sent. The failed report preserves the retry's lane, chunk index, attempt, receiver-relative time, and verified alternatives. Existing queue/verification checks still determine whether any alternative can be nominated, and the retirement barrier and repeated subset verification remain mandatory.
+
+A retry with no verified alternative does not end the trial early. Ordinary user-file retry settings are unchanged. This removes the second request-deadline wait from qualifying failures; it adds no timer and makes no claim that a retry proves a broken network or the root cause of slow delivery.

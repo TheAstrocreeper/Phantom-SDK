@@ -146,11 +146,12 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
   function validWorkload(p){return p&&validLanes(p.lanes)&&p.lanes.length<=workloadLimits.maxConnections&&Number.isInteger(p.chunkSize)&&p.chunkSize>=1024&&p.chunkSize<=workloadLimits.maxChunkBytes&&Number.isInteger(p.batchSize)&&p.batchSize===workloadLimits.batchSize&&Number.isInteger(p.chunksPerLane)&&p.chunksPerLane>=1&&p.chunksPerLane<=p.batchSize&&p.bytes===p.chunksPerLane*p.chunkSize*p.lanes.length&&p.bytes<=48*1024*1024&&[0,4*1024*1024].includes(p.sourceReadBlockBytes)&&Number.isInteger(p.queuePolicy?.highWaterMark)&&p.queuePolicy.highWaterMark>=p.chunkSize&&p.queuePolicy.highWaterMark<=16*1024*1024&&Number.isInteger(p.queuePolicy.lowWaterMark)&&p.queuePolicy.lowWaterMark>=0&&p.queuePolicy.lowWaterMark<p.queuePolicy.highWaterMark&&(p.messageBytes===null||[16384,262144].includes(p.messageBytes));}
   function startWorkload(pool,profile,source){
     const controller=new AbortController(),started=performance.now(),arrivals=profile.lanes.map(lane=>({lane,bytes:0,messages:0,firstAtMs:null,lastAtMs:null,maxGapMs:0,verified:false})),submissions=profile.lanes.map(lane=>({lane,bytes:0,messages:0,coalescedRetries:0,peakBufferedBytes:0,bufferWaitMs:0}));
+    const retries=[];
     let settled=false,resolve;const completed=new Promise(r=>resolve=r);
     const state={profile,source,trial:(pool.workloadReports?.length??0)+1,settled:false,controller,completed,driver:null,stop(reason){finish('cancelled',reason);}};pool.fileWorkload=state;pool.workloadGuard=true;pool.qualifiedLanes=null;
     function finish(status,reason,remote=null){
       if(settled)return;settled=true;state.settled=true;
-      const report={version:2,trial:state.trial,status,reason,profile,sourceLimits:source?{requestTimeoutMs:workloadLimits.requestTimeoutMs,sendTimeoutMs:workloadLimits.sendTimeoutMs}:null,sourceSubmission:source?submissions.map(row=>({...row,finalQueue:state.driver?.snapshot().find(q=>q.lane===row.lane)??null})):null,receiver:source?(remote?{...remote,provenance:'peer_reported'}:null):{clock:'receiver_monotonic',elapsedMs:performance.now()-started,lanes:arrivals,queues:state.driver?.snapshot()??[],requestWindow:workloadLimits.requestWindow,requestTimeoutMs:workloadLimits.requestTimeoutMs,maxAttemptsPerPeer:workloadLimits.maxAttemptsPerPeer},storage:'verified_memory_sink',coverage:'production_file_service_and_channel_sender',limitation:'one_bounded_batch_per_lane_is_not_a_link_capacity_or_long_file_guarantee'};
+      const report={version:2,trial:state.trial,status,reason,profile,sourceLimits:source?{requestTimeoutMs:workloadLimits.requestTimeoutMs,sendTimeoutMs:workloadLimits.sendTimeoutMs}:null,sourceSubmission:source?submissions.map(row=>({...row,finalQueue:state.driver?.snapshot().find(q=>q.lane===row.lane)??null})):null,receiver:source?(remote?{...remote,provenance:'peer_reported'}:null):{clock:'receiver_monotonic',elapsedMs:performance.now()-started,lanes:arrivals,retries,queues:state.driver?.snapshot()??[],requestWindow:workloadLimits.requestWindow,requestTimeoutMs:workloadLimits.requestTimeoutMs,maxAttemptsPerPeer:workloadLimits.maxAttemptsPerPeer},storage:'verified_memory_sink',coverage:'production_file_service_and_channel_sender',limitation:'one_bounded_batch_per_lane_is_not_a_link_capacity_or_long_file_guarantee'};
       state.report=structuredClone(report);pool.workloadReports=[...(pool.workloadReports??[]),state.report].slice(-3);pool.workloadGuard=true;pool.qualifiedLanes=status==='complete'?[...profile.lanes]:null;
       controller.abort();state.driver?.close();for(const row of pool.lanes)row.dc.onmessage=null;
       if(parked===pool&&!closed&&trusted(pool.peer)){
@@ -165,6 +166,12 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
       onChunk(lane,bytes){const row=arrivals.find(r=>r.lane===lane),at=performance.now()-started;if(row.lastAtMs!==null)row.maxGapMs=Math.max(row.maxGapMs,at-row.lastAtMs);row.firstAtMs??=at;row.lastAtMs=at;row.bytes+=bytes.byteLength;row.messages++;},
       onSend(lane,sample){const row=submissions.find(r=>r.lane===lane);if(sample.coalesced){row.coalescedRetries++;return;}row.bytes+=sample.bytes;row.messages++;row.peakBufferedBytes=Math.max(row.peakBufferedBytes,sample.bufferedBytes);row.bufferWaitMs+=sample.bufferWaitMs;},
       onLaneComplete(lane){arrivals.find(row=>row.lane===lane).verified=true;},
+      onRetry(lane,payload){
+        if(settled)return;
+        const verifiedLanes=arrivals.filter(row=>row.verified).map(row=>row.lane);
+        retries.push({lane,index:payload.index,attempt:payload.attempt,atMs:performance.now()-started,verifiedLanes});
+        if(verifiedLanes.length)finish('failed','file_workload_retry_after_verified_lane');
+      },
       onComplete(){finish('complete','bounded_file_workload_received_and_verified');},onError(error){finish('failed',error.message);}
     });state.driver=driver;
     for(const lane of profile.lanes)pool.lanes[lane].dc.onmessage=e=>{try{driver.receive(lane,e.data);}catch(error){finish('failed',error.message);}};
