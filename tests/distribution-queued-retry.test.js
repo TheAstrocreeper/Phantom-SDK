@@ -6,10 +6,10 @@ import {memoryRTC} from './fixtures/memory-rtc.js';
 const ids=['1111111111111111','2222222222222222'];
 const turn=()=>new Promise(resolve=>setImmediate(resolve));
 async function until(fn){for(let i=0;i<1500;i++){if(fn())return;await new Promise(r=>setTimeout(r,2));}assert.fail('expected transport state');}
-for(const config of [{name:'reliable ordered',coalesce:true},{name:'unordered',coalesce:false,ordered:false},{name:'partially reliable',coalesce:false,maxRetransmits:0}])test(`${config.name}: retries respect queue ownership and drain`,async()=>{
+for(const config of [{name:'reliable ordered',coalesce:true},{name:'unordered',coalesce:false,ordered:false},{name:'partially reliable',coalesce:false,maxRetransmits:0},{name:'unknown reliability',coalesce:false,unknown:true}])test(`${config.name}: retries respect queue ownership and drain`,async()=>{
  const admin=await createAdminIdentity(),callbacks=new Map(),events=[],held=[];let sourceChannel,request,headers=0,binaries=0,hold=false;
  const RTC=memoryRTC({onSend(data,ch){
-  ch.ordered=config.ordered??true;ch.maxRetransmits=config.maxRetransmits??null;
+  if(!config.unknown){ch.ordered=config.ordered??true;ch.maxRetransmits=config.maxRetransmits??null;ch.maxPacketLifeTime=null;}
   if(typeof data==='string'){
    const m=JSON.parse(data);
    if(m.kind==='message'&&m.sys==='PHANTOM_FILE_REQUEST')request={ch,data};

@@ -140,7 +140,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
     // A retry must not append a second copy behind the original on the same
     // reliable ordered channel. This is local queue ownership, not delivery ACK.
     // Aggregate striped queues do not provide a FIFO byte cursor.
-    const retryQueue=!striped&&link.dc.ordered!==false&&link.dc.maxRetransmits==null&&link.dc.maxPacketLifeTime==null;
+    const retryQueue=!striped&&link.dc.ordered===true&&link.dc.maxRetransmits===null&&link.dc.maxPacketLifeTime===null;
     if(retryQueue){
       link.queuedChunks??=new Map();
       const drained=Math.max(0,(link.submittedBytes??0)-link.dc.bufferedAmount);
