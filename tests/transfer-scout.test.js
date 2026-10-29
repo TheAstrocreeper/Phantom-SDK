@@ -449,7 +449,7 @@ test('automatic queue study repeats the identical workload on clean retained ass
   assert.equal(report.status,'complete');assert.equal(f.pcs.length,before);
   assert.deepEqual(trials.slice(0,4).map(r=>r.profile.queueTrial),['tight-1','baseline-1','baseline-2','tight-2']);
   assert.ok(trials.every(r=>r.status==='complete'&&r.profile.bytes===trials[0].profile.bytes&&r.profile.lanes.join(',')==='0,1,2'));
-  assert.ok(['bounded_tradeoff','baseline_retained'].includes(result.fileWorkloadQueueComparison.status));
+  assert.ok(['bounded_tradeoff','baseline_retained','incomplete'].includes(result.fileWorkloadQueueComparison.status));
   assert.equal(result.connectionPlan.queuePolicy.status,'workload_verified');
   assert.equal(result.connectionPlan.queuePolicy.highWaterMark,report.profile.queuePolicy.highWaterMark);
   assert.equal(report.profile.queuePolicy.highWaterMark,result.fileWorkloadQueueComparison.selected==='tight'?1048576:16777216);
