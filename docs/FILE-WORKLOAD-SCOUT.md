@@ -173,8 +173,11 @@ A single candidate is verified without claiming a comparative optimum. Use fresh
 sessions and short/full/full/short order, comparing selection-to-completion time,
 not file throughput alone. These are diagnostic controls, not new production defaults.
 
-Share's explicit source-page query `?scoutVolume=short` or `?scoutVolume=full` selects
-those arms. Normal URLs retain adaptive `[1,2]` full-batch qualification. There are
+Share 0.1.80 exposed the two arms through explicit source-page query parameters.
+Share 0.1.81 removes those temporary controls and uses eight chunks per lane with
+normal adaptive candidate selection. It does not promote the diagnostic `[2]`
+setting to a fixed production policy. The SDK default remains full-batch and the
+sample cap remains configurable. There are
 no public test buttons, new servers, pacing delays or recovery timers. Existing
 compatibility transfer transitions report preparing, sharing and sent timestamps;
 SDK browser checks additionally report source-clock preparation, transfer and total
