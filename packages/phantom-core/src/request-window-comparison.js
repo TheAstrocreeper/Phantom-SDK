@@ -44,7 +44,7 @@ export function compareRequestWindows(reports,candidates,{maxRateReduction=0.1,m
  const clean=summaries.filter(s=>s.eligible);
  if(!clean.length)return {...fallback('clean_window_transport_evidence_unavailable'),evidence:summaries};
  const winner=clean.find(s=>clean.every(other=>other===s||s.rateMin>other.rateMax)&&clean.every(other=>s.gapMax<=other.gapMax*(1+maxGapIncrease)));
- if(winner)return {status:'measured',reason:clean.length===1&&summaries.length>1?'only_repeated_clean_window':'repeated_verified_late_window_and_stall_winner',requestWindow:winner.requestWindow,candidates:[...candidates],evidence:summaries,maxRateReduction,maxGapIncrease};
+ if(winner)return {status:'measured',reason:summaries.length===1?'single_candidate_verified_without_contrast':clean.length===1&&summaries.length>1?'only_repeated_clean_window':'repeated_verified_late_window_and_stall_winner',requestWindow:winner.requestWindow,candidates:[...candidates],evidence:summaries,maxRateReduction,maxGapIncrease};
  const fastestRate=Math.max(...clean.map(s=>s.rateMax)),bestGap=Math.min(...clean.map(s=>s.gapMax));
  const bounded=clean.find(s=>s.rateMin>=fastestRate*(1-maxRateReduction)&&s.gapMax<=bestGap*(1+maxGapIncrease));
  return bounded?{status:'bounded_tradeoff',reason:'smaller_window_within_observed_rate_budget',requestWindow:bounded.requestWindow,candidates:[...candidates],evidence:summaries,maxRateReduction,maxGapIncrease}:{...fallback('window_rate_or_stall_ranges_inconclusive'),requestWindow:clean[0].requestWindow,evidence:summaries};
