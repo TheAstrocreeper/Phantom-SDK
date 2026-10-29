@@ -32,7 +32,7 @@ test('a burst advantage cannot hide slower late delivery or missing progress evi
  const absent=samples();delete absent[14].delivery;assert.equal(selectTransferSetup(absent).reason,'late_delivery_unavailable');
  const reordered=samples();reordered[14].delivery[1].elapsedMs=999;assert.equal(selectTransferSetup(reordered).status,'inconclusive');
 });
-function fixture({drop=false,maxMessageSize=262144,sampleBytes=98304,queueModel=false,freezeDrain=false,clockWinner=[0],dropEndAck=false,stats=null,dropEvidence=false,comparison='queue',dropMessage=false,prepareTransport=null,syntheticClock=false,fileWorkloadLimits={},dropWorkloadLane=null,dropWorkloadReady=false,dropRestrictReady=false,freezeWorkloadLane=null,dropWorkloadStop=false}={}){
+function fixture({drop=false,maxMessageSize=262144,sampleBytes=98304,queueModel=false,freezeDrain=false,clockWinner=[0],dropEndAck=false,stats=null,dropEvidence=false,comparison='queue',dropMessage=false,prepareTransport=null,syntheticClock=false,fileWorkloadLimits={},dropWorkloadLane=null,dropWorkloadReady=false,dropRestrictReady=false,freezeWorkloadLane=null,dropWorkloadStop=false,windowTimes=null}={}){
  const frames=[],reports=[],pcs=[],payloads=[],peaks=[],messages=[],channelRound=new Map(),clocks=[],workloadChannels=new Set();let workloadTrial=0;
  const dropsLane=lane=>typeof dropWorkloadLane==='function'?dropWorkloadLane(lane,workloadTrial):Array.isArray(dropWorkloadLane)?dropWorkloadLane.includes(lane):lane===dropWorkloadLane;
  const upgrade=ch=>{if(ch.addEventListener)return;const events=new EventTarget();ch.addEventListener=events.addEventListener.bind(events);ch.removeEventListener=events.removeEventListener.bind(events);ch.dispatchEvent=events.dispatchEvent.bind(events);};
@@ -46,7 +46,7 @@ function fixture({drop=false,maxMessageSize=262144,sampleBytes=98304,queueModel=
   let serial=0;
   const clock=queueModel&&!syntheticClock?performance:scoutClock({maxMessageSize,sampleBytes,winner:clockWinner});clocks[i]=clock;
   return createTransferScout({self:()=>id,allowed:p=>p===ids[1-i],runtime:{crypto,RTCPeerConnection:class extends RTC{constructor(){super();this.scoutNode=i;}},performance:clock},
-   send(peer,body){frames.push({from:id,peer,body});if(body.action==='fileWorkload')workloadTrial=body.trial;if(dropWorkloadStop&&body.action==='fileWorkloadStop')return;if(dropRestrictReady&&body.action==='fileWorkloadRestrictReady')return;if(dropWorkloadReady&&body.action==='fileWorkloadReady')return;if(dropEvidence&&body.action==='receiverEvidence')return;queueMicrotask(()=>nodes[1-i].receive(id,body));},newId:()=> `scout-${i}-${serial++}-0`,sampleBytes,comparison,prepareTransport,fileWorkloadLimits:Array.isArray(fileWorkloadLimits)?fileWorkloadLimits[i]:fileWorkloadLimits,onReport:r=>{clock.report?.(r);reports.push({i,...r});}});
+   send(peer,body){if(windowTimes&&body.action==='fileWorkloadResult'&&body.status==='complete'){body=structuredClone(body);body.receiver.elapsedMs=windowTimes[body.receiver.requestWindow];for(const row of body.receiver.lanes)row.maxGapMs=1;}frames.push({from:id,peer,body});if(body.action==='fileWorkload')workloadTrial=body.trial;if(dropWorkloadStop&&body.action==='fileWorkloadStop')return;if(dropRestrictReady&&body.action==='fileWorkloadRestrictReady')return;if(dropWorkloadReady&&body.action==='fileWorkloadReady')return;if(dropEvidence&&body.action==='receiverEvidence')return;queueMicrotask(()=>nodes[1-i].receive(id,body));},newId:()=> `scout-${i}-${serial++}-0`,sampleBytes,comparison,prepareTransport,fileWorkloadLimits:Array.isArray(fileWorkloadLimits)?fileWorkloadLimits[i]:fileWorkloadLimits,onReport:r=>{clock.report?.(r);reports.push({i,...r});}});
  });
  return {nodes,frames,reports,pcs,payloads,peaks,messages,close:()=>nodes.forEach(n=>n.close())};
 }
@@ -603,5 +603,39 @@ test('receiver rejects expansion before the first workload has verified',async()
   const first=f.frames.find(r=>r.body.action==='fileWorkload').body;
   assert.equal(f.nodes[1].receive(ids[0],{...first,trial:2,profile:{...first.profile,lanes:[0,1],bytes:first.profile.bytes*2}}),false);
   f.nodes[0].suspend('test_cancel');assert.equal((await pending).status,'cancelled');
+ }finally{f.close();}
+});
+
+test('request-window study uses the receiver window on every trial and preserves it at handoff',async()=>{
+ const f=fixture({queueModel:true,fileWorkloadLimits:{windowComparison:true,batchSize:8,requestWindow:32}});try{
+  await f.nodes[0].forSend(ids[1],{connectionOnly:true});const report=await f.nodes[0].qualifyFileWorkload(ids[1],{chunkSize:65536,fileBytes:4*1024*1024}),result=f.nodes[0].get(ids[1]);
+  assert.equal(report.status,'complete');assert.deepEqual(result.fileWorkloads.slice(0,4).map(r=>r.profile.requestWindow),[1,2,2,1]);
+  for(const r of result.fileWorkloads){assert.equal(r.receiver.requestWindow,r.profile.requestWindow);assert.equal(r.receiver.laneRequestWindow,r.profile.requestWindow);assert.ok(r.receiver.lanes.every(l=>l.verified));}
+  const selected=result.connectionPlan.requestPolicy;assert.equal(selected.status,'workload_verified');assert.equal(selected.requestWindow,report.profile.requestWindow);
+  assert.equal(f.nodes[1].take(ids[0],result.id,0,'asset','bad',[0,1,2],selected.requestWindow+1),null,'mismatch cannot claim or consume the association');
+  assert.equal(f.nodes[1].take(ids[0],result.id,0,'asset','ok',[0,1,2],selected.requestWindow).requestWindow,selected.requestWindow);
+ }finally{f.close();}
+});
+
+test('callers can select different window candidates and the receiver agrees on the bounded schedule',async()=>{
+ const f=fixture({queueModel:true,fileWorkloadLimits:[{windowComparison:true,windowCandidates:[1,4],batchSize:8,requestWindow:32},{batchSize:8,requestWindow:32}]});try{
+  await f.nodes[0].forSend(ids[1],{connectionOnly:true});const report=await f.nodes[0].qualifyFileWorkload(ids[1],{chunkSize:65536,fileBytes:4*1024*1024});
+  assert.equal(report.status,'complete');assert.deepEqual(f.nodes[0].get(ids[1]).fileWorkloads.slice(0,4).map(r=>r.profile.requestWindow),[1,4,4,1]);
+ }finally{f.close();}
+});
+
+test('failed request-window workload re-verifies only a verified clean subset',async()=>{
+ const f=fixture({queueModel:true,dropWorkloadLane:(lane,trial)=>trial===2&&lane===1,fileWorkloadLimits:{windowComparison:true,batchSize:8,requestWindow:32,requestTimeoutMs:200}});try{
+  await f.nodes[0].forSend(ids[1],{connectionOnly:true});const report=await f.nodes[0].qualifyFileWorkload(ids[1],{chunkSize:65536,fileBytes:4*1024*1024}),result=f.nodes[0].get(ids[1]);
+  assert.equal(report.status,'complete');assert.equal(report.profile.windowTrial,'repair');assert.equal(report.profile.requestWindow,1);assert.ok(!result.lanes.includes(1));assert.equal(result.fileWorkloadWindowComparison.status,'incomplete');assert.equal(result.fileWorkloads.length,3);
+ }finally{f.close();}
+});
+
+test('synthetic repeated metrics can select four slots and both handoffs retain that selection',async()=>{
+ const f=fixture({queueModel:true,stats:pressureStats({old:true}),windowTimes:{1:200,4:100},fileWorkloadLimits:{windowComparison:true,windowCandidates:[1,4],batchSize:8,requestWindow:32}});try{
+  await f.nodes[0].forSend(ids[1],{connectionOnly:true});const report=await f.nodes[0].qualifyFileWorkload(ids[1],{chunkSize:65536,fileBytes:4*1024*1024}),result=f.nodes[0].get(ids[1]);
+  assert.equal(result.fileWorkloadWindowComparison.status,'measured');assert.equal(result.fileWorkloadWindowComparison.requestWindow,4);assert.equal(report.profile.windowTrial,'selected');assert.equal(result.fileWorkloads.length,5);
+  assert.equal(result.connectionPlan.requestPolicy.requestWindow,4);
+  assert.equal(f.nodes[0].take(ids[1],result.id,0,'asset','source',[0,1,2],4).requestWindow,4);assert.equal(f.nodes[1].take(ids[0],result.id,0,'asset','receiver',[0,1,2],4).requestWindow,4);
  }finally{f.close();}
 });

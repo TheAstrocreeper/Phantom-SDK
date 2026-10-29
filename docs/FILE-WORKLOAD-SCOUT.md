@@ -105,3 +105,46 @@ unchanged per-lane workload, queue-policy rule, and settled clean prior trial.
 
 This requires `phantom-file-workload-v5`; ordinary file compatibility is unchanged.
 The SDK leaves the option off by default so callers can select the experiment.
+
+### Measured request windows (opt-in, workload v6)
+
+`scoutRequestWindowComparison: true` replaces the existing queue-depth study with
+request-window measurements; it does not append both studies. The SDK defaults
+this option off. `scoutRequestWindowCandidates` accepts one to three integer
+candidates between 1 and 32, default `[1, 2]`. Candidates are capped by configured
+receive limits, live lane count, and available sample chunks, then deduplicated.
+These are candidate settings, not a universal optimum or permanent selected value.
+
+The scout repeats candidates in ascending then descending order on identical
+retained associations and payloads. Only the per-lane request window changes;
+queue boundaries remain 1 MiB / 512 KiB. Samples use at least eight chunks per
+lane when the file and batch limits permit (more for larger candidate windows),
+instead of always sending the maximum batch. Both repetitions must verify and
+empty both ends' application queues. A candidate is eligible for a performance
+selection only with observed zero new selected-route send discards in both
+repetitions and no application retries. Missing or reset transport counters are
+not zero. Repeated receiver-local throughput and delivery-gap envelopes determine
+the selection; the bounded tradeoff allows at most 10% rate reduction and 10%
+relative maximum-gap increase. Inconclusive evidence retains an explicit verified
+candidate without calling it the fastest or claiming clean native transport.
+
+If the chosen window is not the final trial's current window, it is re-verified
+on the same associations before handoff. A failed trial may use the existing
+verified clean-subset restriction, then verify the lowest configured candidate
+on that subset. It cannot reuse the earlier throughput ranking on changed lanes.
+A cancelled, nonclean, or unverified workload cannot qualify a window. The existing
+nine-trial bound covers at most six comparison trials, one selection verification,
+and two shrinking repairs. No recovery or pacing timer is introduced.
+
+The selected window is retained with the scout's exact connection generation.
+The authenticated file handoff must match the receiver's retained trial value
+before claiming the association. Receiver `files.request` calls apply that window
+on the initial and subsequent batches. Missing retained associations fail rather
+than silently applying a measured policy to a fresh connection. The sender and
+coordinator cannot simply advertise a number as enforced.
+
+Reports expose `fileWorkloadWindowComparison`, `connectionPlan.requestPolicy`,
+per-trial `sourceTransport`, and `preflight-window-applied` at the receiver.
+`distributionBatchStarted.requestWindow` records the selected cap on each batch.
+This mode requires `phantom-file-workload-v6`; ordinary file compatibility remains.
+Native Android transport remains outside this change.

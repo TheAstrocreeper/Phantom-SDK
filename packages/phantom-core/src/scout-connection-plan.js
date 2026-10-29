@@ -79,6 +79,7 @@ export function buildScoutConnectionPlan(result,{fallback=3,maxRateReduction=0.1
   }
  }
 
+ let requestPolicy={status:'fallback',requestWindow:null,reason:'window_not_measured'};
  let queueReason=result?.comparison==='message'?'queue_held_fixed_for_message_comparison':result?.queuePolicy?.reason??'queue_evidence_unavailable',queueEvidence=[];
  let queuePolicy={status:'fallback',highWaterMark:DEFAULT_HIGH,lowWaterMark:DEFAULT_LOW};
  if(result?.queuePolicy?.status==='measured'){
@@ -115,6 +116,7 @@ export function buildScoutConnectionPlan(result,{fallback=3,maxRateReduction=0.1
   // A repaired set is exercised with the baseline policy; never inherit an
   // optimization measured on a different set of associations.
   if(selection.rejected?.length){queuePolicy={status:'fallback',highWaterMark:DEFAULT_HIGH,lowWaterMark:DEFAULT_LOW};queueReason='baseline_policy_verified_on_reduced_workload';messagePolicy={status:'fallback',maxPayloadBytes:null};messageReason='baseline_policy_verified_on_reduced_workload';}
+  if(Number.isInteger(selection.requestWindow)&&selection.requestWindow>=1&&selection.requestWindow<=32&&selection.requestWindow===workload.profile.requestWindow&&selection.requestWindow===workload.receiver.requestWindow&&selection.requestWindow===workload.receiver.laneRequestWindow&&['measure','selected','repair'].includes(workload.profile.windowTrial)&&workload.profile.windowCandidates?.includes(selection.requestWindow)&&workload.sourceSubmission?.length===lanes.length&&workload.sourceSubmission.every((r,i)=>r.lane===lanes[i]&&r.finalQueue?.bufferedBytes===0)&&workload.receiver.queues?.length===lanes.length&&workload.receiver.queues.every((r,i)=>r.lane===lanes[i]&&r.bufferedBytes===0))requestPolicy={status:'workload_verified',requestWindow:selection.requestWindow,reason:'request_window_verified_on_selected_file_associations'};
   const policy=selection.queuePolicy,actual=workload.profile.queuePolicy,expected=workloadQueuePolicy(workload.profile);
   if(policy&&policy.highWaterMark===actual?.highWaterMark&&policy.lowWaterMark===actual?.lowWaterMark&&(expected?(policy.highWaterMark===expected.highWaterMark&&policy.lowWaterMark===expected.lowWaterMark):((workload.profile.queueBudgetScope??'association')==='association'&&((policy.highWaterMark===1048576&&policy.lowWaterMark===524288)||(policy.highWaterMark===DEFAULT_HIGH&&policy.lowWaterMark===DEFAULT_LOW))))){queuePolicy={status:'workload_verified',...policy};queueReason='queue_policy_verified_on_selected_file_associations';}
 
@@ -129,6 +131,7 @@ export function buildScoutConnectionPlan(result,{fallback=3,maxRateReduction=0.1
  return {version:1,validFor:'current_peer_connection_generation' ,connections:lanes.length,lanes,
   laneDecision:{status:laneStatus,reason:laneReason,evidence:laneEvidence,tradeoff},
   messagePolicy:{...messagePolicy,reason:messageReason},messageDecision:{status:messagePolicy.status,reason:messageReason,evidence:messageEvidence},
+  requestPolicy,
   queuePolicy:{...queuePolicy,reason:queueReason},queueDecision:{status:queuePolicy.status,reason:queueReason,evidence:queueEvidence},
   receiverEvidence:{receivedRounds:result?.receiverEvidence?.receivedRounds??0,expectedRounds:result?.receiverEvidence?.expectedRounds??0},
   testedProfiles:testedProfiles(result),
