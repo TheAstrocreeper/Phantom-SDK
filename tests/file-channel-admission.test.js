@@ -1,3 +1,4 @@
+import {workloadQueuePolicy} from '../packages/phantom-core/src/workload-queue-comparison.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {sendFileChannelPayload} from '../packages/phantom-core/src/file-channel-payload.js';
@@ -19,4 +20,18 @@ test('an aborted queued send does not poison later work on the same channel',asy
  const dc=new Channel(),controller=new AbortController();controller.abort();
  await assert.rejects(sendFileChannelPayload({dc,pcs:[{sctp:{maxMessageSize:65536}}],bytes:new ArrayBuffer(1024),file:{index:0},signal:controller.signal}),/aborted/);
  await sendFileChannelPayload({dc,pcs:[{sctp:{maxMessageSize:65536}}],bytes:new ArrayBuffer(1024),file:{index:1}});assert.equal(dc.frames.length,2);
+});
+
+test('equal-share peer queues stay within the total budget and a stalled lane cannot block siblings',async()=>{
+ const channels=[],controller=new AbortController();let aggregatePeak=0;
+ class Lane extends EventTarget{
+  constructor(lane){super();this.lane=lane;this.readyState='open';this.bufferedAmount=0;this.frames=0;}
+  send(data){this.frames++;this.bufferedAmount+=typeof data==='string'?new TextEncoder().encode(data).byteLength:data.byteLength;aggregatePeak=Math.max(aggregatePeak,channels.reduce((sum,dc)=>sum+dc.bufferedAmount,0));if(this.lane!==0)setImmediate(()=>{this.bufferedAmount=0;this.dispatchEvent(new Event('bufferedamountlow'));});}
+ }
+ channels.push(...[0,1,2].map(lane=>new Lane(lane)));
+ const policy=workloadQueuePolicy({lanes:[0,1,2],queueTrial:'tight-1',queueBudgetScope:'peer'}),pcs=[{sctp:{maxMessageSize:262144}}];
+ const sends=channels.map(dc=>Promise.all(Array.from({length:12},(_,index)=>sendFileChannelPayload({dc,pcs,bytes:new ArrayBuffer(262144),file:{index,bytes:262144},queuePolicy:policy,signal:controller.signal}))));
+ const settled=Promise.allSettled(sends);
+ await Promise.all(sends.slice(1));assert.ok(aggregatePeak<=1048576);assert.equal(channels[0].frames,2);assert.equal(channels[1].frames,24);assert.equal(channels[2].frames,24);
+ controller.abort();const results=await settled;assert.equal(results[0].status,'rejected');assert.ok(results.slice(1).every(r=>r.status==='fulfilled'));
 });
