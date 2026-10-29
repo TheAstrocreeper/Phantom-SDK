@@ -49,7 +49,11 @@ try{
       const bytes=Uint8Array.from({length:8*1024*1024+17},(_,i)=>(i+round)%251),file=new File([bytes],'repeat-'+round);
       const prepared=await services[from].prepareAgreed(file,ids[to]);
       const verified=events.slice(begin).filter(e=>e.i===from&&e.type==='distributionScout'&&e.data.phase==='preflight-file-workload'&&e.data.status==='complete');
-      if(verified.length<4||selections.includes(verified[0].data.id))throw Error('file did not receive fresh qualification');
+      const qualified=services[from].getScout(ids[to]);
+      if(!verified.length||selections.includes(verified[0].data.id)||qualified?.fileWorkloadSelection?.status!=='verified')throw Error('file did not receive fresh qualification');
+      if(qualified.fileWorkloadSelection.reason==='verified_reduced_file_workload'){
+       if(qualified.fileWorkload.profile.queueTrial!=='reverify'||qualified.fileWorkloadQueueComparison.status!=='incomplete')throw Error('repaired file skipped subset qualification');
+      }else if(verified.length<4)throw Error('clean file skipped its queue comparison');
       selections.push(verified[0].data.id);
       await services[from].publish(file,{prepared,recipients:[ids[to]]});
       await wait(()=>events.some(e=>e.i===to&&e.type==='distributionComplete'&&e.data.id===prepared.id));
