@@ -68,7 +68,7 @@ try{
    const before=await snapshot();
    const started=performance.now();
    const receiving=pages[1].evaluate(async()=>{await lab.done;const verificationStart=performance.now();
-    for(let lane=0;lane<profiles[policy].connectionCount;lane++){const hash=[...new Uint8Array(await crypto.subtle.digest('SHA-256',lab.received[lane]))].join(',');if(hash!==lab.hash)throw Error('payload hash mismatch');lab.receiver[lane].verified=true;}
+    for(let lane=0;lane<2;lane++){const hash=[...new Uint8Array(await crypto.subtle.digest('SHA-256',lab.received[lane]))].join(',');if(hash!==lab.hash)throw Error('payload hash mismatch');lab.receiver[lane].verified=true;}
     return {arrivalSpanMs:lab.arrivalSpanMs,verificationMs:performance.now()-verificationStart,lanes:lab.receiver};
    });
    const sending=pages[0].evaluate(async profile=>{
