@@ -22,7 +22,7 @@ test('successive agreed files, including a reversed send, qualify and use fresh 
       command(type,{frame}){if(type==='PHANTOM_DIST_SEND'){frames.push(frame);queueMicrotask(()=>callbacks.get(frame.to)?.({type:'PHANTOM_DIST',payload:{from:frame.from,frame}}));}}},
     lifecycle:{issue:(action,target,fields)=>admin.sign({networkId:'repeat-scout',action,target,...fields,operationId:crypto.randomUUID()})},
     options:{intervalMs:10,jobTimeoutMs:2000,requestTimeoutMs:1000,batchSize:2,requestWindow:2,
-      capabilityExchange:true,transferScout:true,scoutBeforeSend:true,assignedRanges:true,maxChunkBytes:65536},
+      capabilityExchange:true,transferScout:true,scoutBeforeSend:true,scoutQueueComparison:true,assignedRanges:true,maxChunkBytes:65536},
     emit:(type,data)=>events.push({i,type,data})
   }));
   try{
@@ -37,7 +37,7 @@ test('successive agreed files, including a reversed send, qualify and use fresh 
       const eventStart=events.length,frameStart=frames.length;
       const manifest=await source.prepareAgreed(file,ids[receiver]);
       const qualified=events.slice(eventStart).filter(e=>e.i===sender&&e.type==='distributionScout'&&e.data.phase==='preflight-file-workload'&&e.data.status==='complete');
-      assert.equal(qualified.length,1,'every file must verify its own retained associations');
+      assert.ok(qualified.length>=4,'every file must compare queues on its own retained associations');
       const scoutId=qualified[0].data.id;assert.ok(!scoutIds.includes(scoutId));scoutIds.push(scoutId);
       await source.publish(file,{prepared:manifest,recipients:[ids[receiver]]});
       await until(()=>events.some(e=>e.i===receiver&&e.type==='distributionComplete'&&e.data.id===manifest.id));

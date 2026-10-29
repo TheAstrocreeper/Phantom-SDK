@@ -114,6 +114,9 @@ export function buildScoutConnectionPlan(result,{fallback=3,maxRateReduction=0.1
   // A repaired set is exercised with the baseline policy; never inherit an
   // optimization measured on a different set of associations.
   if(selection.rejected?.length){queuePolicy={status:'fallback',highWaterMark:DEFAULT_HIGH,lowWaterMark:DEFAULT_LOW};queueReason='baseline_policy_verified_on_reduced_workload';messagePolicy={status:'fallback',maxPayloadBytes:null};messageReason='baseline_policy_verified_on_reduced_workload';}
+  const policy=selection.queuePolicy,actual=workload.profile.queuePolicy;
+  if(policy&&policy.highWaterMark===actual?.highWaterMark&&policy.lowWaterMark===actual?.lowWaterMark&&((policy.highWaterMark===1048576&&policy.lowWaterMark===524288)||(policy.highWaterMark===DEFAULT_HIGH&&policy.lowWaterMark===DEFAULT_LOW))){queuePolicy={status:'workload_verified',...policy};queueReason='queue_policy_verified_on_selected_file_associations';}
+
  }
  if(selection?.version===1&&selection.status==='blocked'){lanes=[];laneStatus='blocked';laneReason=selection.reason;}
  const nativeLanes=lanes.map(lane=>{

@@ -440,3 +440,25 @@ test('cancellation during a restriction barrier settles without polling or anoth
  await f.nodes[0].forSend(ids[1],{connectionOnly:true});const pending=f.nodes[0].qualifyFileWorkload(ids[1],{chunkSize:65536,fileBytes:1048576});
  for(let i=0;i<1000&&!f.frames.some(r=>r.body.action==='fileWorkloadRestrictReady');i++)await new Promise(r=>setTimeout(r,2));assert.ok(f.frames.some(r=>r.body.action==='fileWorkloadRestrictReady'));f.close();assert.equal((await pending).status,'cancelled');assert.ok(f.pcs.every(pc=>pc.connectionState==='closed'));
 });
+
+test('automatic queue study repeats the identical workload on clean retained associations and verifies its selected policy',async()=>{
+ const f=fixture({queueModel:true,fileWorkloadLimits:{queueComparison:true,batchSize:8,requestWindow:8}});try{
+  await f.nodes[0].forSend(ids[1],{connectionOnly:true});const before=f.pcs.length;
+  const report=await f.nodes[0].qualifyFileWorkload(ids[1],{chunkSize:65536,fileBytes:4*1024*1024});
+  const result=f.nodes[0].get(ids[1]),trials=result.fileWorkloads;
+  assert.equal(report.status,'complete');assert.equal(f.pcs.length,before);
+  assert.deepEqual(trials.slice(0,4).map(r=>r.profile.queueTrial),['tight-1','baseline-1','baseline-2','tight-2']);
+  assert.ok(trials.every(r=>r.status==='complete'&&r.profile.bytes===trials[0].profile.bytes&&r.profile.lanes.join(',')==='0,1,2'));
+  assert.ok(['bounded_tradeoff','baseline_retained'].includes(result.fileWorkloadQueueComparison.status));
+  assert.equal(result.connectionPlan.queuePolicy.status,'workload_verified');
+  assert.equal(result.connectionPlan.queuePolicy.highWaterMark,report.profile.queuePolicy.highWaterMark);
+  assert.equal(report.profile.queuePolicy.highWaterMark,result.fileWorkloadQueueComparison.selected==='tight'?1048576:16777216);
+  await settle(()=>f.reports.filter(r=>r.phase==='preflight-file-workload-transport'&&r.stage==='end').length>=trials.length*6);
+ }finally{f.close();}
+});
+test('a queue trial with a stalled lane retires it before repeating a verified smaller-queue subset',async()=>{
+ const f=fixture({queueModel:true,dropWorkloadLane:0,fileWorkloadLimits:{queueComparison:true,batchSize:2,requestWindow:2,requestTimeoutMs:200}});try{
+  await f.nodes[0].forSend(ids[1],{connectionOnly:true});const report=await f.nodes[0].qualifyFileWorkload(ids[1],{chunkSize:65536,fileBytes:1048576});
+  const result=f.nodes[0].get(ids[1]);assert.equal(report.status,'complete');assert.deepEqual(report.profile.lanes,[1,2]);assert.equal(report.profile.queueTrial,'reverify');assert.equal(result.fileWorkloadQueueComparison.status,'incomplete');assert.equal(result.fileWorkloads.length,2);assert.equal(result.connectionPlan.queuePolicy.highWaterMark,1048576);
+ }finally{f.close();}
+});

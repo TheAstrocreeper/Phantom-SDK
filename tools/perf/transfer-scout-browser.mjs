@@ -33,7 +33,7 @@ try{
     runtime:{crypto,performance:(mode==='pair'||mode==='baseline'||mode==='queue'||mode==='message'||mode==='tradeoff')?clocks[i]:performance,RTCPeerConnection:class extends RTC{constructor(config){super(config);this.scoutNode=i;}}},lifecycle:{issue:(action,target,fields)=>admin.sign({networkId:'worm-browser',action,target,...fields,operationId:crypto.randomUUID()})},
     core:{getState:()=>({peerId:id,leader,mirror:ids[1],role:i===2?'syscon1':i===1?'syscon2':'peer',state:'admitted',admitted:true}),
      onEvent(fn){callbacks.set(id,fn);return()=>callbacks.delete(id);},command(type,{to,frame}){if(['pair','baseline','queue','message','tradeoff'].includes(mode))frame=modelReceiverEvidence(frame,{winner:mode==='tradeoff'?[]:mode==='baseline'?[0,1,2]:[1,2],queueWinner:mode==='queue',messageWinner:mode==='message'});if(type==='PHANTOM_DIST_SEND')queueMicrotask(()=>callbacks.get(to)?.({type:'PHANTOM_DIST',payload:{from:id,frame}}));}},
-    options:{intervalMs:10,requestTimeoutMs:mode==='repair'?2000:10000,batchSize:['queue','message','workload','repair'].includes(mode)?32:2,requestWindow:['queue','message','workload','repair'].includes(mode)?32:8,maxChunkBytes:262144,assignedRanges:true,transferLanes:3,capabilityExchange:true,transferScout:true,scoutComparison:mode==='message'?'message':'queue',fileTimeline:true,scoutBeforeSend:['send','workload','repair','repeat'].includes(mode),rtcConfiguration:{iceServers:[]}},
+    options:{intervalMs:10,requestTimeoutMs:mode==='repair'?2000:10000,batchSize:['queue','message','workload','repair'].includes(mode)?32:2,requestWindow:['queue','message','workload','repair'].includes(mode)?32:8,maxChunkBytes:262144,assignedRanges:true,transferLanes:3,capabilityExchange:true,transferScout:true,scoutComparison:mode==='message'?'message':'queue',fileTimeline:true,scoutBeforeSend:['send','workload','repair','repeat'].includes(mode),scoutQueueComparison:mode==='repeat',rtcConfiguration:{iceServers:[]}},
     emit(type,data){if(type==='distributionScout')clocks[i].report(data);events.push({i,type,data});if(i===2&&type==='distributionJob')peak=Math.max(peak,services[2].snapshot().jobs.length);}}));
    for(const fn of callbacks.values())fn({type:'PRESENCE_ROSTER',payload:{list:ids.map(hKey=>({hKey}))}});
    const wait=async predicate=>{const end=performance.now()+45000;while(!predicate()){const error=events.find(e=>e.type==='distributionError');if(error)throw Error(JSON.stringify(error));if(performance.now()>end)throw Error('browser test deadline: '+JSON.stringify(events.slice(-6)));await new Promise(r=>setTimeout(r,10));}};
@@ -46,10 +46,10 @@ try{
       const to=1-from,begin=events.length;
       const plan=services[from].proposePlan(ids[to],{maxPayloadBytes:262144,allowFragmentation:true});
       await wait(()=>services[from].getPlan(ids[to])?.id===plan);
-      const bytes=Uint8Array.from({length:2*1024*1024+17},(_,i)=>(i+round)%251),file=new File([bytes],'repeat-'+round);
+      const bytes=Uint8Array.from({length:8*1024*1024+17},(_,i)=>(i+round)%251),file=new File([bytes],'repeat-'+round);
       const prepared=await services[from].prepareAgreed(file,ids[to]);
       const verified=events.slice(begin).filter(e=>e.i===from&&e.type==='distributionScout'&&e.data.phase==='preflight-file-workload'&&e.data.status==='complete');
-      if(verified.length!==1||selections.includes(verified[0].data.id))throw Error('file did not receive fresh qualification');
+      if(verified.length<4||selections.includes(verified[0].data.id))throw Error('file did not receive fresh qualification');
       selections.push(verified[0].data.id);
       await services[from].publish(file,{prepared,recipients:[ids[to]]});
       await wait(()=>events.some(e=>e.i===to&&e.type==='distributionComplete'&&e.data.id===prepared.id));

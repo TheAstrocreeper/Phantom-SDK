@@ -1,7 +1,14 @@
 import {waitForDataChannelCapacity} from './data-channel-capacity.js';
 import {fitsMessageLimits,maxMessagePayload} from './message-size-guard.js';
 /** Shared file/scout framing and native-queue admission. Does not acknowledge receipt. */
-export async function sendFileChannelPayload({dc,pcs,bytes,file,send=data=>dc.send(data),overhead=0,messageBytes=null,fragments=false,queuePolicy,timeoutMs=15000,signal,assertLive=()=>{}}){
+const channelSends=new WeakMap();
+export function sendFileChannelPayload(options){
+ const dc=options.dc,previous=channelSends.get(dc)??Promise.resolve();
+ const next=previous.catch(()=>{}).then(()=>sendPayload(options));channelSends.set(dc,next);
+ const cleanup=()=>{if(channelSends.get(dc)===next)channelSends.delete(dc);};
+ next.then(cleanup,cleanup);return next;
+}
+async function sendPayload({dc,pcs,bytes,file,send=data=>dc.send(data),overhead=0,messageBytes=null,fragments=false,queuePolicy,timeoutMs=15000,signal,assertLive=()=>{}}){
  const header=JSON.stringify({kind:'binary',file}),headerBytes=new TextEncoder().encode(header).byteLength;
  const direct=(!messageBytes||bytes.byteLength<=messageBytes)&&fitsMessageLimits({connections:pcs,payloadBytes:bytes.byteLength,headerBytes,wrapperBytes:overhead});
  if(!direct&&!fragments)throw Error('File message exceeds the connection message limit');
@@ -11,8 +18,8 @@ export async function sendFileChannelPayload({dc,pcs,bytes,file,send=data=>dc.se
  for(let offset=0;offset<bytes.byteLength;){
   const length=Math.min(maxPayload,bytes.byteLength-offset),meta=direct?header:JSON.stringify({kind:'binary-fragment',file,offset,length});
   if(!fitsMessageLimits({connections:pcs,payloadBytes:length,headerBytes:new TextEncoder().encode(meta).byteLength,wrapperBytes:overhead,unknownPayloadLimit:direct?65536:65536-overhead}))throw Error('File fragment exceeds the connection message limit');
-  const started=performance.now();
-  await waitForDataChannelCapacity(dc,{bytes:length,timeoutMs,signal,...(queuePolicy?{highWaterMark:Math.max(length,queuePolicy.highWaterMark),lowWaterMark:Math.min(queuePolicy.lowWaterMark,Math.max(length,queuePolicy.highWaterMark)-length)}:{})});
+  const started=performance.now(),frameBytes=length+new TextEncoder().encode(meta).byteLength;
+  await waitForDataChannelCapacity(dc,{bytes:frameBytes,timeoutMs,signal,...(queuePolicy?{highWaterMark:Math.max(frameBytes,queuePolicy.highWaterMark),lowWaterMark:Math.min(queuePolicy.lowWaterMark,Math.max(frameBytes,queuePolicy.highWaterMark)-frameBytes)}:{})});
   bufferWaitMs+=performance.now()-started;assertLive();send(meta);send(direct?bytes:bytes.slice(offset,offset+length));offset+=length;
  }
  return {bufferWaitMs};
