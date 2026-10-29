@@ -1,13 +1,13 @@
 import {defaultRTCConfiguration} from './rtc-configuration.js';
 import {scoutConnection,compareScoutTransport} from './connection-scout.js';
 import {makeReceiverEvidence,readReceiverEvidence} from './scout-receiver-evidence.js';
-import {compareWorkloadQueues} from './workload-queue-comparison.js';
+import {compareWorkloadQueues,workloadQueuePolicy} from './workload-queue-comparison.js';
 import {decideFileWorkload} from './file-workload-decision.js';
 import {createScoutFileWorkload} from './scout-file-workload.js';
 import {FILE_RECEIVE_SLOTS} from './files.js';
 import {buildScoutConnectionPlan} from './scout-connection-plan.js';
 
-export const FILE_WORKLOAD_PROTOCOL='phantom-file-workload-v3';
+export const FILE_WORKLOAD_PROTOCOL='phantom-file-workload-v4';
 export const TRANSFER_SCOUT_PROTOCOL = 'phantom-transfer-scout-v8';
 const LANES = 3, MAX_BYTES = 3 * 1024 * 1024, DEFAULT_BYTES = 768 * 1024;
 const CONFIRM_SCALE = 4, SCREEN_ROUNDS = 14, CONFIRM_ROUNDS = 6, LANE_ROUNDS = 21, QUEUE_ROUNDS = 4, ROUNDS = 25, QUEUE_BYTES = 768 * 1024;
@@ -143,9 +143,9 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
   const receiverEvidence=s=>({status:s.remoteEvidence.size===s.sentRounds.size&&s.sentRounds.size>0?'complete':s.remoteEvidence.size?'partial':'unavailable',
     expectedRounds:s.sentRounds.size,receivedRounds:s.remoteEvidence.size,observations:structuredClone([...s.remoteEvidence.values()].sort((a,b)=>a.round-b.round))});
   function wire(s,body){if(live(s))send(s.peer,{type:'transferScout',version:8,id:s.id,...body});}
-  const workloadLimits={queueComparison:false,maxConnections:3,batchSize:8,requestWindow:8,requestTimeoutMs:10000,sendTimeoutMs:15000,maxAttemptsPerPeer:2,maxChunkBytes:65536,...fileWorkloadLimits};
-  if(typeof workloadLimits.queueComparison!=='boolean'||!Number.isInteger(workloadLimits.maxConnections)||workloadLimits.maxConnections<1||workloadLimits.maxConnections>3||!Number.isInteger(workloadLimits.batchSize)||workloadLimits.batchSize<1||workloadLimits.batchSize>64||!Number.isInteger(workloadLimits.requestWindow)||workloadLimits.requestWindow<1||workloadLimits.requestWindow>32||!Number.isFinite(workloadLimits.requestTimeoutMs)||workloadLimits.requestTimeoutMs<=0||!Number.isFinite(workloadLimits.sendTimeoutMs)||workloadLimits.sendTimeoutMs<=0||!Number.isInteger(workloadLimits.maxAttemptsPerPeer)||workloadLimits.maxAttemptsPerPeer<1||workloadLimits.maxAttemptsPerPeer>3||!Number.isInteger(workloadLimits.maxChunkBytes)||workloadLimits.maxChunkBytes<1024||workloadLimits.maxChunkBytes>262144)throw TypeError('Invalid scout file workload limits');
-  function validWorkload(p){return p&&(!p.queueTrial||(['tight-1','baseline-1','baseline-2','tight-2','baseline-selected','reverify'].includes(p.queueTrial)&&p.queuePolicy?.highWaterMark===(p.queueTrial.startsWith('baseline')?16777216:1048576)&&p.queuePolicy?.lowWaterMark===(p.queueTrial.startsWith('baseline')?4194304:524288)))&&validLanes(p.lanes)&&p.lanes.length<=workloadLimits.maxConnections&&Number.isInteger(p.chunkSize)&&p.chunkSize>=1024&&p.chunkSize<=workloadLimits.maxChunkBytes&&Number.isInteger(p.batchSize)&&p.batchSize===workloadLimits.batchSize&&Number.isInteger(p.chunksPerLane)&&p.chunksPerLane>=1&&p.chunksPerLane<=p.batchSize&&p.bytes===p.chunksPerLane*p.chunkSize*p.lanes.length&&p.bytes<=48*1024*1024&&[0,4*1024*1024].includes(p.sourceReadBlockBytes)&&Number.isInteger(p.queuePolicy?.highWaterMark)&&p.queuePolicy.highWaterMark>=p.chunkSize&&p.queuePolicy.highWaterMark<=16*1024*1024&&Number.isInteger(p.queuePolicy.lowWaterMark)&&p.queuePolicy.lowWaterMark>=0&&p.queuePolicy.lowWaterMark<p.queuePolicy.highWaterMark&&(p.messageBytes===null||[16384,262144].includes(p.messageBytes));}
+  const workloadLimits={queueComparison:false,queueBudgetScope:'association',maxConnections:3,batchSize:8,requestWindow:8,requestTimeoutMs:10000,sendTimeoutMs:15000,maxAttemptsPerPeer:2,maxChunkBytes:65536,...fileWorkloadLimits};
+  if(!['association','peer'].includes(workloadLimits.queueBudgetScope)||typeof workloadLimits.queueComparison!=='boolean'||!Number.isInteger(workloadLimits.maxConnections)||workloadLimits.maxConnections<1||workloadLimits.maxConnections>3||!Number.isInteger(workloadLimits.batchSize)||workloadLimits.batchSize<1||workloadLimits.batchSize>64||!Number.isInteger(workloadLimits.requestWindow)||workloadLimits.requestWindow<1||workloadLimits.requestWindow>32||!Number.isFinite(workloadLimits.requestTimeoutMs)||workloadLimits.requestTimeoutMs<=0||!Number.isFinite(workloadLimits.sendTimeoutMs)||workloadLimits.sendTimeoutMs<=0||!Number.isInteger(workloadLimits.maxAttemptsPerPeer)||workloadLimits.maxAttemptsPerPeer<1||workloadLimits.maxAttemptsPerPeer>3||!Number.isInteger(workloadLimits.maxChunkBytes)||workloadLimits.maxChunkBytes<1024||workloadLimits.maxChunkBytes>262144)throw TypeError('Invalid scout file workload limits');
+  function validWorkload(p){return p&&(!p.queueTrial?(!p.queueBudgetScope||p.queueBudgetScope==='association'):(workloadQueuePolicy(p)&&p.queuePolicy?.highWaterMark===workloadQueuePolicy(p).highWaterMark&&p.queuePolicy?.lowWaterMark===workloadQueuePolicy(p).lowWaterMark))&&validLanes(p.lanes)&&p.lanes.length<=workloadLimits.maxConnections&&Number.isInteger(p.chunkSize)&&p.chunkSize>=1024&&p.chunkSize<=workloadLimits.maxChunkBytes&&Number.isInteger(p.batchSize)&&p.batchSize===workloadLimits.batchSize&&Number.isInteger(p.chunksPerLane)&&p.chunksPerLane>=1&&p.chunksPerLane<=p.batchSize&&p.bytes===p.chunksPerLane*p.chunkSize*p.lanes.length&&p.bytes<=48*1024*1024&&[0,4*1024*1024].includes(p.sourceReadBlockBytes)&&Number.isInteger(p.queuePolicy?.highWaterMark)&&p.queuePolicy.highWaterMark>=p.chunkSize&&p.queuePolicy.highWaterMark<=16*1024*1024&&Number.isInteger(p.queuePolicy.lowWaterMark)&&p.queuePolicy.lowWaterMark>=0&&p.queuePolicy.lowWaterMark<p.queuePolicy.highWaterMark&&(p.messageBytes===null||[16384,262144].includes(p.messageBytes));}
   function workloadTransport(pool,profile,trial,phase){
     for(const lane of profile.lanes){
       const row=pool.lanes[lane],startedAtMs=now();
@@ -670,8 +670,7 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
         if(chunksPerLane<1){const report={version:2,status:'skipped',reason:'file_smaller_than_one_agreed_chunk_per_lane',chunkSize,fileBytes};result.fileWorkload=report;result.reason=report.reason;result.connectionPlan=buildScoutConnectionPlan(result,{fallback,maxRateReduction:laneRateTradeoff});notify(pool,{phase:'preflight-result',...structuredClone(result)});notify(pool,{phase:'preflight-file-workload',...report});return report;}
         const profile={lanes,chunkSize,sourceReadBlockBytes,batchSize:workloadLimits.batchSize,chunksPerLane,bytes:chunksPerLane*chunkSize*lanes.length,queuePolicy:{highWaterMark:repaired?16*1024*1024:plan?.queuePolicy?.highWaterMark??16*1024*1024,lowWaterMark:repaired?4*1024*1024:plan?.queuePolicy?.lowWaterMark??4*1024*1024},messageBytes:repaired?null:plan?.messagePolicy?.maxPayloadBytes??null};
         if(study){
-          const tight=repaired||queueStep===0||queueStep===3;
-          profile.queuePolicy={highWaterMark:tight?1048576:16777216,lowWaterMark:tight?524288:4194304};profile.messageBytes=null;profile.queueTrial=repaired?'reverify':order[queueStep];
+          profile.messageBytes=null;profile.queueTrial=repaired?'reverify':order[queueStep];profile.queueBudgetScope=workloadLimits.queueBudgetScope;profile.queuePolicy=workloadQueuePolicy(profile);
         }
         if(!validWorkload(profile))return null;
         const state=startWorkload(pool,profile,true);

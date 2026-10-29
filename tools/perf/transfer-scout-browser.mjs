@@ -15,7 +15,7 @@ await new Promise(r=>server.listen(0,'127.0.0.1',r));let browser;
 try{
  browser=await chromium.launch({headless:true,executablePath:process.env.PHANTOM_CHROMIUM_EXECUTABLE,args:['--no-sandbox']});
  const page=await browser.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.stack??e.message));await page.goto(`http://127.0.0.1:${server.address().port}/`);
- for(const mode of ['complete','cancel','send','pair','baseline','queue','message','tradeoff','workload','repair','repeat']){
+ for(const mode of ['complete','cancel','send','pair','baseline','queue','message','tradeoff','workload','repair','repeat','peer-budget']){
   const result=await page.evaluate(async mode=>{
    const {createNetworkDistribution}=await import('/packages/phantom-core/src/network-distribution.js');
    const {createAdminIdentity}=await import('/packages/phantom-core/src/authorization.js');
@@ -33,7 +33,7 @@ try{
     runtime:{crypto,performance:(mode==='pair'||mode==='baseline'||mode==='queue'||mode==='message'||mode==='tradeoff')?clocks[i]:performance,RTCPeerConnection:class extends RTC{constructor(config){super(config);this.scoutNode=i;}}},lifecycle:{issue:(action,target,fields)=>admin.sign({networkId:'worm-browser',action,target,...fields,operationId:crypto.randomUUID()})},
     core:{getState:()=>({peerId:id,leader,mirror:ids[1],role:i===2?'syscon1':i===1?'syscon2':'peer',state:'admitted',admitted:true}),
      onEvent(fn){callbacks.set(id,fn);return()=>callbacks.delete(id);},command(type,{to,frame}){if(['pair','baseline','queue','message','tradeoff'].includes(mode))frame=modelReceiverEvidence(frame,{winner:mode==='tradeoff'?[]:mode==='baseline'?[0,1,2]:[1,2],queueWinner:mode==='queue',messageWinner:mode==='message'});if(type==='PHANTOM_DIST_SEND')queueMicrotask(()=>callbacks.get(to)?.({type:'PHANTOM_DIST',payload:{from:id,frame}}));}},
-    options:{intervalMs:10,requestTimeoutMs:mode==='repair'?2000:10000,batchSize:['queue','message','workload','repair','repeat'].includes(mode)?32:2,requestWindow:['queue','message','workload','repair','repeat'].includes(mode)?32:8,maxChunkBytes:262144,assignedRanges:true,transferLanes:3,capabilityExchange:true,transferScout:true,scoutComparison:mode==='message'?'message':'queue',fileTimeline:true,scoutBeforeSend:['send','workload','repair','repeat'].includes(mode),scoutQueueComparison:mode==='repeat',rtcConfiguration:{iceServers:[]}},
+    options:{intervalMs:10,requestTimeoutMs:mode==='repair'?2000:10000,batchSize:['queue','message','workload','repair','repeat','peer-budget'].includes(mode)?32:2,requestWindow:['queue','message','workload','repair','repeat','peer-budget'].includes(mode)?32:8,maxChunkBytes:262144,assignedRanges:true,transferLanes:3,capabilityExchange:true,transferScout:true,scoutComparison:mode==='message'?'message':'queue',fileTimeline:true,scoutBeforeSend:['send','workload','repair','repeat','peer-budget'].includes(mode),scoutQueueComparison:['repeat','peer-budget'].includes(mode),scoutQueueBudgetScope:mode==='peer-budget'?'peer':'association',rtcConfiguration:{iceServers:[]}},
     emit(type,data){if(type==='distributionScout')clocks[i].report(data);events.push({i,type,data});if(i===2&&type==='distributionJob')peak=Math.max(peak,services[2].snapshot().jobs.length);}}));
    for(const fn of callbacks.values())fn({type:'PRESENCE_ROSTER',payload:{list:ids.map(hKey=>({hKey}))}});
    const wait=async predicate=>{const end=performance.now()+45000;while(!predicate()){const error=events.find(e=>e.type==='distributionError');if(error)throw Error(JSON.stringify(error));if(performance.now()>end)throw Error('browser test deadline: '+JSON.stringify(events.slice(-6)));await new Promise(r=>setTimeout(r,10));}};
@@ -69,7 +69,7 @@ try{
     let selection=services[source].getScout(ids[target]);
     services[source].proposePlan(ids[target],{maxPayloadBytes:262144,allowFragmentation:true});await wait(()=>services[source].getPlan(ids[target]));
     const scoutPCs=[...pcs];
-    const bytes=Uint8Array.from({length:(['workload','repair'].includes(mode)?32:['queue','message'].includes(mode)?8:4)*1024*1024+17},(_,i)=>i%251),file=new File([bytes],'worm-fixture.bin');
+    const bytes=Uint8Array.from({length:(['workload','repair','peer-budget'].includes(mode)?32:['queue','message'].includes(mode)?8:4)*1024*1024+17},(_,i)=>i%251),file=new File([bytes],'worm-fixture.bin');
     const prepared=await services[source].prepareAgreed(file,ids[target],{sourceReadBlockBytes:4*1024*1024});
     selection=services[source].getScout(ids[target]);
     await services[source].publish(file,{prepared,recipients:[ids[target]]});
@@ -106,6 +106,13 @@ try{
    assert.deepEqual(result.applied.lanes,lanes);assert.deepEqual(result.handoffs.sort(),lanes);assert.equal(result.fileAssociations,lanes.length*2);assert.equal(result.peak,lanes.length);
    assert.deepEqual(result.selection.fileWorkloadSelection.rejected,[0,1,2].filter(l=>!lanes.includes(l)));
    if(first.reason==='local_send_discards_after_verified_lane')assert.ok(first.sourcePressure.observations.every(r=>r.bufferedBytes>0&&r.change.counters.packetsDiscardedOnSend.status==='observed'&&r.change.counters.packetsDiscardedOnSend.value>0));
+  }
+  if(mode==='peer-budget'){
+   const p=result.selection.fileWorkload.profile,q=p.queuePolicy;
+   assert.equal(p.queueBudgetScope,'peer');assert.equal(result.selection.fileWorkload.status,'complete');assert.equal(result.applied.connections,p.lanes.length);
+   assert.equal(q.highWaterMark,Math.floor((p.queueTrial.startsWith('baseline')?16777216:1048576)/p.lanes.length));
+   assert.equal(result.queueApplications.length,p.lanes.length);assert.ok(result.queueApplications.every(r=>r.policy.highWaterMark===q.highWaterMark&&r.policy.lowWaterMark===q.lowWaterMark));
+   assert.ok(result.fileQueuePeak<=q.highWaterMark);assert.equal(result.selection.connectionPlan.queuePolicy.status,'workload_verified');
   }
   if(mode==='workload'){assert.equal(result.selection.connectionOnly,true);assert.equal(result.selection.samples.length,0);assert.equal(result.selection.fileWorkload.status,'complete');assert.equal(result.selection.fileWorkload.profile.chunkSize,262144);assert.equal(result.selection.fileWorkload.profile.sourceReadBlockBytes,4194304);assert.equal(result.selection.fileWorkload.profile.chunksPerLane,32);assert.equal(result.selection.fileWorkload.profile.bytes,result.selection.connections*8388608);assert.equal(result.selection.fileWorkload.receiver.requestWindow,32);assert.equal(result.selection.fileWorkload.receiver.lanes.reduce((n,l)=>n+l.bytes,0),result.selection.fileWorkload.profile.bytes);}
   if(mode==='queue'){assert.equal(result.selection.queuePolicy.status,'measured');assert.equal(result.selection.queuePolicy.highWaterMark,1048576);assert.equal(result.queueApplications.length,result.selection.connections);assert.ok(result.queueApplications.every(r=>r.policy.highWaterMark===1048576&&r.id===result.selection.id));assert.ok(result.fileQueuePeak<=1048576+32768);}

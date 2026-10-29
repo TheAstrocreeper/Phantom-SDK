@@ -532,3 +532,21 @@ for(const mode of ['old','missing','changed'])test('pressure shortcut ignores '+
   const first=f.nodes[0].get(ids[1]).fileWorkloads[0];assert.notEqual(first.reason,'local_send_discards_after_verified_lane');assert.equal(first.sourcePressure,undefined);assert.equal(report.status,'complete');
  }finally{f.close();}
 });
+
+test('peer-budget study records derived lane limits and hands off the exact verified policy',async()=>{
+ const f=fixture({queueModel:true,fileWorkloadLimits:{queueComparison:true,queueBudgetScope:'peer',batchSize:32,requestWindow:32,maxChunkBytes:262144}});try{
+  await f.nodes[0].forSend(ids[1],{connectionOnly:true});const before=f.pcs.length;
+  const report=await f.nodes[0].qualifyFileWorkload(ids[1],{chunkSize:262144,fileBytes:32*1024*1024}),result=f.nodes[0].get(ids[1]);
+  assert.equal(report.status,'complete');assert.equal(f.pcs.length,before);
+  assert.deepEqual(result.fileWorkloads.slice(0,4).map(r=>r.profile.queueTrial),['tight-1','baseline-1','baseline-2','tight-2']);
+  for(const r of result.fileWorkloads){assert.equal(r.profile.queueBudgetScope,'peer');assert.deepEqual(r.profile.queuePolicy,{highWaterMark:Math.floor((r.profile.queueTrial.startsWith('baseline')?16777216:1048576)/3),lowWaterMark:Math.floor((r.profile.queueTrial.startsWith('baseline')?4194304:524288)/3)});assert.ok(r.sourceSubmission.every(l=>l.peakBufferedBytes<=r.profile.queuePolicy.highWaterMark));}
+  assert.equal(result.connectionPlan.queuePolicy.status,'workload_verified');assert.equal(result.connectionPlan.queuePolicy.highWaterMark,report.profile.queuePolicy.highWaterMark);
+ }finally{f.close();}
+});
+
+test('peer budget is recomputed for a repaired subset instead of inheriting the three-lane share',async()=>{
+ const f=fixture({queueModel:true,dropWorkloadLane:0,fileWorkloadLimits:{queueComparison:true,queueBudgetScope:'peer',batchSize:32,requestWindow:32,requestTimeoutMs:400,maxChunkBytes:262144}});try{
+  await f.nodes[0].forSend(ids[1],{connectionOnly:true});const report=await f.nodes[0].qualifyFileWorkload(ids[1],{chunkSize:262144,fileBytes:32*1024*1024}),result=f.nodes[0].get(ids[1]);
+  assert.equal(report.status,'complete');assert.deepEqual(report.profile.lanes,[1,2]);assert.equal(report.profile.queuePolicy.highWaterMark,524288);assert.equal(report.profile.queuePolicy.lowWaterMark,262144);assert.equal(result.connectionPlan.queuePolicy.highWaterMark,524288);assert.equal(result.fileWorkloadQueueComparison.status,'incomplete');
+ }finally{f.close();}
+});

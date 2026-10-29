@@ -1,3 +1,4 @@
+import {workloadQueuePolicy} from './workload-queue-comparison.js';
 const DEFAULT_HIGH=16*1024*1024,DEFAULT_LOW=4*1024*1024;
 const key=lanes=>lanes.join(',');
 const range=values=>({min:Math.min(...values),max:Math.max(...values)});
@@ -114,8 +115,8 @@ export function buildScoutConnectionPlan(result,{fallback=3,maxRateReduction=0.1
   // A repaired set is exercised with the baseline policy; never inherit an
   // optimization measured on a different set of associations.
   if(selection.rejected?.length){queuePolicy={status:'fallback',highWaterMark:DEFAULT_HIGH,lowWaterMark:DEFAULT_LOW};queueReason='baseline_policy_verified_on_reduced_workload';messagePolicy={status:'fallback',maxPayloadBytes:null};messageReason='baseline_policy_verified_on_reduced_workload';}
-  const policy=selection.queuePolicy,actual=workload.profile.queuePolicy;
-  if(policy&&policy.highWaterMark===actual?.highWaterMark&&policy.lowWaterMark===actual?.lowWaterMark&&((policy.highWaterMark===1048576&&policy.lowWaterMark===524288)||(policy.highWaterMark===DEFAULT_HIGH&&policy.lowWaterMark===DEFAULT_LOW))){queuePolicy={status:'workload_verified',...policy};queueReason='queue_policy_verified_on_selected_file_associations';}
+  const policy=selection.queuePolicy,actual=workload.profile.queuePolicy,expected=workloadQueuePolicy(workload.profile);
+  if(policy&&policy.highWaterMark===actual?.highWaterMark&&policy.lowWaterMark===actual?.lowWaterMark&&(expected?(policy.highWaterMark===expected.highWaterMark&&policy.lowWaterMark===expected.lowWaterMark):((workload.profile.queueBudgetScope??'association')==='association'&&((policy.highWaterMark===1048576&&policy.lowWaterMark===524288)||(policy.highWaterMark===DEFAULT_HIGH&&policy.lowWaterMark===DEFAULT_LOW))))){queuePolicy={status:'workload_verified',...policy};queueReason='queue_policy_verified_on_selected_file_associations';}
 
  }
  if(selection?.version===1&&selection.status==='blocked'){lanes=[];laneStatus='blocked';laneReason=selection.reason;}
