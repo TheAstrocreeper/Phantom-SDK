@@ -54,7 +54,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
   // The facade supplies the committed roster projection. Reading it never changes it.
   let roster=[];
   const controlObservations=new Map(),controlGenerations=new Map(),controlPending=new Map();let controlSequence=0;
-  const localCapability=peer=>createCapabilityReport(controlObservations.get(peer)??{version:1,messageLimit:{status:'unknown',bytes:null}},{protocols:['phantom-file-v1','phantom-file-fragments-v1',...(scoutEnabled?[TRANSFER_SCOUT_PROTOCOL,FILE_WORKLOAD_PROTOCOL]:[])],maxChunkBytes:options.maxChunkBytes??65536});
+  const localCapability=peer=>createCapabilityReport(controlObservations.get(peer)??{version:1,messageLimit:{status:'unknown',bytes:null}},{protocols:['phantom-file-v1','phantom-file-fragments-v1',...(scoutEnabled?[TRANSFER_SCOUT_PROTOCOL,...(assignedRanges?[FILE_WORKLOAD_PROTOCOL]:[])]:[])],maxChunkBytes:options.maxChunkBytes??65536});
   const peerAllowed=peer=>roster.includes(peer)&&canUsePeer(peer);
   function observeControl(peer){
     if(controlPending.has(peer))return controlPending.get(peer);
@@ -487,7 +487,21 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
     restore,
     async getFile(id){await restore();const asset=assets.get(id);if(closed||!asset||asset.holders.get(self())?.size!==asset.total)throw Error('No complete local distribution copy');return files.getFile(id);},
     async prepare(file,settings={}){preflight?.suspend();if(closed)throw Error('Distribution closed');await restore();const manifest=await files.publish(file,settings);preparedFiles.set(manifest,{file,id:manifest.id});return manifest;},
-    async prepareAgreed(file,peer,settings={}){if(options.scoutBeforeSend===true&&capabilityExchange?.get(peer)?.protocols.includes(TRANSFER_SCOUT_PROTOCOL)){await preflight?.forSend(peer,{connectionOnly:capabilityExchange.get(peer)?.protocols.includes(FILE_WORKLOAD_PROTOCOL)});if(scoutCoordinator===2&&assignedRanges&&rangePeers.has(peer)&&capabilityExchange.get(peer)?.protocols.includes(FILE_WORKLOAD_PROTOCOL)){const prior=agreement?.get(peer),chunkSize=prior?.plan.payloadBytes;if(chunkSize){await preflight?.qualifyFileWorkload(peer,{chunkSize,fileBytes:file.size,sourceReadBlockBytes:settings.sourceReadBlockBytes??0});if(agreement?.get(peer)?.id!==prior.id)throw Error('Agreed plan changed during file workload measurement');}}}const setup=selectedSetup(peer);preflight?.suspend();if(closed||!peerAllowed(peer))throw Error('Peer unavailable');const agreed=agreement?.get(peer);if(!agreed)throw Error('No agreed plan');if('chunkSize' in settings)throw TypeError('Chunk size comes from the agreed plan');await restore();const manifest=await files.publish(file,{...settings,chunkSize:agreed.plan.payloadBytes});if(closed||!peerAllowed(peer)||agreement.get(peer)?.id!==agreed.id)throw Error('Agreed plan no longer valid');preparedFiles.set(manifest,{file,id:manifest.id,peer,planId:agreed.id,setup});return manifest;},
+    async prepareAgreed(file,peer,settings={}){
+      if('chunkSize' in settings)throw TypeError('Chunk size comes from the agreed plan');
+      const agreed=agreement?.get(peer);if(!agreed)throw Error('No agreed plan');
+      if(options.scoutBeforeSend===true&&capabilityExchange?.get(peer)?.protocols.includes(TRANSFER_SCOUT_PROTOCOL)){
+        const workload=assignedRanges&&scoutCoordinator===2&&capabilityExchange.get(peer).protocols.includes(FILE_WORKLOAD_PROTOCOL);
+        await preflight?.forSend(peer,{connectionOnly:workload});
+        if(workload)await preflight?.qualifyFileWorkload(peer,{chunkSize:agreed.plan.payloadBytes,fileBytes:file.size,sourceReadBlockBytes:settings.sourceReadBlockBytes??0});
+      }
+      const setup=selectedSetup(peer);preflight?.suspend();
+      if(closed||!peerAllowed(peer))throw Error('Peer unavailable');
+      if(agreement?.get(peer)?.id!==agreed.id)throw Error('Agreed plan changed during file preparation');
+      await restore();const manifest=await files.publish(file,{...settings,chunkSize:agreed.plan.payloadBytes});
+      if(closed||!peerAllowed(peer)||agreement.get(peer)?.id!==agreed.id)throw Error('Agreed plan no longer valid');
+      preparedFiles.set(manifest,{file,id:manifest.id,peer,planId:agreed.id,setup});return manifest;
+    },
     async publish(file,{authorization,recipients,prepared,...settings}={}){if(closed)throw Error('Distribution closed');if(!state().admitted)throw Error('Wait for network admission before distributing');if(!policy)throw Error('Distribution requires an admin authority');await restore();if(closed)throw Error('Distribution closed');
       if(recipients!==undefined){
         if(!Array.isArray(recipients)||recipients.length>128||recipients.some(id=>typeof id!=='string'||! /^[0-9a-f]{16}$/.test(id)))throw new TypeError('Invalid publication recipients');
