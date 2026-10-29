@@ -59,3 +59,11 @@ A queue comparison is skipped when the bounded per-lane payload cannot reach the
 Concurrent scout ranges share the production file service's 32 receive slots. Each lane's request window is capped at its share of that existing pool, so an entirely stalled first lane cannot occupy every slot before the other lanes are tested. Configured and effective per-lane windows are reported separately; no receive-memory capacity is increased. A regression drops the first lane with a full 32-chunk batch and verifies that the other lanes complete and can be retested.
 
 Share retains the latest 16 scout IDs, rather than replacing a peer's prior scout when a returned log starts another send. Per-trial start/end counters, cancellation/release reasons, and file-closing counters survive raw-report rotation and reload.
+
+### Sender failure and receiver verification
+
+The .73 83,187,441-byte run exposed a sender-first failure: two scout lanes had verified 8 MiB each, but a third lane timed out at the sender. The local failure finalized with `receiver: null`, preventing the strict subset selector from using the successful receiver observations.
+
+A local submission error now stops the file driver and requests a matching `fileWorkloadStop` over the authenticated control path. The receiver snapshots its verified lanes and queues and returns the existing workload result. Only then does the sender finalize failure and apply the existing clean-subset restriction and requalification barrier. Missing receiver evidence never qualifies a lane. Cancellation and disconnect still release the pending trial; no new timer or retry loop is added.
+
+The regression freezes one source queue while two lanes complete, verifies that the old local-finalization behavior loses receiver evidence, and requires the repaired path to requalify only lanes 1 and 2. A separate cancellation check covers a lost stop request and rejects wrong-trial and wrong-role requests. This fixes evidence loss during preflight; it does not establish why a real SCTP/UDP association stops draining or guarantee long-file throughput.
