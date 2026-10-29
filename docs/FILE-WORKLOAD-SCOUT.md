@@ -83,3 +83,25 @@ Old cumulative errors, unavailable counters, resets and changed routes cannot tr
 The existing four-trial comparison keeps scope, payload, chunks and associations identical. Reports include `profile.queueBudgetScope` and the effective per-lane boundaries. The comparator requires the same scope and observed contrast at the derived tight boundary. A reduced subset receives newly derived shares and must requalify. The exact verified high/low values reach the retained source file channel; the handoff no longer substitutes a fixed 1 MiB policy. Both endpoints must advertise `phantom-file-workload-v4`; ordinary file compatibility is unchanged.
 
 Phantom Share .76 opts into the peer-budget study to test whether limiting the combined feeding envelope avoids the local socket pressure observed with simultaneous per-association budgets. This is an experiment, not an asserted throughput fix. Tests cover summed queue bounds with a permanently stalled lane, derived policies for 1/2/3 lanes, incomparable scopes, subset requalification, and native browser enforcement during a real file transfer. No pacing timer, sleep, byte-rate constant, device-specific profile, or global OS/socket setting is added.
+
+### Progressive lane admission (opt-in)
+
+`scoutProgressiveAdmission: true` on network distribution (or
+`fileWorkloadLimits.progressiveAdmission: true` on the scout) starts the production
+file-workload qualification on one lane. Only verified completion and empty
+application queues allow adding one candidate lane. The per-lane payload remains
+fixed across admission trials. This tests staggered workload admission; all ICE
+connections are still prepared up front, and it does not promise that Chromium's
+hidden packet allowance will remain clear.
+
+Admission profiles carry `laneAdmission: true`. They are excluded from the four
+identical queue-comparison trials. A failed expansion uses the existing verified,
+clean-subset restriction and re-verification exchange; it cannot admit another
+lane. A failed first lane fails closed rather than handing off untested spares.
+There are at most two extra admission trials (nine total including the existing
+comparison and repair allowance). No sleeps, drain polling, or new deadlines are
+added. Receiver validation checks the next trial, prefix extension by one lane,
+unchanged per-lane workload, queue-policy rule, and settled clean prior trial.
+
+This requires `phantom-file-workload-v5`; ordinary file compatibility is unchanged.
+The SDK leaves the option off by default so callers can select the experiment.

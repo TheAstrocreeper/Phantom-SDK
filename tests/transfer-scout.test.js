@@ -550,3 +550,58 @@ test('peer budget is recomputed for a repaired subset instead of inheriting the 
   assert.equal(report.status,'complete');assert.deepEqual(report.profile.lanes,[1,2]);assert.equal(report.profile.queuePolicy.highWaterMark,524288);assert.equal(report.profile.queuePolicy.lowWaterMark,262144);assert.equal(result.connectionPlan.queuePolicy.highWaterMark,524288);assert.equal(result.fileWorkloadQueueComparison.status,'incomplete');
  }finally{f.close();}
 });
+
+test('progressive admission verifies one lane, then two, before the three-lane queue study',async()=>{
+ const f=fixture({queueModel:true,fileWorkloadLimits:{progressiveAdmission:true,queueComparison:true,batchSize:32,requestWindow:32}});try{
+  await f.nodes[0].forSend(ids[1],{connectionOnly:true});
+  const report=await f.nodes[0].qualifyFileWorkload(ids[1],{chunkSize:65536,fileBytes:8*1024*1024});
+  assert.equal(report.status,'complete');
+  const trials=f.reports.filter(r=>r.i===0&&r.phase==='preflight-file-workload'&&r.status==='started');
+  assert.deepEqual(trials.slice(0,3).map(r=>r.profile.lanes),[[0],[0,1],[0,1,2]]);
+  assert.ok(trials.slice(0,2).every(r=>r.profile.laneAdmission===true));assert.equal(trials[2].profile.laneAdmission,undefined);
+  assert.deepEqual(trials.slice(2,6).map(r=>r.profile.queueTrial),['tight-1','baseline-1','baseline-2','tight-2']);
+  for(let i=1;i<3;i++){
+   const previous=f.reports.findIndex(r=>r.i===0&&r.phase==='preflight-file-workload'&&r.status==='complete'&&r.trial===i);
+   const next=f.reports.findIndex(r=>r.i===0&&r.phase==='preflight-file-workload'&&r.status==='started'&&r.trial===i+1);
+   assert.ok(previous>=0&&next>previous,'next admission waits for receiver verification');
+  }
+  const result=f.nodes[0].get(ids[1]);assert.deepEqual(result.fileWorkloadSelection.lanes,[0,1,2]);assert.ok(['bounded_tradeoff','baseline_retained','incomplete'].includes(result.fileWorkloadQueueComparison.status));assert.notEqual(result.fileWorkloadQueueComparison.reason,'four_verified_trials_required');
+ }finally{f.close();}
+});
+
+test('failed expansion requalifies its clean subset and never opens the next lane',async()=>{
+ const f=fixture({queueModel:true,dropWorkloadLane:(lane,trial)=>trial===2&&lane===1,fileWorkloadLimits:{progressiveAdmission:true,queueComparison:true,batchSize:32,requestWindow:32,requestTimeoutMs:200}});try{
+  await f.nodes[0].forSend(ids[1],{connectionOnly:true});const report=await f.nodes[0].qualifyFileWorkload(ids[1],{chunkSize:65536,fileBytes:8*1024*1024});
+  assert.equal(report.status,'complete');
+  const trials=f.reports.filter(r=>r.i===0&&r.phase==='preflight-file-workload'&&r.status==='started');
+  assert.deepEqual(trials.map(r=>r.profile.lanes),[[0],[0,1],[0]]);assert.equal(trials[2].profile.queueTrial,'reverify');
+  assert.deepEqual(f.nodes[0].get(ids[1]).fileWorkloadSelection.lanes,[0]);
+  assert.equal(f.nodes[0].take(ids[1],null,2,'asset','unverified'),null);
+ }finally{f.close();}
+});
+
+test('failed first admission cannot hand off an untested spare lane',async()=>{
+ const f=fixture({queueModel:true,dropWorkloadLane:0,fileWorkloadLimits:{progressiveAdmission:true,batchSize:2,requestWindow:2,requestTimeoutMs:100}});try{
+  await f.nodes[0].forSend(ids[1],{connectionOnly:true});const report=await f.nodes[0].qualifyFileWorkload(ids[1],{chunkSize:65536,fileBytes:1048576});
+  assert.equal(report.status,'failed');assert.equal(f.nodes[0].get(ids[1]).fileWorkloadSelection.status,'blocked');
+  assert.deepEqual(f.reports.filter(r=>r.i===0&&r.phase==='preflight-file-workload'&&r.status==='started').map(r=>r.profile.lanes),[[0]]);
+ }finally{f.close();}
+});
+
+test('progressive admission rederives peer queue shares at each lane count',async()=>{
+ const f=fixture({queueModel:true,fileWorkloadLimits:{progressiveAdmission:true,queueComparison:true,queueBudgetScope:'peer',batchSize:32,requestWindow:32}});try{
+  await f.nodes[0].forSend(ids[1],{connectionOnly:true});const report=await f.nodes[0].qualifyFileWorkload(ids[1],{chunkSize:65536,fileBytes:8*1024*1024});
+  assert.equal(report.status,'complete');const profiles=f.reports.filter(r=>r.i===0&&r.phase==='preflight-file-workload'&&r.status==='started').slice(0,3).map(r=>r.profile);
+  assert.deepEqual(profiles.map(p=>p.lanes.length),[1,2,3]);assert.deepEqual(profiles.map(p=>p.queuePolicy.highWaterMark),[1048576,524288,349525]);
+ }finally{f.close();}
+});
+
+test('receiver rejects expansion before the first workload has verified',async()=>{
+ const f=fixture({queueModel:true,dropWorkloadReady:true,fileWorkloadLimits:{progressiveAdmission:true,batchSize:2,requestWindow:2}});try{
+  await f.nodes[0].forSend(ids[1],{connectionOnly:true});const pending=f.nodes[0].qualifyFileWorkload(ids[1],{chunkSize:65536,fileBytes:1048576});
+  await settle(()=>f.frames.some(r=>r.body.action==='fileWorkloadReady'));
+  const first=f.frames.find(r=>r.body.action==='fileWorkload').body;
+  assert.equal(f.nodes[1].receive(ids[0],{...first,trial:2,profile:{...first.profile,lanes:[0,1],bytes:first.profile.bytes*2}}),false);
+  f.nodes[0].suspend('test_cancel');assert.equal((await pending).status,'cancelled');
+ }finally{f.close();}
+});
