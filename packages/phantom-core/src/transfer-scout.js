@@ -144,8 +144,9 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
   const receiverEvidence=s=>({status:s.remoteEvidence.size===s.sentRounds.size&&s.sentRounds.size>0?'complete':s.remoteEvidence.size?'partial':'unavailable',
     expectedRounds:s.sentRounds.size,receivedRounds:s.remoteEvidence.size,observations:structuredClone([...s.remoteEvidence.values()].sort((a,b)=>a.round-b.round))});
   function wire(s,body){if(live(s))send(s.peer,{type:'transferScout',version:8,id:s.id,...body});}
-  const workloadLimits={windowComparison:false,windowCandidates:[1,2],progressiveAdmission:false,queueComparison:false,queueBudgetScope:'association',maxConnections:3,batchSize:8,requestWindow:8,requestTimeoutMs:10000,sendTimeoutMs:15000,maxAttemptsPerPeer:2,maxChunkBytes:65536,...fileWorkloadLimits};
+  const workloadLimits={windowComparison:false,windowSampleChunks:null,windowCandidates:[1,2],progressiveAdmission:false,queueComparison:false,queueBudgetScope:'association',maxConnections:3,batchSize:8,requestWindow:8,requestTimeoutMs:10000,sendTimeoutMs:15000,maxAttemptsPerPeer:2,maxChunkBytes:65536,...fileWorkloadLimits};
   requestWindowCandidates(workloadLimits.windowCandidates,workloadLimits.requestWindow);
+  if(workloadLimits.windowSampleChunks!==null&&(!Number.isInteger(workloadLimits.windowSampleChunks)||workloadLimits.windowSampleChunks<1||workloadLimits.windowSampleChunks>64))throw TypeError('Invalid scout request window sample chunks');
   if(typeof workloadLimits.windowComparison!=='boolean'||typeof workloadLimits.progressiveAdmission!=='boolean'||!['association','peer'].includes(workloadLimits.queueBudgetScope)||typeof workloadLimits.queueComparison!=='boolean'||!Number.isInteger(workloadLimits.maxConnections)||workloadLimits.maxConnections<1||workloadLimits.maxConnections>3||!Number.isInteger(workloadLimits.batchSize)||workloadLimits.batchSize<1||workloadLimits.batchSize>64||!Number.isInteger(workloadLimits.requestWindow)||workloadLimits.requestWindow<1||workloadLimits.requestWindow>32||!Number.isFinite(workloadLimits.requestTimeoutMs)||workloadLimits.requestTimeoutMs<=0||!Number.isFinite(workloadLimits.sendTimeoutMs)||workloadLimits.sendTimeoutMs<=0||!Number.isInteger(workloadLimits.maxAttemptsPerPeer)||workloadLimits.maxAttemptsPerPeer<1||workloadLimits.maxAttemptsPerPeer>3||!Number.isInteger(workloadLimits.maxChunkBytes)||workloadLimits.maxChunkBytes<1024||workloadLimits.maxChunkBytes>262144)throw TypeError('Invalid scout file workload limits');
   function validWindowProfile(p){
     if(p.windowTrial===undefined)return p.requestWindow===undefined&&p.windowCandidates===undefined&&p.windowStep===undefined&&p.deliveryWindowCount===undefined;
@@ -230,7 +231,7 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
   async function qualifyRequestWindows(pool,result,{chunkSize,fileBytes,sourceReadBlockBytes}){
     if(!Number.isInteger(chunkSize)||chunkSize<1024||chunkSize>workloadLimits.maxChunkBytes)return null;
     let lanes=[...(result.connectionPlan?.lanes??result.lanes)],last=null,step=0,stage='measure',chosen=null;
-    const chunksPerLane=Math.min(workloadLimits.batchSize,Math.floor(fileBytes/(chunkSize*lanes.length)));
+    const chunksPerLane=Math.min(workloadLimits.batchSize,workloadLimits.windowSampleChunks??workloadLimits.batchSize,Math.floor(fileBytes/(chunkSize*lanes.length)));
     if(chunksPerLane<1)return {version:2,status:'skipped',reason:'file_smaller_than_one_agreed_chunk_per_lane'};
     let candidates=requestWindowCandidates(workloadLimits.windowCandidates,Math.min(workloadLimits.requestWindow,Math.floor(FILE_RECEIVE_SLOTS/lanes.length),chunksPerLane)),order=requestWindowOrder(candidates);
     const reports=[];

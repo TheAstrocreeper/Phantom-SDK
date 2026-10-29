@@ -646,3 +646,16 @@ test('window qualification exercises a full configured batch and records four re
   for(const r of f.nodes[0].get(ids[1]).fileWorkloads){assert.equal(r.profile.chunksPerLane,32);assert.equal(r.profile.deliveryWindowCount,4);assert.deepEqual(r.receiver.deliveryWindows.map(w=>w.messages),[24,48,72,96]);assert.deepEqual(r.receiver.deliveryWindows.map(w=>w.bytes),[24,48,72,96].map(n=>n*65536));assert.ok(r.receiver.deliveryWindows.every((w,i,a)=>w.elapsedMs>=(a[i-1]?.elapsedMs??0)&&w.elapsedMs<=r.receiver.elapsedMs));}
  }finally{f.close();}
 });
+
+test('sample-volume override keeps batch size, candidate window and receiver limits unchanged',async()=>{
+ for(const windowSampleChunks of [8,32]){
+  const f=fixture({queueModel:true,fileWorkloadLimits:[{windowComparison:true,windowSampleChunks,windowCandidates:[2],batchSize:32,requestWindow:32},{batchSize:32,requestWindow:32}]});try{
+   await f.nodes[0].forSend(ids[1],{connectionOnly:true});const report=await f.nodes[0].qualifyFileWorkload(ids[1],{chunkSize:65536,fileBytes:8*1024*1024}),result=f.nodes[0].get(ids[1]);
+   assert.equal(report.status,'complete');assert.equal(result.fileWorkloads.length,2);for(const r of result.fileWorkloads){assert.equal(r.profile.chunksPerLane,windowSampleChunks);assert.equal(r.profile.batchSize,32);assert.equal(r.profile.requestWindow,2);assert.equal(r.receiver.laneRequestWindow,2);assert.equal(r.receiver.deliveryWindows.length,4);}
+   assert.equal(result.connectionPlan.requestPolicy.requestWindow,2);assert.equal(f.nodes[1].take(ids[0],result.id,0,'asset','volume',[0,1,2],2).requestWindow,2);
+  }finally{f.close();}
+ }
+});
+test('invalid sample-volume bounds fail before allocating a scout connection',()=>{
+ for(const windowSampleChunks of [0,-1,65,1.5,'8'])assert.throws(()=>fixture({fileWorkloadLimits:{windowSampleChunks}}),/sample chunks/);
+});

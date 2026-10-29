@@ -156,3 +156,27 @@ per-trial receiver `deliveryWindows`, whole-trial and late-window rate ranges,
 `distributionBatchStarted.requestWindow` records the selected cap on each batch.
 This mode requires `phantom-file-workload-v7`; ordinary file compatibility remains.
 Native Android transport remains outside this change.
+
+### Controlled preflight-volume comparison
+
+`scoutRequestWindowSampleChunks` optionally caps chunks per lane in the request-window
+study (integer 1–64, further bounded by the configured batch and available file bytes).
+Omitting it keeps full-batch qualification. It changes synthetic sample volume only:
+actual file batch size, negotiated chunk size, queue boundaries, receive slots and
+selected request-window enforcement remain unchanged. The receiver validates the
+existing workload-v7 profile; it need not enable the initiating source's sample cap.
+
+To isolate volume from settings, both diagnostic arms use candidates `[2]`, repeated
+twice. Eight chunks per lane give 12 MiB total scout payload; 32 give 48 MiB with
+three lanes and 256 KiB chunks. Both retain their own freshly qualified connections.
+A single candidate is verified without claiming a comparative optimum. Use fresh
+sessions and short/full/full/short order, comparing selection-to-completion time,
+not file throughput alone. These are diagnostic controls, not new production defaults.
+
+Share's explicit source-page query `?scoutVolume=short` or `?scoutVolume=full` selects
+those arms. Normal URLs retain adaptive `[1,2]` full-batch qualification. There are
+no public test buttons, new servers, pacing delays or recovery timers. Existing
+compatibility transfer transitions report preparing, sharing and sent timestamps;
+SDK browser checks additionally report source-clock preparation, transfer and total
+milliseconds. Internet performance still requires the real peer path; local Chrome
+checks establish protocol, byte-budget and handoff correctness only.
