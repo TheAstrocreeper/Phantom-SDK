@@ -390,14 +390,14 @@ test('file workload uses production request service, agreed chunks, batch bytes 
  }finally{f.close();}
 });
 test('failed association is retired at both ends and the verified subset is retested before handoff',async()=>{
- const f=fixture({queueModel:true,dropWorkloadLane:0,fileWorkloadLimits:{batchSize:2,requestWindow:2,requestTimeoutMs:200,maxChunkBytes:65536}});try{
+ const releases=new Map();const f=fixture({queueModel:true,dropWorkloadLane:0,prepareTransport:async context=>({report:{status:'observed'},release(){const key=context.peer+':'+context.lane;releases.set(key,(releases.get(key)??0)+1);}}),fileWorkloadLimits:{batchSize:2,requestWindow:2,requestTimeoutMs:200,maxChunkBytes:65536}});try{
   await f.nodes[0].forSend(ids[1],{connectionOnly:true});const report=await f.nodes[0].qualifyFileWorkload(ids[1],{chunkSize:65536,fileBytes:1048576});
   assert.equal(report.status,'complete');assert.deepEqual(report.profile.lanes,[1,2]);const result=f.nodes[0].get(ids[1]);assert.equal(result.fileWorkloads.length,2);assert.equal(result.fileWorkloads[0].status,'failed');assert.deepEqual(result.fileWorkloadSelection.lanes,[1,2]);assert.deepEqual(result.connectionPlan.lanes,[1,2]);assert.equal(result.connectionPlan.laneDecision.status,'workload_verified');
   assert.ok(f.pcs.filter(pc=>pc.channels.some(ch=>ch.label==='phantom-distribution-scout')).filter(pc=>pc.connectionState==='closed').length===2);
   for(const [i,node]of f.nodes.entries())assert.equal(node.take(ids[1-i],result.id,0,'asset','forbidden'),null);
   assert.equal(f.nodes[0].receive(ids[1],{type:'transferScout',version:8,id:result.id,action:'fileWorkloadResult',trial:1,status:'failed',reason:'stale',receiver:null}),false);
-  assert.equal(f.nodes[0].get(ids[1]).fileWorkload.status,'complete');
- }finally{f.close();}
+  assert.equal(f.nodes[0].get(ids[1]).fileWorkload.status,'complete');for(const peer of ids){assert.equal(releases.get(peer+':0'),1);assert.equal(releases.get(peer+':1'),undefined);}
+ }finally{f.close();}assert.equal(releases.size,6);assert.ok([...releases.values()].every(count=>count===1));
 });
 
 test('cancelling during file workload readiness settles preparation and releases every association',async()=>{
