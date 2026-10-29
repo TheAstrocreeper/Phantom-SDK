@@ -117,7 +117,7 @@ try{
   if(mode==='window'){
    const p=result.selection.fileWorkload.profile,w=result.selection.connectionPlan.requestPolicy;
    assert.equal(result.selection.fileWorkload.status,'complete');assert.equal(w.status,'workload_verified');assert.equal(w.requestWindow,p.requestWindow);
-   assert.deepEqual(result.selection.fileWorkloads.slice(0,windowCandidates.length*2).map(r=>r.profile.requestWindow),[...windowCandidates,...windowCandidates.toReversed()]);
+   const measured=result.selection.fileWorkloads.filter(r=>r.profile.windowTrial==='measure');assert.equal(result.selection.fileWorkloadWindowComparison.adaptive,true);assert.deepEqual(measured.slice(0,windowCandidates.length).map(r=>r.profile.requestWindow),windowCandidates);assert.ok(measured.length<=windowCandidates.length*2);for(const n of windowCandidates)assert.ok(measured.filter(r=>r.profile.requestWindow===n).length<=2);
    for(const trial of result.selection.fileWorkloads){assert.equal(trial.profile.chunksPerLane,windowSampleChunks??32);assert.equal(trial.profile.deliveryWindowCount,4);assert.equal(trial.receiver.deliveryWindows.length,4);assert.equal(trial.receiver.deliveryWindows.at(-1).bytes,trial.profile.bytes);assert.equal(trial.receiver.deliveryWindows.at(-1).messages,trial.profile.chunksPerLane*trial.profile.lanes.length);}
    assert.equal(result.windowApplications.length,result.selection.lanes.length);assert.ok(result.windowApplications.every(r=>r.requestWindow===w.requestWindow));
    assert.ok(result.batchWindows.length>result.windowApplications.length,'must exercise later batches');assert.ok(result.batchWindows.every(r=>r.requestWindow===w.requestWindow));
