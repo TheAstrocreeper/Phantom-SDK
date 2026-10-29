@@ -166,7 +166,7 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
     const state={profile,source,trial:(pool.workloadReports?.length??0)+1,settled:false,controller,completed,driver:null,stop(reason){finish('cancelled',reason);}};pool.fileWorkload=state;pool.workloadGuard=true;pool.qualifiedLanes=null;
     function finish(status,reason,remote=null){
       if(settled)return;settled=true;state.settled=true;
-      const report={version:2,trial:state.trial,status,reason,profile,sourceLimits:source?{requestTimeoutMs:workloadLimits.requestTimeoutMs,sendTimeoutMs:workloadLimits.sendTimeoutMs}:null,sourceSubmission:source?submissions.map(row=>({...row,finalQueue:state.driver?.snapshot().find(q=>q.lane===row.lane)??null})):null,receiver:source?(remote?{...remote,provenance:'peer_reported'}:null):{clock:'receiver_monotonic',elapsedMs:performance.now()-started,lanes:arrivals,retries,queues:state.driver?.snapshot()??[],requestWindow:workloadLimits.requestWindow,laneRequestWindow:Math.max(1,Math.min(workloadLimits.requestWindow,Math.floor(FILE_RECEIVE_SLOTS/profile.lanes.length))),requestTimeoutMs:workloadLimits.requestTimeoutMs,maxAttemptsPerPeer:workloadLimits.maxAttemptsPerPeer},storage:'verified_memory_sink',coverage:'production_file_service_and_channel_sender',limitation:'one_bounded_batch_per_lane_is_not_a_link_capacity_or_long_file_guarantee'};
+      const report={version:2,trial:state.trial,status,reason,profile,sourceLimits:source?{requestTimeoutMs:workloadLimits.requestTimeoutMs,sendTimeoutMs:workloadLimits.sendTimeoutMs}:null,sourceSubmission:source?submissions.map(row=>({...row,finalQueue:state.driver?.snapshot().find(q=>q.lane===row.lane)??null})):null,...(state.sourcePressure?{sourcePressure:state.sourcePressure}:{}),receiver:source?(remote?{...remote,provenance:'peer_reported'}:null):{clock:'receiver_monotonic',elapsedMs:performance.now()-started,lanes:arrivals,retries,queues:state.driver?.snapshot()??[],requestWindow:workloadLimits.requestWindow,laneRequestWindow:Math.max(1,Math.min(workloadLimits.requestWindow,Math.floor(FILE_RECEIVE_SLOTS/profile.lanes.length))),requestTimeoutMs:workloadLimits.requestTimeoutMs,maxAttemptsPerPeer:workloadLimits.maxAttemptsPerPeer},storage:'verified_memory_sink',coverage:'production_file_service_and_channel_sender',limitation:'one_bounded_batch_per_lane_is_not_a_link_capacity_or_long_file_guarantee'};
       state.report=structuredClone(report);pool.workloadReports=[...(pool.workloadReports??[]),state.report].slice(-7);pool.workloadGuard=true;pool.qualifiedLanes=status==='complete'?[...profile.lanes]:null;
       workloadTransport(pool,profile,state.trial,'end');controller.abort();state.driver?.close();for(const row of pool.lanes)row.dc.onmessage=null;
       if(parked===pool&&!closed&&trusted(pool.peer)){
@@ -186,10 +186,26 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
       controller.abort();state.driver?.close();
       send(pool.peer,{type:'transferScout',version:8,id:pool.id,action:'fileWorkloadStop',trial:state.trial,reason:state.sourceFailure});
     }
+    state.remoteVerified=new Set();
+    state.checkPressure=async()=>{
+      if(!source||settled||state.sourceFailure||!state.remoteVerified.size)return;
+      // A verified-lane event provides a bounded observation point. Never poll
+      // stats or mistake old totals, changed routes or missing counters for loss.
+      const observations=await Promise.all(profile.lanes.filter(lane=>!state.remoteVerified.has(lane)).map(async lane=>{
+        const row=pool.lanes[lane],before=row['workloadCounters'+state.trial];
+        const report=await scoutConnection(row.pc,{channel:row.dc,runtime});
+        return {lane,before,current:report.transportCounters,change:compareScoutTransport(before,report.transportCounters),bufferedBytes:row.dc.bufferedAmount};
+      }));
+      if(settled||state.sourceFailure||parked!==pool||closed)return;
+      const pressured=observations.filter(row=>!state.remoteVerified.has(row.lane)&&row.bufferedBytes>0&&row.change.counters.packetsDiscardedOnSend.status==='observed'&&row.change.counters.packetsDiscardedOnSend.value>0);
+      if(!pressured.length)return;
+      state.sourcePressure={reason:'local_send_discards_after_verified_lane',verifiedLanes:[...state.remoteVerified].sort((a,b)=>a-b),observations:pressured};
+      fail(Error('local_send_discards_after_verified_lane'));
+    };
     const driver=createScoutFileWorkload({peer:pool.peer,lanes:profile.lanes,channels:pool.lanes.map(r=>r.dc),pcs:pool.lanes.map(r=>r.pc),bytes:profile.bytes,chunkSize:profile.chunkSize,batchSize:profile.batchSize,sourceReadBlockBytes:profile.sourceReadBlockBytes,requestWindow:workloadLimits.requestWindow,requestTimeoutMs:workloadLimits.requestTimeoutMs,sendTimeoutMs:workloadLimits.sendTimeoutMs,maxAttemptsPerPeer:workloadLimits.maxAttemptsPerPeer,queuePolicy:profile.queuePolicy,messageBytes:profile.messageBytes,scopeId:'scout:'+pool.id+':'+state.trial,crypto,signal:controller.signal,
       onChunk(lane,bytes){const row=arrivals.find(r=>r.lane===lane),at=performance.now()-started;if(row.lastAtMs!==null)row.maxGapMs=Math.max(row.maxGapMs,at-row.lastAtMs);row.firstAtMs??=at;row.lastAtMs=at;row.bytes+=bytes.byteLength;row.messages++;},
       onSend(lane,sample){const row=submissions.find(r=>r.lane===lane);if(sample.coalesced){row.coalescedRetries++;return;}row.bytes+=sample.bytes;row.messages++;row.peakBufferedBytes=Math.max(row.peakBufferedBytes,sample.bufferedBytes);row.bufferWaitMs+=sample.bufferWaitMs;},
-      onLaneComplete(lane){arrivals.find(row=>row.lane===lane).verified=true;},
+      onLaneComplete(lane){arrivals.find(row=>row.lane===lane).verified=true;if(!settled&&!source)send(pool.peer,{type:'transferScout',version:8,id:pool.id,action:'fileWorkloadLaneVerified',trial:state.trial,lane});},
       onRetry(lane,payload){
         if(settled)return;
         const verifiedLanes=arrivals.filter(row=>row.verified).map(row=>row.lane);
@@ -568,7 +584,7 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
         }
         return false;
       }
-      if(['fileWorkload','fileWorkloadReady','fileWorkloadResult','fileWorkloadStop'].includes(body.action)){
+      if(['fileWorkload','fileWorkloadReady','fileWorkloadResult','fileWorkloadStop','fileWorkloadLaneVerified'].includes(body.action)){
         const pool=parked;if(!pool||pool.peer!==peer||pool.id!==body.id||pool.asset)return false;
         if(body.action==='fileWorkload'){
           const previous=pool.fileWorkload,order=['tight-1','baseline-1','baseline-2','tight-2','baseline-selected'];
@@ -585,6 +601,10 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
           return true;
         }
         if(!w?.source||w.settled||body.trial!==w.trial)return false;
+        if(body.action==='fileWorkloadLaneVerified'){
+          if(!w.profile.lanes.includes(body.lane)||w.remoteVerified.has(body.lane))return false;
+          w.remoteVerified.add(body.lane);void w.checkPressure().catch(()=>{});return true;
+        }
         if(body.action==='fileWorkloadReady'){
           if(w.started)return false;w.started=true;void w.driver.prepare().then(()=>w.driver.start()).catch(e=>w.finish('failed',e.message));return true;
         }

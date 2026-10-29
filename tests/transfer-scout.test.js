@@ -506,3 +506,29 @@ test('cancellation settles a sender waiting for receiver evidence after a send f
   f.close();assert.equal((await pending).status,'cancelled');assert.ok(f.pcs.every(pc=>pc.connectionState==='closed'));
  }finally{f.close();}
 });
+
+function pressureStats({old=false,missing=false,changed=false}={}){
+ const calls=new Map();return async pc=>{const n=(calls.get(pc)??0)+1;calls.set(pc,n);const pressure=pc.scoutNode===0&&pc.channels.some(ch=>ch.bufferedAmount>0),pair=changed?'pair-'+n:'pair';
+ return new Map([['transport',{id:'transport',type:'transport',selectedCandidatePairId:pair}],[pair,{id:pair,type:'candidate-pair',timestamp:n*100,packetsDiscardedOnSend:missing?undefined:old?5:pressure?5:0,bytesDiscardedOnSend:pressure?6000:0}]]);
+ };
+}
+test('verified receipt plus new local send discards ends parallel scouting without waiting for timeout',async()=>{
+ const f=fixture({queueModel:true,freezeWorkloadLane:0,stats:pressureStats(),fileWorkloadLimits:{queueComparison:true,batchSize:8,requestWindow:32,requestTimeoutMs:2000,sendTimeoutMs:2000,maxChunkBytes:262144}});
+ try{
+  await f.nodes[0].forSend(ids[1],{connectionOnly:true});
+  const report=await f.nodes[0].qualifyFileWorkload(ids[1],{chunkSize:262144,fileBytes:24*1024*1024});
+  const result=f.nodes[0].get(ids[1]),first=result.fileWorkloads[0];
+  assert.equal(first.reason,'local_send_discards_after_verified_lane');
+  assert.ok(first.sourcePressure.observations.some(r=>r.lane===0&&r.change.counters.packetsDiscardedOnSend.value===5));
+  assert.equal(report.status,'complete');assert.ok(!result.connectionPlan.lanes.includes(0));
+  assert.ok(result.connectionPlan.lanes.length>0);assert.equal(result.fileWorkloads.length,2);
+ }finally{f.close();}
+});
+for(const mode of ['old','missing','changed'])test('pressure shortcut ignores '+mode+' transport counters',async()=>{
+ const f=fixture({queueModel:true,freezeWorkloadLane:0,stats:pressureStats({[mode]:true}),fileWorkloadLimits:{queueComparison:true,batchSize:8,requestWindow:32,requestTimeoutMs:2000,sendTimeoutMs:100,maxChunkBytes:262144}});
+ try{
+  await f.nodes[0].forSend(ids[1],{connectionOnly:true});
+  const report=await f.nodes[0].qualifyFileWorkload(ids[1],{chunkSize:262144,fileBytes:24*1024*1024});
+  const first=f.nodes[0].get(ids[1]).fileWorkloads[0];assert.notEqual(first.reason,'local_send_discards_after_verified_lane');assert.equal(first.sourcePressure,undefined);assert.equal(report.status,'complete');
+ }finally{f.close();}
+});
