@@ -1,4 +1,4 @@
-name: Native Chrome bounded feed comparison
+name: Native Chrome association layout comparison
 on:
   push:
     branches: ['codex/worm-stop-validation']
@@ -14,4 +14,4 @@ jobs:
         with:
           node-version: '22'
       - run: npm ci --prefix tools/swarm
-      - run: PHANTOM_CHROMIUM_EXECUTABLE="$(command -v google-chrome)" node tools/perf/bounded-feed-browser.mjs
+      - run: PHANTOM_CHROMIUM_EXECUTABLE="$(command -v google-chrome)" node tools/perf/association-layout-browser.mjs
