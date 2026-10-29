@@ -1,4 +1,4 @@
-name: Production file request window comparison
+name: Request window selection and handoff validation
 on:
   push:
     branches: ['codex/worm-stop-validation']
@@ -14,4 +14,5 @@ jobs:
         with:
           node-version: '22'
       - run: npm ci --prefix tools/swarm
-      - run: PHANTOM_CHROMIUM_EXECUTABLE="$(command -v google-chrome)" node tools/perf/request-window-browser.mjs
+      - run: PHANTOM_CHROMIUM_EXECUTABLE="$(command -v google-chrome)" node tools/perf/transfer-scout-browser.mjs
+      - run: PHANTOM_SCOUT_AGREED=1 PHANTOM_CHROMIUM_EXECUTABLE="$(command -v google-chrome)" node tools/perf/scout-preflight-browser.mjs

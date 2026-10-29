@@ -15,7 +15,7 @@ await new Promise(r=>server.listen(0,'127.0.0.1',r));let browser;
 try{
  browser=await chromium.launch({headless:true,executablePath:process.env.PHANTOM_CHROMIUM_EXECUTABLE,args:['--no-sandbox']});
  const page=await browser.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.stack??e.message));await page.goto(`http://127.0.0.1:${server.address().port}/`);
- for(const mode of ['complete','cancel','send','pair','baseline','queue','message','tradeoff','workload','repair','repeat','peer-budget','progressive']){
+ for(const mode of ['complete','cancel','send','pair','baseline','queue','message','tradeoff','workload','repair','repeat','peer-budget','progressive','window']){
   const result=await page.evaluate(async mode=>{
    const {createNetworkDistribution}=await import('/packages/phantom-core/src/network-distribution.js');
    const {createAdminIdentity}=await import('/packages/phantom-core/src/authorization.js');
@@ -23,18 +23,18 @@ try{
    const {scoutClock}=await import('/tests/fixtures/scout-clock.js');
    const {modelReceiverEvidence}=await import('/tests/fixtures/scout-receiver-model.js');
    const clocks=ids.map(()=>scoutClock({winner:mode==='tradeoff'?[]:mode==='baseline'?[0,1,2]:[1,2],queueWinner:mode==='queue',messageWinner:mode==='message',uniformProfile:mode==='tradeoff'}));
-   const callbacks=new Map(),events=[],pcs=[],scouted=new Set(),filePCs=new Set();let peak=0,fileQueuePeak=0,filePayloadPeak=0;const source=mode==='send'?1:0,target=1-source;
+   const callbacks=new Map(),events=[],pcs=[],scouted=new Set(),filePCs=new Set(),requestSets=new Map(),requestPeaks=new Map();let peak=0,fileQueuePeak=0,filePayloadPeak=0;const source=mode==='send'?1:0,target=1-source;
    class RTC extends RTCPeerConnection{
     constructor(config){super(config);pcs.push(this);this.addEventListener('datachannel',e=>this.track(e.channel.label,e.channel));}
-    track(label,dc){if(mode==='tradeoff'&&label==='phantom-distribution-scout')dc.addEventListener('message',event=>{if(typeof event.data==='string'&&JSON.parse(event.data).action==='ack')clocks[this.scoutNode]?.ack();});if(label==='phantom-distribution-scout')scouted.add(this);if(mode==='repair'&&label==='phantom-distribution-scout'&&this.scoutNode===source){const lane=pcs.filter(pc=>pc.scoutNode===source&&scouted.has(pc)).indexOf(this),nativeSend=dc.send.bind(dc);dc.send=data=>{let binary=false;if(typeof data==='string'){const frame=JSON.parse(data);binary=['binary','binary-fragment'].includes(frame.kind);}if(lane===1&&(data instanceof ArrayBuffer||binary))return;return nativeSend(data);};}if(label==='phantom-distribution')filePCs.add(this);}
+    track(label,dc){if(mode==='tradeoff'&&label==='phantom-distribution-scout')dc.addEventListener('message',event=>{if(typeof event.data==='string'&&JSON.parse(event.data).action==='ack')clocks[this.scoutNode]?.ack();});if(label==='phantom-distribution-scout')scouted.add(this);if(mode==='repair'&&label==='phantom-distribution-scout'&&this.scoutNode===source){const lane=pcs.filter(pc=>pc.scoutNode===source&&scouted.has(pc)).indexOf(this),nativeSend=dc.send.bind(dc);dc.send=data=>{let binary=false;if(typeof data==='string'){const frame=JSON.parse(data);binary=['binary','binary-fragment'].includes(frame.kind);}if(lane===1&&(data instanceof ArrayBuffer||binary))return;return nativeSend(data);};}if(label==='phantom-distribution')filePCs.add(this);if(mode==='window'&&label==='phantom-distribution'&&this.scoutNode===target){const pending=new Set();requestSets.set(dc,pending);requestPeaks.set(dc,0);const send=dc.send.bind(dc);dc.send=data=>{if(typeof data==='string'){const m=JSON.parse(data);if(m.kind==='message'&&m.sys==='PHANTOM_FILE_REQUEST'){pending.add(m.file.index);requestPeaks.set(dc,Math.max(requestPeaks.get(dc),pending.size));}}return send(data);};}}
     createDataChannel(label,options){const dc=super.createDataChannel(label,options);this.track(label,dc);if(label==='phantom-distribution'){const send=dc.send.bind(dc);dc.send=data=>{const result=send(data);fileQueuePeak=Math.max(fileQueuePeak,dc.bufferedAmount);if(typeof data!=='string')filePayloadPeak=Math.max(filePayloadPeak,data.byteLength??0);return result;};}return dc;}
    }
    const services=ids.map((id,i)=>createNetworkDistribution({networkId:'worm-browser',adminPublicKey:admin.publicKey,
     runtime:{crypto,performance:(mode==='pair'||mode==='baseline'||mode==='queue'||mode==='message'||mode==='tradeoff')?clocks[i]:performance,RTCPeerConnection:class extends RTC{constructor(config){super(config);this.scoutNode=i;}}},lifecycle:{issue:(action,target,fields)=>admin.sign({networkId:'worm-browser',action,target,...fields,operationId:crypto.randomUUID()})},
     core:{getState:()=>({peerId:id,leader,mirror:ids[1],role:i===2?'syscon1':i===1?'syscon2':'peer',state:'admitted',admitted:true}),
      onEvent(fn){callbacks.set(id,fn);return()=>callbacks.delete(id);},command(type,{to,frame}){if(['pair','baseline','queue','message','tradeoff'].includes(mode))frame=modelReceiverEvidence(frame,{winner:mode==='tradeoff'?[]:mode==='baseline'?[0,1,2]:[1,2],queueWinner:mode==='queue',messageWinner:mode==='message'});if(type==='PHANTOM_DIST_SEND')queueMicrotask(()=>callbacks.get(to)?.({type:'PHANTOM_DIST',payload:{from:id,frame}}));}},
-    options:{intervalMs:10,requestTimeoutMs:mode==='repair'?2000:10000,batchSize:['queue','message','workload','repair','repeat','peer-budget','progressive'].includes(mode)?32:2,requestWindow:['queue','message','workload','repair','repeat','peer-budget','progressive'].includes(mode)?32:8,maxChunkBytes:262144,assignedRanges:true,transferLanes:3,capabilityExchange:true,transferScout:true,scoutComparison:mode==='message'?'message':'queue',fileTimeline:true,scoutBeforeSend:['send','workload','repair','repeat','peer-budget','progressive'].includes(mode),scoutProgressiveAdmission:mode==='progressive',scoutQueueComparison:['repeat','peer-budget','progressive'].includes(mode),scoutQueueBudgetScope:mode==='peer-budget'?'peer':'association',rtcConfiguration:{iceServers:[]}},
-    emit(type,data){if(type==='distributionScout')clocks[i].report(data);events.push({i,type,data});if(i===2&&type==='distributionJob')peak=Math.max(peak,services[2].snapshot().jobs.length);}}));
+    options:{intervalMs:10,requestTimeoutMs:mode==='repair'?2000:10000,batchSize:['queue','message','workload','repair','repeat','peer-budget','progressive','window'].includes(mode)?32:2,requestWindow:['queue','message','workload','repair','repeat','peer-budget','progressive','window'].includes(mode)?32:8,maxChunkBytes:262144,assignedRanges:true,transferLanes:3,capabilityExchange:true,transferScout:true,scoutComparison:mode==='message'?'message':'queue',fileTimeline:true,scoutBeforeSend:['send','workload','repair','repeat','peer-budget','progressive','window'].includes(mode),scoutRequestWindowComparison:mode==='window',scoutProgressiveAdmission:mode==='progressive',scoutQueueComparison:['repeat','peer-budget','progressive','window'].includes(mode),scoutQueueBudgetScope:mode==='peer-budget'?'peer':'association',rtcConfiguration:{iceServers:[]}},
+    emit(type,data){if(mode==='window'&&i===target&&type==='distributionProgress')for(const pending of requestSets.values())pending.delete(data.index);if(type==='distributionScout')clocks[i].report(data);events.push({i,type,data});if(i===2&&type==='distributionJob')peak=Math.max(peak,services[2].snapshot().jobs.length);}}));
    for(const fn of callbacks.values())fn({type:'PRESENCE_ROSTER',payload:{list:ids.map(hKey=>({hKey}))}});
    const wait=async predicate=>{const end=performance.now()+45000;while(!predicate()){const error=events.find(e=>e.type==='distributionError');if(error)throw Error(JSON.stringify(error));if(performance.now()>end)throw Error('browser test deadline: '+JSON.stringify(events.slice(-6)));await new Promise(r=>setTimeout(r,10));}};
    try{
@@ -69,7 +69,7 @@ try{
     let selection=services[source].getScout(ids[target]);
     services[source].proposePlan(ids[target],{maxPayloadBytes:262144,allowFragmentation:true});await wait(()=>services[source].getPlan(ids[target]));
     const scoutPCs=[...pcs];
-    const bytes=Uint8Array.from({length:(['workload','repair','peer-budget','progressive'].includes(mode)?32:['queue','message'].includes(mode)?8:4)*1024*1024+17},(_,i)=>i%251),file=new File([bytes],'worm-fixture.bin');
+    const bytes=Uint8Array.from({length:(['workload','repair','peer-budget','progressive','window'].includes(mode)?32:['queue','message'].includes(mode)?8:4)*1024*1024+17},(_,i)=>i%251),file=new File([bytes],'worm-fixture.bin');
     const prepared=await services[source].prepareAgreed(file,ids[target],{sourceReadBlockBytes:4*1024*1024});
     selection=services[source].getScout(ids[target]);
     await services[source].publish(file,{prepared,recipients:[ids[target]]});
@@ -80,7 +80,7 @@ try{
     const timeline=events.filter(e=>e.type==='distributionTimeline');
     const sourceStages=timeline.filter(e=>e.i===source&&e.data.index===0),receiverStages=timeline.filter(e=>e.i===target&&e.data.index===0);
     const traced=sourceStages.some(e=>e.data.stage==='submit-complete')&&receiverStages.some(e=>e.data.stage==='write-complete')&&sourceStages.some(s=>receiverStages.some(r=>s.data.jobId===r.data.jobId&&s.data.batch===r.data.batch));
-    return {mode,traced,clock:(mode==='pair'||mode==='baseline'||mode==='queue'||mode==='message'||mode==='tradeoff')?'synthetic_selection_only':'native',selection,peak,fileQueuePeak,filePayloadPeak,messageApplications:events.filter(e=>e.i===source&&e.data.phase==='preflight-message-applied').map(e=>e.data),queueApplications:events.filter(e=>e.i===source&&e.data.phase==='preflight-queue-applied').map(e=>e.data),handoffs:events.filter(e=>e.i===source&&e.data.phase==='preflight-handoff'&&e.data.status==='claimed').map(e=>e.data.lane),fileAssociations:filePCs.size,allFileAssociationsScouted:[...filePCs].every(pc=>scouted.has(pc)),scoutAssociations:scoutPCs.length,scoutClosed:scoutPCs.every(pc=>pc.connectionState==='closed'),
+    return {mode,traced,receiverRequestPeaks:[...requestPeaks.values()],windowApplications:events.filter(e=>e.i===target&&e.data.phase==='preflight-window-applied').map(e=>e.data),batchWindows:events.filter(e=>e.i===target&&e.type==='distributionBatchStarted').map(e=>e.data),clock:(mode==='pair'||mode==='baseline'||mode==='queue'||mode==='message'||mode==='tradeoff')?'synthetic_selection_only':'native',selection,peak,fileQueuePeak,filePayloadPeak,messageApplications:events.filter(e=>e.i===source&&e.data.phase==='preflight-message-applied').map(e=>e.data),queueApplications:events.filter(e=>e.i===source&&e.data.phase==='preflight-queue-applied').map(e=>e.data),handoffs:events.filter(e=>e.i===source&&e.data.phase==='preflight-handoff'&&e.data.status==='claimed').map(e=>e.data.lane),fileAssociations:filePCs.size,allFileAssociationsScouted:[...filePCs].every(pc=>scouted.has(pc)),scoutAssociations:scoutPCs.length,scoutClosed:scoutPCs.every(pc=>pc.connectionState==='closed'),
      applied:applied?.data??null,samples:events.filter(e=>e.type==='distributionScout'&&e.data.phase==='preflight-sample').length,
      incoming:events.filter(e=>e.type==='distributionScout'&&e.data.phase==='preflight-receive-sample').map(e=>e.data),
      transportEvidence:events.filter(e=>e.type==='distributionScout'&&e.data.transport).map(e=>({endpoint:e.i,phase:e.data.phase,...e.data.transport})),
@@ -106,6 +106,15 @@ try{
    assert.deepEqual(result.applied.lanes,lanes);assert.deepEqual(result.handoffs.sort(),lanes);assert.equal(result.fileAssociations,lanes.length*2);assert.equal(result.peak,lanes.length);
    assert.deepEqual(result.selection.fileWorkloadSelection.rejected,[0,1,2].filter(l=>!lanes.includes(l)));
    if(first.reason==='local_send_discards_after_verified_lane')assert.ok(first.sourcePressure.observations.every(r=>r.bufferedBytes>0&&r.change.counters.packetsDiscardedOnSend.status==='observed'&&r.change.counters.packetsDiscardedOnSend.value>0));
+  }
+  if(mode==='window'){
+   const p=result.selection.fileWorkload.profile,w=result.selection.connectionPlan.requestPolicy;
+   assert.equal(result.selection.fileWorkload.status,'complete');assert.equal(w.status,'workload_verified');assert.equal(w.requestWindow,p.requestWindow);
+   assert.deepEqual(result.selection.fileWorkloads.slice(0,4).map(r=>r.profile.requestWindow),[1,2,2,1]);
+   assert.equal(result.windowApplications.length,result.selection.lanes.length);assert.ok(result.windowApplications.every(r=>r.requestWindow===w.requestWindow));
+   assert.ok(result.batchWindows.length>result.windowApplications.length,'must exercise later batches');assert.ok(result.batchWindows.every(r=>r.requestWindow===w.requestWindow));
+   assert.ok(result.receiverRequestPeaks.length>0&&result.receiverRequestPeaks.every(n=>n<=w.requestWindow));assert.ok(result.receiverRequestPeaks.some(n=>n===w.requestWindow));
+   assert.deepEqual(result.handoffs.sort(),result.selection.lanes);
   }
   if(mode==='progressive'){
    const trials=result.selection.fileWorkloads;
