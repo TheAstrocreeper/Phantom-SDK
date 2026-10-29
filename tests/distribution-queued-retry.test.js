@@ -7,7 +7,7 @@ const ids=['1111111111111111','2222222222222222'];
 const turn=()=>new Promise(resolve=>setImmediate(resolve));
 async function until(fn){for(let i=0;i<1500;i++){if(fn())return;await new Promise(r=>setTimeout(r,2));}assert.fail('expected transport state');}
 for(const config of [{name:'reliable ordered',coalesce:true},{name:'unordered',coalesce:false,ordered:false},{name:'partially reliable',coalesce:false,maxRetransmits:0}])test(`${config.name}: retries respect queue ownership and drain`,async()=>{
- const admin=await createAdminIdentity(),callbacks=new Map(),events=[];let sourceChannel,request,headers=0,binaries=0,hold=false;
+ const admin=await createAdminIdentity(),callbacks=new Map(),events=[],held=[];let sourceChannel,request,headers=0,binaries=0,hold=false;
  const RTC=memoryRTC({onSend(data,ch){
   ch.ordered=config.ordered??true;ch.maxRetransmits=config.maxRetransmits??null;
   if(typeof data==='string'){
@@ -15,7 +15,7 @@ for(const config of [{name:'reliable ordered',coalesce:true},{name:'unordered',c
    if(m.kind==='message'&&m.sys==='PHANTOM_FILE_REQUEST')request={ch,data};
    if(m.kind==='binary'){sourceChannel=ch;hold=true;headers++;}
   }
-  if(ch===sourceChannel&&hold){ch.bufferedAmount+=typeof data==='string'?new TextEncoder().encode(data).byteLength:data.byteLength;if(data instanceof ArrayBuffer)binaries++;return false;}
+  if(ch===sourceChannel&&hold){held.push({data,ch});ch.bufferedAmount+=typeof data==='string'?new TextEncoder().encode(data).byteLength:data.byteLength;if(data instanceof ArrayBuffer)binaries++;return false;}
   return true;
  }});
  const ds=ids.map((id,i)=>createNetworkDistribution({networkId:'queued-retry',adminPublicKey:admin.publicKey,runtime:{crypto,RTCPeerConnection:RTC},
@@ -27,8 +27,11 @@ for(const config of [{name:'reliable ordered',coalesce:true},{name:'unordered',c
   await ds[0].publish(new Blob([new Uint8Array(1024)]),{chunkSize:1024,recipients:[ids[1]]});
   await until(()=>binaries===1&&request);await turn();
   const retry=()=>request.ch.other.onmessage?.({data:request.data});
-  retry();await until(()=>config.coalesce?events.some(e=>e.type==='distributionTimeline'&&e.data.stage==='retry-coalesced'):binaries===2);
+  retry();await until(()=>config.coalesce?(binaries>1||events.some(e=>e.type==='distributionTimeline'&&e.data.stage==='retry-coalesced')):binaries===2);
   assert.equal(binaries,config.coalesce?1:2);assert.equal(headers,binaries);
   const before=binaries;sourceChannel.bufferedAmount=0;retry();await until(()=>binaries===before+1);assert.equal(headers,binaries,'drained originals remain eligible for retry');
+  hold=false;sourceChannel.bufferedAmount=0;for(const {data,ch}of held)ch.other.onmessage?.({data});
+  await until(()=>events.some(e=>e.type==='distributionComplete'));
+  const done=events.find(e=>e.type==='distributionComplete');assert.deepEqual(new Uint8Array(await done.data.blob.arrayBuffer()),new Uint8Array(1024));
  }finally{ds.forEach(d=>d.close());}
 });
