@@ -507,7 +507,7 @@ export function createNetworkDistribution({core, networkId, adminPublicKey, life
         if(!Array.isArray(recipients)||recipients.length>128||recipients.some(id=>typeof id!=='string'||! /^[0-9a-f]{16}$/.test(id)))throw new TypeError('Invalid publication recipients');
         recipients=[...new Set(recipients)].sort();
       }
-      let manifest,setup=recipients?.length===1?selectedSetup(recipients[0]):null;preflight?.suspend();
+      let manifest,setup=recipients?.length===1?selectedSetup(recipients[0]):null;if(setup?.fileWorkloadSelection?.status==='blocked')throw Error('Could not verify a working file connection. Reconnect and try again.');preflight?.suspend();
       if(prepared!==undefined){
         const record=preparedFiles.get(prepared);
         if(!record||record.file!==file||Object.keys(settings).length)throw new TypeError('Use an unchanged preparation from this distribution session without file settings');

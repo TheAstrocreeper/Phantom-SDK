@@ -147,7 +147,7 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
   function startWorkload(pool,profile,source){
     const controller=new AbortController(),started=performance.now(),arrivals=profile.lanes.map(lane=>({lane,bytes:0,messages:0,firstAtMs:null,lastAtMs:null,maxGapMs:0,verified:false})),submissions=profile.lanes.map(lane=>({lane,bytes:0,messages:0,coalescedRetries:0,peakBufferedBytes:0,bufferWaitMs:0}));
     let settled=false,resolve;const completed=new Promise(r=>resolve=r);
-    const state={profile,source,trial:(pool.workloadReports?.length??0)+1,settled:false,controller,completed,driver:null,stop(reason){finish('cancelled',reason);}};pool.fileWorkload=state;
+    const state={profile,source,trial:(pool.workloadReports?.length??0)+1,settled:false,controller,completed,driver:null,stop(reason){finish('cancelled',reason);}};pool.fileWorkload=state;pool.workloadGuard=true;pool.qualifiedLanes=null;
     function finish(status,reason,remote=null){
       if(settled)return;settled=true;state.settled=true;
       const report={version:2,trial:state.trial,status,reason,profile,sourceLimits:source?{requestTimeoutMs:workloadLimits.requestTimeoutMs,sendTimeoutMs:workloadLimits.sendTimeoutMs}:null,sourceSubmission:source?submissions.map(row=>({...row,finalQueue:state.driver?.snapshot().find(q=>q.lane===row.lane)??null})):null,receiver:source?(remote?{...remote,provenance:'peer_reported'}:null):{clock:'receiver_monotonic',elapsedMs:performance.now()-started,lanes:arrivals,queues:state.driver?.snapshot()??[],requestWindow:workloadLimits.requestWindow,requestTimeoutMs:workloadLimits.requestTimeoutMs,maxAttemptsPerPeer:workloadLimits.maxAttemptsPerPeer},storage:'verified_memory_sink',coverage:'production_file_service_and_channel_sender',limitation:'one_bounded_batch_per_lane_is_not_a_link_capacity_or_long_file_guarantee'};
@@ -161,7 +161,7 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
       resolve(report);
     }
     state.finish=finish;
-    const driver=createScoutFileWorkload({peer:pool.peer,lanes:profile.lanes,channels:pool.lanes.map(r=>r.dc),pcs:pool.lanes.map(r=>r.pc),bytes:profile.bytes,chunkSize:profile.chunkSize,batchSize:profile.batchSize,sourceReadBlockBytes:profile.sourceReadBlockBytes,requestWindow:workloadLimits.requestWindow,requestTimeoutMs:workloadLimits.requestTimeoutMs,sendTimeoutMs:workloadLimits.sendTimeoutMs,maxAttemptsPerPeer:workloadLimits.maxAttemptsPerPeer,queuePolicy:profile.queuePolicy,messageBytes:profile.messageBytes,crypto,signal:controller.signal,
+    const driver=createScoutFileWorkload({peer:pool.peer,lanes:profile.lanes,channels:pool.lanes.map(r=>r.dc),pcs:pool.lanes.map(r=>r.pc),bytes:profile.bytes,chunkSize:profile.chunkSize,batchSize:profile.batchSize,sourceReadBlockBytes:profile.sourceReadBlockBytes,requestWindow:workloadLimits.requestWindow,requestTimeoutMs:workloadLimits.requestTimeoutMs,sendTimeoutMs:workloadLimits.sendTimeoutMs,maxAttemptsPerPeer:workloadLimits.maxAttemptsPerPeer,queuePolicy:profile.queuePolicy,messageBytes:profile.messageBytes,scopeId:'scout:'+pool.id+':'+state.trial,crypto,signal:controller.signal,
       onChunk(lane,bytes){const row=arrivals.find(r=>r.lane===lane),at=performance.now()-started;if(row.lastAtMs!==null)row.maxGapMs=Math.max(row.maxGapMs,at-row.lastAtMs);row.firstAtMs??=at;row.lastAtMs=at;row.bytes+=bytes.byteLength;row.messages++;},
       onSend(lane,sample){const row=submissions.find(r=>r.lane===lane);if(sample.coalesced){row.coalescedRetries++;return;}row.bytes+=sample.bytes;row.messages++;row.peakBufferedBytes=Math.max(row.peakBufferedBytes,sample.bufferedBytes);row.bufferWaitMs+=sample.bufferWaitMs;},
       onLaneComplete(lane){arrivals.find(row=>row.lane===lane).verified=true;},
@@ -603,6 +603,7 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
         const decision=decideFileWorkload(report);
         if(decision.status==='complete'){
           result.fileWorkloadSelection={version:1,status:'verified',trial:state.trial,lanes:[...lanes],rejected:pool.lanes.flatMap((row,lane)=>row.rejected?[lane]:[]),reason:repaired?'verified_reduced_file_workload':'verified_file_workload'};
+          result.status='workload_verified';result.reason=result.fileWorkloadSelection.reason;result.connections=lanes.length;result.lanes=[...lanes];if(repaired){result.queuePolicy={status:'fallback',highWaterMark:16*1024*1024,lowWaterMark:4*1024*1024,reason:'baseline_policy_verified_on_reduced_workload'};result.messagePolicy={status:'fallback',maxPayloadBytes:null,reason:'baseline_policy_verified_on_reduced_workload'};}
           result.connectionPlan=buildScoutConnectionPlan(result,{fallback,maxRateReduction:laneRateTradeoff});notify(pool,{phase:'preflight-result',...structuredClone(result)});return report;
         }
         if(decision.status==='retry_subset'){
@@ -610,7 +611,7 @@ export function createTransferScout({self,allowed,send,runtime=globalThis,config
           releasePool('workload_restriction_cancelled');return {...report,status:'cancelled',reason:'workload_restriction_cancelled'};
         }
         if(report.status==='failed'){
-          result.fileWorkloadSelection={version:1,status:decision.status==='blocked'?'blocked':'unavailable',reason:decision.reason,lanes:[],rejected:[...lanes]};notify(pool,{phase:'preflight-result',...structuredClone(result)});releasePool('failed_file_workload');
+          result.fileWorkloadSelection={version:1,status:decision.status==='blocked'?'blocked':'unavailable',reason:decision.reason,lanes:[],rejected:[...lanes]};if(decision.status==='blocked'){result.status='blocked';result.reason=decision.reason;result.connections=0;result.lanes=[];result.connectionPlan=buildScoutConnectionPlan(result,{fallback,maxRateReduction:laneRateTradeoff});}notify(pool,{phase:'preflight-result',...structuredClone(result)});releasePool('failed_file_workload');
         }
         return report;
       }

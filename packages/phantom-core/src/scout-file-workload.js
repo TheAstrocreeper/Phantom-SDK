@@ -3,7 +3,7 @@ import {sendFileChannelPayload,coalesceQueuedFileChunk} from './file-channel-pay
 /** Isolated synthetic file, using the production request/read/hash/write service.
  * The memory sink deliberately does not claim native Android storage coverage.
  */
-export function createScoutFileWorkload({peer,lanes,channels,pcs,bytes,chunkSize,batchSize,sourceReadBlockBytes=0,requestWindow,requestTimeoutMs=10000,sendTimeoutMs=15000,maxAttemptsPerPeer=2,queuePolicy,messageBytes=null,crypto=globalThis.crypto,signal,onChunk=()=>{},onSend=()=>{},onLaneComplete=()=>{},onComplete=()=>{},onError=()=>{}}){
+export function createScoutFileWorkload({peer,lanes,channels,pcs,bytes,chunkSize,batchSize,sourceReadBlockBytes=0,requestWindow,requestTimeoutMs=10000,sendTimeoutMs=15000,maxAttemptsPerPeer=2,queuePolicy,messageBytes=null,scopeId='scout',crypto=globalThis.crypto,signal,onChunk=()=>{},onSend=()=>{},onLaneComplete=()=>{},onComplete=()=>{},onError=()=>{}}){
  if(!Number.isSafeInteger(bytes)||bytes<1||bytes>144*1024*1024||!Number.isInteger(chunkSize)||chunkSize<1024||chunkSize>262144||bytes%(lanes.length*chunkSize)||!Number.isInteger(batchSize)||batchSize<1||batchSize>64)throw TypeError('Invalid scout file workload');
  const listeners=new Set(),pending=new Map(),stored=new Map(),received=new Set(),submitted=new Map(lanes.map(l=>[l,0])),queued=new Map(lanes.map(l=>[l,new Map()]));let closed=false,manifest=null,requested=false,wireId=null;
  const chunksPerLane=bytes/chunkSize/lanes.length;
@@ -30,7 +30,7 @@ export function createScoutFileWorkload({peer,lanes,channels,pcs,bytes,chunkSize
  });
  const abort=()=>api.close();signal?.addEventListener('abort',abort,{once:true});
  const api={
-  async prepare(){manifest=await service.publish(new Blob([new Uint8Array(bytes)]),{chunkSize,sourceReadBlockBytes,name:'phantom-scout',distributionId:'scout'});wireId=manifest.id;return manifest;},
+  async prepare(){manifest=await service.publish(new Blob([new Uint8Array(bytes)]),{chunkSize,sourceReadBlockBytes,name:'phantom-scout',distributionId:scopeId});wireId=manifest.id;return manifest;},
   async start(){if(!manifest)throw Error('Scout file not prepared');await service.share(peer,manifest.id);},
   receive(lane,data){
    if(closed)return;
@@ -39,11 +39,12 @@ export function createScoutFileWorkload({peer,lanes,channels,pcs,bytes,chunkSize
     if(m.kind==='message'){
      const f=m.file;if(!f||typeof f.id!=='string'||!['FILE_OFFER','PHANTOM_FILE_MANIFEST','PHANTOM_FILE_REQUEST','PHANTOM_FILE_MISSING'].includes(m.sys))throw Error('Invalid scout file message');
      if(m.sys==='FILE_OFFER'){
-      if(wireId!==null||f.phantom?.size!==bytes||f.phantom?.chunkSize!==chunkSize||f.phantom?.total!==bytes/chunkSize||f.phantom?.id!==f.id)throw Error('Invalid scout file offer');wireId=f.id;
-     }else if(f.id!==wireId)throw Error('Foreign scout file');
+      if(f.phantom?.distributionId!==scopeId)return;if(wireId!==null||f.phantom?.size!==bytes||f.phantom?.chunkSize!==chunkSize||f.phantom?.total!==bytes/chunkSize||f.phantom?.id!==f.id)throw Error('Invalid scout file offer');wireId=f.id;
+     }else if(f.id!==wireId)return;
      if(['PHANTOM_FILE_REQUEST','PHANTOM_FILE_MISSING'].includes(m.sys)&&(!Number.isInteger(f.index)||f.index<0||f.index>=bytes/chunkSize||laneFor(f.index)!==lane))throw Error('Invalid scout chunk request');
      fire('INCOMING_MSG',{from:peer,sys:m.sys,file:f});return;
     }
+    if(['binary','binary-fragment'].includes(m.kind)&&m.file?.distributionId!==scopeId){if(pending.get(lane)?.buffer||pending.get(lane)?.header)throw Error('Interleaved scout file');pending.set(lane,{discard:true});return;}
     if(!['binary','binary-fragment'].includes(m.kind)||pending.get(lane)?.header||!Number.isInteger(m.file?.index)||laneFor(m.file.index)!==lane||m.file.id!==wireId||m.file.bytes!==chunkSize)throw Error('Invalid scout file header');
     let row=pending.get(lane)??{};
     if(m.kind==='binary-fragment'){
@@ -53,7 +54,7 @@ export function createScoutFileWorkload({peer,lanes,channels,pcs,bytes,chunkSize
     }else if(row.buffer)throw Error('Interrupted scout fragment');
     row.header=m;pending.set(lane,row);return;
    }
-   const row=pending.get(lane),m=row?.header;if(!(data instanceof ArrayBuffer)||!m)throw Error('Unexpected scout file payload');row.header=null;
+   const row=pending.get(lane),m=row?.header;if(row?.discard&&data instanceof ArrayBuffer){pending.delete(lane);return;}if(!(data instanceof ArrayBuffer)||!m)throw Error('Unexpected scout file payload');row.header=null;
    let complete=data;
    if(m.kind==='binary-fragment'){if(data.byteLength!==m.length)throw Error('Invalid scout fragment length');row.buffer.set(new Uint8Array(data),row.offset);row.offset+=data.byteLength;if(row.offset<row.buffer.byteLength)return;complete=row.buffer.buffer;}
    if(complete.byteLength!==m.file.bytes)throw Error('Invalid scout chunk length');pending.delete(lane);if(!received.has(m.file.index)){received.add(m.file.index);onChunk(lane,complete);}fire('FILE_BIN_CHUNK',{from:peer,file:m.file,bytes:complete});

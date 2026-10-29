@@ -420,7 +420,7 @@ test('workload repair shrinks monotonically through at most three verified attem
 });
 test('all failed workload lanes block handoff instead of returning them to fallback',async()=>{
  const f=fixture({queueModel:true,dropWorkloadLane:[0,1,2],fileWorkloadLimits:{batchSize:2,requestWindow:2,requestTimeoutMs:200}});try{
-  await f.nodes[0].forSend(ids[1],{connectionOnly:true});const report=await f.nodes[0].qualifyFileWorkload(ids[1],{chunkSize:65536,fileBytes:1048576});const result=f.nodes[0].get(ids[1]);assert.equal(report.status,'failed');assert.equal(result.fileWorkloadSelection.status,'blocked');assert.ok(f.pcs.every(pc=>pc.connectionState==='closed'));for(let lane=0;lane<3;lane++)assert.equal(f.nodes[0].take(ids[1],result.id,lane,'asset','forbidden'),null);
+  await f.nodes[0].forSend(ids[1],{connectionOnly:true});const report=await f.nodes[0].qualifyFileWorkload(ids[1],{chunkSize:65536,fileBytes:1048576});const result=f.nodes[0].get(ids[1]);assert.equal(report.status,'failed');assert.equal(result.fileWorkloadSelection.status,'blocked');assert.equal(result.connections,0);assert.deepEqual(result.connectionPlan.lanes,[]);assert.equal(result.connectionPlan.laneDecision.status,'blocked');assert.ok(f.pcs.every(pc=>pc.connectionState==='closed'));for(let lane=0;lane<3;lane++)assert.equal(f.nodes[0].take(ids[1],result.id,lane,'asset','forbidden'),null);
  }finally{f.close();}
 });
 test('cancellation during a restriction barrier settles without polling or another trial',async()=>{

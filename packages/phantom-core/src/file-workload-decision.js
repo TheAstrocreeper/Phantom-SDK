@@ -10,7 +10,7 @@ export function decideFileWorkload(report){
  if(!receiver||receiver.clock!=='receiver_monotonic'||!Array.isArray(rows)||rows.length!==lanes.length||rows.some((row,i)=>row.lane!==lanes[i]||!Number.isSafeInteger(row.bytes)||row.bytes<0||row.bytes>perLane||typeof row.verified!=='boolean'))return unknown('receiver_verification_unavailable');
  if(report.status==='complete'&&rows.every(row=>row.bytes===perLane&&row.verified))return {status:'complete',reason:'bounded_workload_verified',lanes:[...lanes],rejected:[]};
  if(report.status!=='failed')return unknown('workload_did_not_complete');
- if(!Array.isArray(report.sourceSubmission)||!Array.isArray(receiver.queues))return unknown('queue_ownership_unavailable');
+ if(!Array.isArray(report.sourceSubmission)||!Array.isArray(receiver.queues)||report.sourceSubmission.length!==lanes.length||receiver.queues.length!==lanes.length||lanes.some((lane,i)=>report.sourceSubmission[i]?.lane!==lane||!Number.isSafeInteger(report.sourceSubmission[i]?.finalQueue?.bufferedBytes)||report.sourceSubmission[i].finalQueue.bufferedBytes<0||receiver.queues[i]?.lane!==lane||!Number.isSafeInteger(receiver.queues[i]?.bufferedBytes)||receiver.queues[i].bufferedBytes<0))return unknown('queue_ownership_unavailable');
  const survivors=rows.filter(row=>row.bytes===perLane&&row.verified&&report.sourceSubmission?.find(s=>s.lane===row.lane)?.finalQueue?.bufferedBytes===0&&receiver.queues?.find(s=>s.lane===row.lane)?.bufferedBytes===0).map(row=>row.lane);
  const rejected=lanes.filter(lane=>!survivors.includes(lane));
  if(!survivors.length||!rejected.length)return {status:'blocked',reason:'no_verified_clean_subset',lanes:[],rejected:[...lanes]};

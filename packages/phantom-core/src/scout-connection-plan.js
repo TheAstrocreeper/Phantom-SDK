@@ -115,12 +115,13 @@ export function buildScoutConnectionPlan(result,{fallback=3,maxRateReduction=0.1
   // optimization measured on a different set of associations.
   if(selection.rejected?.length){queuePolicy={status:'fallback',highWaterMark:DEFAULT_HIGH,lowWaterMark:DEFAULT_LOW};queueReason='baseline_policy_verified_on_reduced_workload';messagePolicy={status:'fallback',maxPayloadBytes:null};messageReason='baseline_policy_verified_on_reduced_workload';}
  }
+ if(selection?.version===1&&selection.status==='blocked'){lanes=[];laneStatus='blocked';laneReason=selection.reason;}
  const nativeLanes=lanes.map(lane=>{
   const report=result?.localTransportPreparation?.find(row=>row.lane===lane)?.report,before=report?.before,after=report?.applied?.after;
   const known=report?.scope==='owned_webview_udp_socket'&&before?.status==='observed'&&after?.status==='observed'&&typeof before.inode==='string'&&before.inode.length>0&&Number.isInteger(before.port)&&before.port>0&&before.port<=65535&&before.inode===after.inode&&before.cookie===after.cookie&&before.port===after.port&&Number.isSafeInteger(after.receiveBufferBytes)&&after.receiveBufferBytes>0;
   return {lane,status:known?'observed':'unknown',receiveBufferBytes:known?after.receiveBufferBytes:null,receiveDropsAtPreparation:known&&Number.isSafeInteger(after.receiveDrops)&&after.receiveDrops>=0?after.receiveDrops:null};
  });
- const nativeReceiveState={status:nativeLanes.every(row=>row.status==='observed')?'observed':'unknown',scope:'local_sockets_at_preflight_preparation',remoteState:'unknown',lanes:nativeLanes,reason:nativeLanes.every(row=>row.status==='observed')?'native_hook_readback':'native_readback_unavailable'};
+ const nativeReceiveState={status:nativeLanes.length>0&&nativeLanes.every(row=>row.status==='observed')?'observed':'unknown',scope:'local_sockets_at_preflight_preparation',remoteState:'unknown',lanes:nativeLanes,reason:nativeLanes.length>0&&nativeLanes.every(row=>row.status==='observed')?'native_hook_readback':'native_readback_unavailable'};
  return {version:1,validFor:'current_peer_connection_generation' ,connections:lanes.length,lanes,
   laneDecision:{status:laneStatus,reason:laneReason,evidence:laneEvidence,tradeoff},
   messagePolicy:{...messagePolicy,reason:messageReason},messageDecision:{status:messagePolicy.status,reason:messageReason,evidence:messageEvidence},
