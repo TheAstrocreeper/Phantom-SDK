@@ -1,4 +1,4 @@
-name: Native Chrome receiver credit comparison
+name: Production file request window comparison
 on:
   push:
     branches: ['codex/worm-stop-validation']
@@ -14,4 +14,4 @@ jobs:
         with:
           node-version: '22'
       - run: npm ci --prefix tools/swarm
-      - run: PHANTOM_CHROMIUM_EXECUTABLE="$(command -v google-chrome)" node tools/perf/delivery-credit-browser.mjs
+      - run: PHANTOM_CHROMIUM_EXECUTABLE="$(command -v google-chrome)" node tools/perf/request-window-browser.mjs
