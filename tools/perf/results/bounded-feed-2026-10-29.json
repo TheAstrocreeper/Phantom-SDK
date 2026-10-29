@@ -1,0 +1,294 @@
+{
+  "schema": "phantom-bounded-feed-lab-v1",
+  "workflowRun": 40890672532,
+  "results": [
+    {
+      "trial": 1,
+      "policy": "current",
+      "messageBytes": 262144,
+      "highWaterMark": 1048576,
+      "lowWaterMark": 524288,
+      "lanes": 2,
+      "bytesPerLane": 33554432,
+      "topology": "same_host_separate_renderers",
+      "chrome": "156.0.8078.47",
+      "elapsedMs": 3215.6001959999994,
+      "verifiedBytesPerSecond": 20869778.551288538,
+      "source": [
+        {
+          "lane": 0,
+          "bytes": 33554432,
+          "messages": 128,
+          "peakBufferedBytes": 1048576,
+          "bufferWaitMs": 3108.799999999974
+        },
+        {
+          "lane": 1,
+          "bytes": 33554432,
+          "messages": 128,
+          "peakBufferedBytes": 1048576,
+          "bufferWaitMs": 2047.7999999999738
+        }
+      ],
+      "receiver": {
+        "arrivalSpanMs": 3121.199999999997,
+        "verificationMs": 74.09999999999127,
+        "lanes": [
+          {
+            "lane": 0,
+            "bytes": 33554432,
+            "messages": 128,
+            "firstAtMs": 1295.6000000000058,
+            "lastAtMs": 4416.800000000003,
+            "maxGapMs": 864.4000000000087,
+            "arrivalSpanMs": 3121.199999999997,
+            "verified": true
+          },
+          {
+            "lane": 1,
+            "bytes": 33554432,
+            "messages": 128,
+            "firstAtMs": 1299.4000000000087,
+            "lastAtMs": 3359.4000000000087,
+            "maxGapMs": 458.8000000000029,
+            "arrivalSpanMs": 2060,
+            "verified": true
+          }
+        ]
+      },
+      "transport": [
+        {
+          "lane": 0,
+          "packetsSent": 29614,
+          "bytesSent": 35040692,
+          "packetsDiscardedOnSend": 354,
+          "bytesDiscardedOnSend": 412980
+        },
+        {
+          "lane": 1,
+          "packetsSent": 29526,
+          "bytesSent": 35035116,
+          "packetsDiscardedOnSend": 348,
+          "bytesDiscardedOnSend": 382912
+        }
+      ],
+      "status": "complete"
+    },
+    {
+      "trial": 2,
+      "policy": "bounded",
+      "messageBytes": 16384,
+      "highWaterMark": 131072,
+      "lowWaterMark": 65536,
+      "lanes": 2,
+      "bytesPerLane": 33554432,
+      "topology": "same_host_separate_renderers",
+      "chrome": "156.0.8078.47",
+      "elapsedMs": 3395.5071590000007,
+      "verifiedBytesPerSecond": 19764017.82046721,
+      "source": [
+        {
+          "lane": 0,
+          "bytes": 33554432,
+          "messages": 2048,
+          "peakBufferedBytes": 131072,
+          "bufferWaitMs": 966.3999999998778
+        },
+        {
+          "lane": 1,
+          "bytes": 33554432,
+          "messages": 2048,
+          "peakBufferedBytes": 131072,
+          "bufferWaitMs": 3303.599999999904
+        }
+      ],
+      "receiver": {
+        "arrivalSpanMs": 3318.2000000000116,
+        "verificationMs": 73.30000000000291,
+        "lanes": [
+          {
+            "lane": 0,
+            "bytes": 33554432,
+            "messages": 2048,
+            "firstAtMs": 562.2999999999884,
+            "lastAtMs": 1549.0999999999913,
+            "maxGapMs": 50,
+            "arrivalSpanMs": 986.8000000000029,
+            "verified": true
+          },
+          {
+            "lane": 1,
+            "bytes": 33554432,
+            "messages": 2048,
+            "firstAtMs": 562.5999999999913,
+            "lastAtMs": 3880.5,
+            "maxGapMs": 438.20000000001164,
+            "arrivalSpanMs": 3317.9000000000087,
+            "verified": true
+          }
+        ]
+      },
+      "transport": [
+        {
+          "lane": 0,
+          "packetsSent": 37374,
+          "bytesSent": 40140164,
+          "packetsDiscardedOnSend": 3037,
+          "bytesDiscardedOnSend": 3664378
+        },
+        {
+          "lane": 1,
+          "packetsSent": 31521,
+          "bytesSent": 35165742,
+          "packetsDiscardedOnSend": 208,
+          "bytesDiscardedOnSend": 239488
+        }
+      ],
+      "status": "complete"
+    },
+    {
+      "trial": 3,
+      "policy": "bounded",
+      "messageBytes": 16384,
+      "highWaterMark": 131072,
+      "lowWaterMark": 65536,
+      "lanes": 2,
+      "bytesPerLane": 33554432,
+      "topology": "same_host_separate_renderers",
+      "chrome": "156.0.8078.47",
+      "elapsedMs": 1739.0656679999993,
+      "verifiedBytesPerSecond": 38589033.89035223,
+      "source": [
+        {
+          "lane": 0,
+          "bytes": 33554432,
+          "messages": 2048,
+          "peakBufferedBytes": 131072,
+          "bufferWaitMs": 1645.000000000029
+        },
+        {
+          "lane": 1,
+          "bytes": 33554432,
+          "messages": 2048,
+          "peakBufferedBytes": 131072,
+          "bufferWaitMs": 1468.3999999998923
+        }
+      ],
+      "receiver": {
+        "arrivalSpanMs": 1661.5,
+        "verificationMs": 73.20000000001164,
+        "lanes": [
+          {
+            "lane": 0,
+            "bytes": 33554432,
+            "messages": 2048,
+            "firstAtMs": 554.5,
+            "lastAtMs": 2216,
+            "maxGapMs": 43.59999999999127,
+            "arrivalSpanMs": 1661.5,
+            "verified": true
+          },
+          {
+            "lane": 1,
+            "bytes": 33554432,
+            "messages": 2048,
+            "firstAtMs": 554.6000000000058,
+            "lastAtMs": 2043.699999999997,
+            "maxGapMs": 47.5,
+            "arrivalSpanMs": 1489.0999999999913,
+            "verified": true
+          }
+        ]
+      },
+      "transport": [
+        {
+          "lane": 0,
+          "packetsSent": 35675,
+          "bytesSent": 39244374,
+          "packetsDiscardedOnSend": 2794,
+          "bytesDiscardedOnSend": 3370104
+        },
+        {
+          "lane": 1,
+          "packetsSent": 33452,
+          "bytesSent": 37963472,
+          "packetsDiscardedOnSend": 2399,
+          "bytesDiscardedOnSend": 2891790
+        }
+      ],
+      "status": "complete"
+    },
+    {
+      "trial": 4,
+      "policy": "current",
+      "messageBytes": 262144,
+      "highWaterMark": 1048576,
+      "lowWaterMark": 524288,
+      "lanes": 2,
+      "bytesPerLane": 33554432,
+      "topology": "same_host_separate_renderers",
+      "chrome": "156.0.8078.47",
+      "elapsedMs": 3207.836996000002,
+      "verifiedBytesPerSecond": 20920284.940812487,
+      "source": [
+        {
+          "lane": 0,
+          "bytes": 33554432,
+          "messages": 128,
+          "peakBufferedBytes": 1048576,
+          "bufferWaitMs": 3101.800000000032
+        },
+        {
+          "lane": 1,
+          "bytes": 33554432,
+          "messages": 128,
+          "peakBufferedBytes": 1048576,
+          "bufferWaitMs": 2018.7000000000262
+        }
+      ],
+      "receiver": {
+        "arrivalSpanMs": 3117.699999999997,
+        "verificationMs": 72.5,
+        "lanes": [
+          {
+            "lane": 0,
+            "bytes": 33554432,
+            "messages": 128,
+            "firstAtMs": 574.6999999999971,
+            "lastAtMs": 3692.399999999994,
+            "maxGapMs": 867.8000000000029,
+            "arrivalSpanMs": 3117.699999999997,
+            "verified": true
+          },
+          {
+            "lane": 1,
+            "bytes": 33554432,
+            "messages": 128,
+            "firstAtMs": 577.5,
+            "lastAtMs": 2611.600000000006,
+            "maxGapMs": 863,
+            "arrivalSpanMs": 2034.1000000000058,
+            "verified": true
+          }
+        ]
+      },
+      "transport": [
+        {
+          "lane": 0,
+          "packetsSent": 29575,
+          "bytesSent": 35038498,
+          "packetsDiscardedOnSend": 351,
+          "bytesDiscardedOnSend": 394038
+        },
+        {
+          "lane": 1,
+          "packetsSent": 29522,
+          "bytesSent": 35034360,
+          "packetsDiscardedOnSend": 356,
+          "bytesDiscardedOnSend": 392252
+        }
+      ],
+      "status": "complete"
+    }
+  ]
+}
