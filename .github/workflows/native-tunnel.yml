@@ -15,8 +15,6 @@ jobs:
   linux:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
-    env:
-      PHANTOM_LIBJUICE_SOURCE: ${{ runner.temp }}/libjuice
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -28,6 +26,8 @@ jobs:
           java-version: '17'
       - name: Native dependencies
         run: |
+          export PHANTOM_LIBJUICE_SOURCE="$RUNNER_TEMP/libjuice"
+          echo "PHANTOM_LIBJUICE_SOURCE=$PHANTOM_LIBJUICE_SOURCE" >> "$GITHUB_ENV"
           rustup toolchain install stable --profile minimal --component clippy,rustfmt
           rustup default stable
           git clone https://github.com/paullouisageneau/libjuice.git "$PHANTOM_LIBJUICE_SOURCE"
