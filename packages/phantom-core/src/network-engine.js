@@ -1,3 +1,4 @@
+import {normalizeBulkControl} from './bulk-control.js';
 import {createSysOfferOrder} from './sys-offer-order.js';
 import {waitForDataChannelCapacity} from './data-channel-capacity.js';
 import {createSequentialSignaling} from './sequential-signaling.js';
@@ -8075,7 +8076,7 @@ export function createNetworkEngine(host) {
     const self=phantomShortKey(selfHKey);
     return [...lastRoster].filter(key=>key!==self&&phantomCommittedMember(key)).map(peerId=>{
       const ent=phantomChatPeers.get(peerId),relationship=phantomRelationships.get(peerId);
-      const blocked=!host.canAdmitPeer(peerId)||phantomIsBlocked(peerId)||phantomIsBlockedBy(peerId)||phantomRelationshipRevoked.has(peerId)||phantomPendingTerminalExits.has(peerId)||__phantomGoneNotified.has(peerId);
+      const blocked=!canUsePeer(peerId)||!host.canAdmitPeer(peerId)||phantomIsBlocked(peerId)||phantomIsBlockedBy(peerId)||phantomRelationshipRevoked.has(peerId)||phantomPendingTerminalExits.has(peerId)||__phantomGoneNotified.has(peerId);
       const ready=!blocked&&phantomRelationshipIsAccepted(relationship)&&ent?.dc?.readyState==='open'&&ent.chatState==='ready'&&ent.chatProof==='chat_hello';
       const state=blocked?'blocked':ready?'ready':ent?.chatAttemptState==='terminal'?'failed':reconnectingPeers.has(peerId)?'recovering':relationship?.endedAt?'closed':relationship?.state&&relationship.state!==VEIL.OUTSIDE?'connecting':'idle';
       return {peerId,state,reason:ready?'chat_hello_verified':blocked?'relationship_unavailable':ent?.chatFault&&ent.chatFault!=='none'?ent.chatFault:relationship?.endReason&&relationship.endReason!=='none'?relationship.endReason:state,
@@ -9692,6 +9693,13 @@ export function createNetworkEngine(host) {
         msg = JSON.parse(String(raw || ""));
       } catch {
         msg = { t: "RAW", raw: String(raw || "") };
+      }
+      if (msg?.t === 'PHANTOM_BULK') {
+        const key=phantomShortKey(remoteHKey),entry=phantomChatPeers.get(key);
+        if(entry?.dc!==dc || !phantomPeerConnections().some(p=>p.peerId===key&&p.state==='ready'))return;
+        const frame=normalizeBulkControl(msg.frame,key,phantomShortKey(selfHKey));
+        if(frame)try{host.receiveBulkControl?.(key,frame);}catch{}
+        return; // Credential-bearing frames never enter debug/chat/event paths.
       }
       CORE_DEBUG && console.log("[phantom][RTC] RX", remoteHKey, msg);
 
@@ -14366,6 +14374,15 @@ export function createNetworkEngine(host) {
     },
     snapshot() { return snapshot("sdk_read"); },
     peerConnections() {return phantomPeerConnections();},
+    sendBulkControl(peer,body) {
+      if(typeof peer!=='string'||!/^[0-9a-f]{16}$/.test(peer)||!canUsePeer(peer)||
+          !phantomPeerConnections().some(p=>p.peerId===peer&&p.state==='ready'))return false;
+      const frame=normalizeBulkControl(body,phantomShortKey(selfHKey),peer);
+      if(!frame)return false;
+      const entry=phantomChatPeers.get(peer);
+      if(entry?.dc?.readyState!=='open'||entry.chatProof!=='chat_hello'||entry.chatState!=='ready'||entry.dc.bufferedAmount>65536)return false;
+      return rtcSendDC(peer,{t:'PHANTOM_BULK',frame}); // No queue, relay or retry.
+    },
     dispose() {
       let failure;
       for (const dispose of [()=>networkFirstSignaling.clear(),()=>signalingBridge.clear(),()=>signalingPeerKeys.clear(),

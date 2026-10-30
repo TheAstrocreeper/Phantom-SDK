@@ -34,8 +34,8 @@ page helper, VPN, TUN/TAP interface or finished Share integration.
    128-bit session ID from the control layer.
 
 The C/Rust caller MUST bind the offer to the real authenticated peer. Matching
-textual peer names alone does not establish identity. The current probe manually
-routes offers; the SDK control-plane integration is still to be implemented.
+textual peer names alone does not establish identity. The standalone probe can manually route offers; the [SDK control bridge](../CONTROL.md)
+now provides a scoped exchange and desktop worker binding.
 
 ## APIs and ownership
 
@@ -98,6 +98,9 @@ That command uses Cargo.lock and runs:
 - A separate two-process probe: JSON control offers are forwarded through the
   controller, while 32 MiB travels over native QUIC UDP sockets and is verified
   at both ends. Only setup/receipt events pass through the process pipes.
+- Two desktop control-integration checks: admitted SDK peers negotiate a native
+  32 MiB probe and verify private event routing; abort settles worker setup. The
+  RTC control transport is the SDK memory fixture; bulk sockets are real.
 - Four C ABI tests through Python ctypes: 4 MiB hash-verified transfer and return
   receipt/datagram; cancellation during connection; consumed handles and buffer
   validation; STUN-only connection through the filtering fixture.
@@ -134,8 +137,9 @@ helper service or automatically integrated benchmark in Share.
 
 ## Remaining integration
 
-Add platform wrappers/build validation around the C API, then a scoped SDK
-control message/peer-lifecycle bridge and an authenticated local desktop helper.
+Add platform wrappers/build validation around the C API and an authenticated
+installed desktop helper. The scoped SDK control/peer-lifecycle bridge and Node
+probe binding are now implemented; see ../CONTROL.md.
 Bulk data must stay in native streams/native file handles. Bind tunnel closure
 to peer removal, leave and shutdown before exposing it to Share. Test direct
 connectivity on the actual PC ↔ phone 5G path before judging performance. A

@@ -5,7 +5,9 @@
   "type": "module",
   "license": "PolyForm-Noncommercial-1.0.0",
   "exports": {
-    "./node": "./src/node-tls.js"
+    "./node": "./src/node-tls.js",
+    "./control": "./src/control.js",
+    "./node-probe": "./src/node-probe.js"
   },
   "scripts": {
     "test": "node --test test/*.test.js",

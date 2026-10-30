@@ -50,6 +50,7 @@ export function createPhantom({ doorway, origin = 'https://phantom.local',
       .map(name => [name, runtime[name].bind(timerTarget)])
   );
   const listeners = new Set();
+  const bulkListeners = new Set();
   const stateListeners=new Set();
   const peerConnections=new Map();
   let snapshotRevision=0;
@@ -72,6 +73,10 @@ export function createPhantom({ doorway, origin = 'https://phantom.local',
     crypto: runtime.crypto, rtcConfiguration, messaging, recoverySignaling, canSendFile, authorizeSyscon1,
     canUsePeer: peer => {try{return canUsePeer(peer)===true;}catch{return false;}},
     canAdmitPeer: peer => { try { return canAdmitPeer(peer) === true; } catch { return false; } },
+    receiveBulkControl(peer,frame) {
+      if(disposed)return;
+      for(const listener of bulkListeners){try{listener(peer,structuredClone(frame));}catch{}}
+    },
     emit(type, payload) {
       if (disposed) return;
       const changes=[],revision=type==='SNAPSHOT'?++snapshotRevision:snapshotRevision;
@@ -139,6 +144,12 @@ export function createPhantom({ doorway, origin = 'https://phantom.local',
   }
   return {
     getState() {return structuredClone(networkState);},
+    sendBulkControl(peer,frame) {return !disposed&&engine.sendBulkControl(peer,frame);},
+    onBulkControl(listener) {
+      if(disposed)throw new Error('Phantom instance disposed');
+      if(typeof listener!=='function')throw new TypeError('Bulk control listener required');
+      bulkListeners.add(listener);return ()=>bulkListeners.delete(listener);
+    },
     getPeerConnections() {return disposed?[]:engine.peerConnections();},
     refreshNetworkPermissions(){return networkPermissions.refresh();},
     onState(listener) {
@@ -209,7 +220,7 @@ export function createPhantom({ doorway, origin = 'https://phantom.local',
       cancelJoin?.();
       for (const id of timeouts) timers.clearTimeout(id);
       for (const id of intervals) timers.clearInterval(id);
-      timeouts.clear(); intervals.clear(); listeners.clear();
+      timeouts.clear(); intervals.clear(); listeners.clear(); bulkListeners.clear();
       networkState={...networkState,state:'closed',reason:'disposed',nextAction:'create_instance'};
       for(const listener of stateListeners){try{listener(structuredClone(networkState));}catch{}}
       stateListeners.clear();peerConnections.clear();

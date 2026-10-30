@@ -5,7 +5,7 @@ const python=process.env.PYTHON??(process.platform==='win32'?'python':'python3')
 for(const [command,args] of [
   ['cargo',['test','--locked','-j','2']],
   ['cargo',['build','--locked','-j','2','--lib','--example','native_probe']],
-  [process.execPath,['--test','test-processes.mjs']],
+  [process.execPath,['--test','test-processes.mjs','test-control-integration.mjs']],
   [python,['test_ffi.py','-v']],
 ]) {
   const result=spawnSync(command,args,{cwd,env:process.env,stdio:'inherit'});

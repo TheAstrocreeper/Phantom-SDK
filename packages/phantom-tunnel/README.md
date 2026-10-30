@@ -1,9 +1,10 @@
 # Phantom bulk transport — experimental
 
 The [native core](native/README.md) now implements ICE + QUIC with a C ABI and
-Linux integration tests. It is independent of the initial Node TLS binding
-documented below. Platform wrappers and the actual Phantom/WebRTC control-plane
-integration remain pending. The two carriers use different wire protocols.
+Linux integration tests. The [SDK control bridge and desktop probe binding](CONTROL.md)
+now connect it to scoped peer control. An installed browser helper and other
+platform wrappers remain pending. The initial Node TLS reference below uses a
+different wire protocol.
 
 ## Initial Node TLS reference binding
 

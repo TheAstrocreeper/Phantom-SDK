@@ -70,10 +70,13 @@ export function createPhantomEntry({openContext, relays, doorways, adminPublicKe
       on(type,fn){if(closed)throw new Error('Network closed');if(typeof fn!=='function')throw new TypeError('Listener required');if(!handlers.has(type))handlers.set(type,new Set());handlers.get(type).add(fn);return()=>handlers.get(type)?.delete(fn);},
       getState:()=>retired?{...core.getState(),state:'retired',reason:'signed_network_retirement',nextAction:'none'}:core.getState(),snapshot:()=>core.snapshot(),getPeers:()=>structuredClone(peers),getPeerConnections:()=>core.getPeerConnections(),
       invitePeer:id=>{active();return core.invite(id);},acceptPeer:id=>{active();return core.accept(id);},send:(id,text)=>{active();return core.send(id,text);},
+      sendBulkControl:(peer,frame)=>{active();return canUsePeer(peer)&&core.sendBulkControl(peer,frame);},
+      onBulkControl:listener=>{active();if(typeof listener!=='function')throw new TypeError('Bulk control listener required');return core.onBulkControl((peer,frame)=>{if(!closed&&!retired&&canUsePeer(peer))listener(peer,frame);});},
       leave:()=>{active();if(!config.leaveMembership)throw new Error('Configure membership leave before using leave');return config.leaveMembership();},
       refreshMembership:()=>{active();if(!config.refreshMembership)throw new Error('Membership refresh is not configured');return config.refreshMembership();},
       close(){
         if(closed)return;closed=true;
+        emit('close',{reason:'network_closed'});
         // Every owner is released even when another owner's close throws.
         for(const dispose of [offAdmission,()=>config.admissionCheckpoint?.close(),()=>clearTimeout(retireTimer),
           ()=>distribution?.close(),()=>files.close(),offEvent,offState,()=>core.dispose(),()=>adminGate.close(),()=>handlers.clear()]) {
