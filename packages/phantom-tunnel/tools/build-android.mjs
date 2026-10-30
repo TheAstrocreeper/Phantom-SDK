@@ -16,10 +16,10 @@ export async function buildAndroid({target='aarch64-linux-android',ndk=process.e
  const bin=join(ndk,'toolchains','llvm','prebuilt',host,'bin'),suffix=process.platform==='win32'?'.cmd':'';
  const cc=join(bin,spec.clang+api+'-clang'+suffix),cxx=join(bin,spec.clang+api+'-clang++'+suffix),toolchain=join(ndk,'build','cmake','android.toolchain.cmake');
  const env={...process.env,ANDROID_NDK_HOME:ndk,PHANTOM_ANDROID_API:String(api),CMAKE_TOOLCHAIN_FILE:toolchain,[`CARGO_TARGET_${target.toUpperCase().replaceAll('-','_')}_LINKER`]:cc,[`CC_${target.replaceAll('-','_')}`]:cc,[`CXX_${target.replaceAll('-','_')}`]:cxx,[`AR_${target.replaceAll('-','_')}`]:join(bin,process.platform==='win32'?'llvm-ar.exe':'llvm-ar')};
- const output=resolve(root,env.CARGO_TARGET_DIR??'target'),library=join(output,target,'debug','libphantom_tunnel_native.so'),build=join(output,'jni-android',spec.abi),cmake=env.CMAKE??'cmake';
+ const output=resolve(root,env.CARGO_TARGET_DIR??'target'),library=join(output,target,'release','libphantom_tunnel_native.so'),build=join(output,'jni-android',spec.abi),cmake=env.CMAKE??'cmake';
  for(const [cmd,args] of [
-  ['cargo',['build','--locked','--lib','--target',target,'-j','2']],
-  [cmake,['-S','jni','-B',build,'-DCMAKE_BUILD_TYPE=Debug','-DCMAKE_TOOLCHAIN_FILE='+toolchain,'-DANDROID_ABI='+spec.abi,'-DANDROID_PLATFORM=android-'+api,'-DANDROID_STL=c++_static','-DPHANTOM_TUNNEL_LIBRARY='+library]],
+  ['cargo',['build','--release','--locked','--lib','--target',target,'-j','2']],
+  [cmake,['-S','jni','-B',build,'-DCMAKE_BUILD_TYPE=Release','-DCMAKE_TOOLCHAIN_FILE='+toolchain,'-DANDROID_ABI='+spec.abi,'-DANDROID_PLATFORM=android-'+api,'-DANDROID_STL=c++_static','-DPHANTOM_TUNNEL_LIBRARY='+library]],
   [cmake,['--build',build,'-j','2']],
  ]){const result=spawnSync(cmd,args,{cwd:root,env,stdio:'inherit'});if(result.error)throw result.error;if(result.status!==0)throw Error('Android build failed: '+cmd);}
  const destination=join(output,'android-jniLibs',spec.abi);await mkdir(destination,{recursive:true});

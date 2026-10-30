@@ -38,6 +38,8 @@ jobs:
         run: |
           file packages/phantom-tunnel/native/target/android-jniLibs/arm64-v8a/*.so
           "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" -h packages/phantom-tunnel/native/target/android-jniLibs/arm64-v8a/libphantom_tunnel_jni.so
+      - name: Strip packaged libraries
+        run: '"$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" --strip-unneeded packages/phantom-tunnel/native/target/android-jniLibs/arm64-v8a/*.so'
       - uses: actions/upload-artifact@v4
         with:
           name: phantom-tunnel-android-arm64
