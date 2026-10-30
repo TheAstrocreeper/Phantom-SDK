@@ -8,8 +8,8 @@ channel; no file bytes are carried through RTCDataChannel or a JS/native bridge.
 The core is Rust plus a small C shim to libjuice. `phantom_tunnel.h` exposes the
 same implementation through a blocking C ABI, so platform wrappers need not be
 written in Rust. Rust `rlib`, C static library and shared library builds are
-configured. **Only Linux has been built and tested here.** Windows, macOS,
-Android and iOS builds/bindings are not yet verified. An installed native-messaging helper and Java/JNI source binding now live
+configured. **Linux runtime tests and Android ARM64/API 33 cross-build are verified.**
+Windows/macOS/iOS and Android device runtime remain unverified. An installed native-messaging helper and Java/JNI source binding now live
 alongside this core (see ../HELPER.md). There is no VPN/TUN/TAP interface or
 finished Share integration.
 
@@ -93,9 +93,10 @@ npm --prefix packages/phantom-tunnel run test:native
 
 That command uses Cargo.lock and runs:
 
-- Five Rust integration tests: 16 MiB hash-verified stream, reverse streams and
+- Seven Rust integration tests: 16 MiB hash-verified stream, reverse streams and
   datagrams; peer/session mismatch; untrusted certificate; unreachable deadline;
-  invalid scope/deadline validation.
+  invalid scope/deadline validation; wrong probe hashes and missing verification
+  acknowledgements.
 - A separate two-process probe: JSON control offers are forwarded through the
   controller, while 32 MiB travels over native QUIC UDP sockets and is verified
   at both ends. Only setup/receipt events pass through the process pipes.

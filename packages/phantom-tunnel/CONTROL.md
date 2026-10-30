@@ -63,8 +63,8 @@ and `onState` deliberately exclude offers and ICE credentials.
 
 The Node adapter is a desktop host/reference binding. **It cannot be imported
 into an ordinary browser page.** The [installed browser helper and Java/JNI binding](HELPER.md) now supply
-additional adapter surfaces. The browser extension path is unverified in this
-restricted environment; Android app packaging remains pending. The installed bridge uses browser native messaging; it exposes no localhost
+additional adapter surfaces. The real Chromium extension path passed Linux CI; Android app packaging
+remains pending despite a verified ARM64 JNI cross-build. The installed bridge uses browser native messaging; it exposes no localhost
 HTTP/WebSocket service. There is no change to Share or its normal file-transfer path.
 
 ## Validation and limits

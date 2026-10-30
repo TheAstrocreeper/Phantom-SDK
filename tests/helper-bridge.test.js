@@ -26,12 +26,12 @@ test('helper adapter abort rejects pending setup immediately and sends scoped cl
  const port=fixture(),adapter=createHelperProbeAdapter({port}),abort=new AbortController();
  const pending=adapter.prepare({...scope(),signal:abort.signal});abort.abort();await assert.rejects(pending,/cancelled/);
  assert.equal(port.sent[0].action,'prepare');assert.equal(port.sent[1].action,'close');assert.equal(port.sent[0].jobId,port.sent[1].jobId);
- port.emit({id:port.sent[0].id,ok:true,offer:{secret:'late'}});await tick();adapter.close();assert(port.closed);
+ port.emit({id:port.sent[0].id,ok:true,probeVersion:2,offer:{secret:'late'}});await tick();adapter.close();assert(port.closed);
 });
 
 test('helper adapter keeps receipts scoped, validates them and tears down on disconnect',async()=>{
  const port=fixture(),adapter=createHelperProbeAdapter({port});
- const prepared=adapter.prepare(scope());port.emit({id:port.sent[0].id,ok:true,offer:{test:'offer'}});const handle=await prepared;
+ const prepared=adapter.prepare(scope());port.emit({id:port.sent[0].id,ok:true,probeVersion:2,offer:{test:'offer'}});const handle=await prepared;
  const connecting=handle.connect({test:'remote'});port.emit({id:port.sent[1].id,ok:true,connected:true});const tunnel=await connecting;
  port.emit({event:'complete',jobId:'ff'.repeat(16),result:{bytes:1024,sha256:'aa'.repeat(32),elapsedSeconds:1}});
  const done=tunnel.result;port.emit({event:'complete',jobId:port.sent[0].jobId,result:{bytes:1024,sha256:'aa'.repeat(32),elapsedSeconds:1,mbps:1}});
@@ -56,4 +56,11 @@ test('per-user installer produces platform manifests and only writes when invoke
   assert(win.manifest.path.endsWith('phantom_helper.exe'));
   const mac=installationPlan({platform:'darwin',home:'/Users/test',binary:'/build/phantom_helper'});assert(mac.manifestPath.includes('Google/Chrome/NativeMessagingHosts'));
  }finally{await rm(root,{recursive:true,force:true});}
+});
+
+test('stale helper binaries are rejected before their offer can be forwarded',async()=>{
+ const port=fixture(),adapter=createHelperProbeAdapter({port});
+ const pending=adapter.prepare(scope());port.emit({id:port.sent[0].id,ok:true,probeVersion:1,offer:{old:'binary'}});
+ await assert.rejects(pending,/version mismatch/);assert.equal(port.sent.at(-1).action,'close');
+ adapter.close();
 });

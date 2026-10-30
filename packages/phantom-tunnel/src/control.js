@@ -87,7 +87,7 @@ export function createBulkProbeControl({network,native,allowIncoming=()=>false,o
     open(peer,{bytes=32*1024*1024}={}) {
       if(!permitted(peer)||records.has(peer)||records.size>=8)throw new Error('Bulk peer unavailable or busy');
       const id=Array.from(crypto.getRandomValues(new Uint8Array(16)),n=>n.toString(16).padStart(2,'0')).join('');
-      const frame=normalizeBulkControl({version:1,type:'request',sessionId:id,purpose:'probe',bytes});if(!frame)throw new TypeError('Invalid probe size');
+      const frame=normalizeBulkControl({version:1,type:'request',sessionId:id,purpose:'probe',probeVersion:2,bytes});if(!frame)throw new TypeError('Invalid probe size');
       const record=create(peer,id,bytes,true);
       if(valid(record)){if(!send(peer,frame))drop(record,'unavailable');else void prepare(record);}
       return record.ready;

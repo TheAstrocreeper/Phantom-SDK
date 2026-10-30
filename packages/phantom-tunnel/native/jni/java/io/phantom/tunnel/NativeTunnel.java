@@ -11,7 +11,7 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
  * Explicit close is required; do not rely on finalizers for socket ownership.
  */
 public final class NativeTunnel implements AutoCloseable {
-    static { System.loadLibrary("phantom_tunnel_native"); System.loadLibrary("phantom_tunnel_jni"); }
+    static { System.loadLibrary("phantom_tunnel_native"); System.loadLibrary("phantom_tunnel_jni"); if(nProbeVersion()!=2)throw new UnsatisfiedLinkError("Native tunnel probe version mismatch"); }
     private final long handle;
     private final AtomicBoolean closing = new AtomicBoolean();
     private final ReentrantReadWriteLock lifetime = new ReentrantReadWriteLock();
@@ -45,6 +45,8 @@ public final class NativeTunnel implements AutoCloseable {
         try { nFree(handle); } finally { lifetime.writeLock().unlock(); }
         if (failure != null) throw failure;
     }
+    public static int probeVersion() { return nProbeVersion(); }
+    private static native int nProbeVersion();
     private static native long nPrepare(byte[] config) throws IOException;
     private static native String nOffer(long handle) throws IOException;
     private static native void nConnect(long handle, byte[] remote, boolean initiator) throws IOException;

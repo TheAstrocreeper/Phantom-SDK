@@ -17,6 +17,9 @@ pub struct ProbeReceipt {
     pub local_receive_drops: u64,
     pub local_send_drops: u64,
 }
+pub const VERSION: u32 = 2;
+const HEADER: &[u8] = b"PHANTOM-PROBE/2\n";
+
 fn err(e: impl std::fmt::Display) -> io::Error {
     io::Error::other(e.to_string())
 }
@@ -28,6 +31,7 @@ pub async fn run(tunnel: Tunnel, bytes: usize, initiator: bool) -> io::Result<Pr
     let digest = tokio::time::timeout(Duration::from_secs(120), async {
         if initiator {
             let (mut send, mut recv) = tunnel.connection.open_bi().await.map_err(err)?;
+            send.write_all(HEADER).await.map_err(err)?;
             let block = vec![0xa7u8; 65536];
             let mut hash = Sha256::new();
             let mut sent = 0;
@@ -37,14 +41,16 @@ pub async fn run(tunnel: Tunnel, bytes: usize, initiator: bool) -> io::Result<Pr
                 hash.update(&block[..n]);
                 sent += n;
             }
-            send.finish().map_err(err)?;
-            let receipt: serde_json::Value =
-                serde_json::from_slice(&recv.read_to_end(1024).await.map_err(err)?).map_err(err)?;
             let digest = hex::encode(hash.finalize());
-            if receipt["bytes"].as_u64() != Some(bytes as u64)
-                || receipt["sha256"].as_str() != Some(&digest)
-            {
+            let mut receipt = [0u8; 64];
+            recv.read_exact(&mut receipt).await.map_err(err)?;
+            if receipt != digest.as_bytes() {
                 return Err(err("Probe receipt mismatch"));
+            }
+            send.write_all(b"verified").await.map_err(err)?;
+            send.finish().map_err(err)?;
+            if recv.read_to_end(32).await.map_err(err)? != b"complete" {
+                return Err(err("Probe completion mismatch"));
             }
             Ok(digest)
         } else {
@@ -52,25 +58,39 @@ pub async fn run(tunnel: Tunnel, bytes: usize, initiator: bool) -> io::Result<Pr
             let mut buf = vec![0u8; 65536];
             let mut hash = Sha256::new();
             let mut received = 0;
-            while let Some(size) = recv.read(&mut buf).await.map_err(err)? {
+            let mut header = [0u8; HEADER.len()];
+            recv.read_exact(&mut header).await.map_err(err)?;
+            if header != HEADER {
+                return Err(err("Unsupported probe protocol"));
+            }
+            while received < bytes {
+                let limit = (bytes - received).min(buf.len());
+                let size = recv
+                    .read(&mut buf[..limit])
+                    .await
+                    .map_err(err)?
+                    .ok_or_else(|| err("Truncated probe"))?;
                 received += size;
-                if received > bytes {
-                    return Err(err("Probe exceeds agreed size"));
-                }
                 hash.update(&buf[..size]);
             }
-            if received != bytes {
-                return Err(err("Truncated probe"));
-            }
             let digest = hex::encode(hash.finalize());
-            send.write_all(
-                &serde_json::to_vec(&serde_json::json!({"bytes":bytes,"sha256":digest}))
-                    .map_err(err)?,
-            )
-            .await
-            .map_err(err)?;
+            send.write_all(digest.as_bytes()).await.map_err(err)?;
+            if recv.read_to_end(32).await.map_err(err)? != b"verified" {
+                return Err(err("Probe verification acknowledgement missing"));
+            }
+            send.write_all(b"complete").await.map_err(err)?;
             send.finish().map_err(err)?;
-            send.stopped().await.map_err(err)?;
+            match send.stopped().await {
+                Ok(None) => {}
+                // The authenticated peer can close after it has read the
+                // complete marker. Generic cancellation/transport loss is not
+                // accepted as successful delivery.
+                Err(quinn::StoppedError::ConnectionLost(
+                    quinn::ConnectionError::ApplicationClosed(close),
+                )) if close.error_code == 0u32.into()
+                    && close.reason.as_ref() == b"probe_verified" => {}
+                _ => return Err(err("Probe completion was not acknowledged")),
+            }
             Ok(digest)
         }
     })
@@ -78,6 +98,7 @@ pub async fn run(tunnel: Tunnel, bytes: usize, initiator: bool) -> io::Result<Pr
     .map_err(err)??;
     let elapsed = start.elapsed().as_secs_f64();
     let (recv, send) = tunnel.local_packet_drops();
+    tunnel.drain_close(b"probe_verified").await;
     Ok(ProbeReceipt {
         bytes,
         sha256: digest,

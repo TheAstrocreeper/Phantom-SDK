@@ -40,7 +40,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         deadline: Duration::from_secs(20),
     })
     .await?;
-    output(json!({"type":"offer","offer":local.offer()}))?;
+    output(json!({"type":"offer","offer":local.offer(),"probeVersion":probe::VERSION}))?;
     // Read only a bounded control envelope. The trusted controller must ensure
     // this offer came from the named authenticated peer before forwarding it.
     let mut line = String::new();

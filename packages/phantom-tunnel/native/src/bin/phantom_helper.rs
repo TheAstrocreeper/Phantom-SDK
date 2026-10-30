@@ -322,7 +322,7 @@ async fn main() {
                                 &out,
                                 response(
                                     &job.request_id,
-                                    json!({"ok":true,"jobId":key,"offer":offer}),
+                                    json!({"ok":true,"jobId":key,"offer":offer,"probeVersion":probe::VERSION}),
                                 ),
                             )
                             .await;

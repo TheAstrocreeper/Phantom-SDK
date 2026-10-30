@@ -43,6 +43,24 @@ interfaces and use `stun.l.google.com:19302`, with trusted process-environment
 `PHANTOM_HELPER_BIND`/`PHANTOM_HELPER_STUN` overrides for controlled tests. The
 page cannot change this policy. The `none` STUN setting is for local tests.
 
+## Probe completion/versioning
+
+Finite probe protocol 2 has an explicit header, exact byte count, peer hash
+receipt, verification acknowledgement and completion marker. It then drains
+QUIC shutdown before a standalone process/runtime exits. Transfer timing is
+captured before the shutdown drain. Wrong hashes, missing verification and
+ordinary cancellation cannot produce a successful completion receipt.
+
+This closes a lifecycle gap exposed by an intermittent standalone process test:
+exiting without draining QUIC can leave the peer waiting for its idle timeout.
+The process harness also waits for stdout closure before validating receipts.
+
+The SDK request declares `probeVersion: 2`, desktop helpers report that version,
+and the JNI binding checks the native library version. A stale local helper is
+rejected before forwarding its offer; it cannot silently stand in for the new
+build. Generic bulk QUIC remains protocol 1; this version is the finite workload
+protocol. Prototype components should be built together from the same revision.
+
 ## Development installation
 
 Build for the target OS using the pinned libjuice source documented in
@@ -81,10 +99,11 @@ calls native close before waiting for outstanding Java readers, then frees the
 handle exactly once. Closing an already closed wrapper is harmless.
 
 JNI CMake accepts the Rust cdylib built for the same ABI. Android builds use NDK
-JNI headers; desktop JVM tests use JDK headers. Both
+JNI headers; desktop JVM tests use JDK headers. Android ARM64/API 33 cross-build
+was verified in CI run 41074299190. Both
 `libphantom_tunnel_native` and `libphantom_tunnel_jni` must be packaged for the
 same target ABI. This is a source binding; **the Android app/WebView bridge,
-Gradle packaging, NDK build and actual device are not yet integrated/verified**.
+Gradle packaging and actual device are not yet integrated/verified**.
 Android Chrome is not assumed to support this desktop extension.
 
 The Android cross-build script accepts a Rust Android target and uses the NDK

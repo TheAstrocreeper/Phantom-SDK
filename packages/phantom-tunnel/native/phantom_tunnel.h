@@ -42,6 +42,7 @@ int phantom_tunnel_recv_datagram(const PhantomTunnelSession *,uint8_t *,size_t,s
 int phantom_tunnel_status(const PhantomTunnelSession *,uint8_t *,size_t,size_t *);
 /* Finite native probe, 1..32 MiB. Consumes a connected session; no concurrent
    stream consumers. Output JSON buffer must be >=2048. close() cancels it. */
+uint32_t phantom_tunnel_probe_version(void);
 int phantom_tunnel_run_probe(const PhantomTunnelSession *,size_t,int,uint8_t *,size_t,size_t *);
 int phantom_tunnel_close(const PhantomTunnelSession *);
 void phantom_tunnel_session_free(PhantomTunnelSession *);

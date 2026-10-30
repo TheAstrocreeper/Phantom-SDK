@@ -5,8 +5,8 @@ export function normalizeBulkControl(value, from, to) {
     const base = {version:1, type:value.type, sessionId:value.sessionId};
     let result, keys;
     if (value.type === 'request') {
-      if (value.purpose !== 'probe' || !Number.isSafeInteger(value.bytes) || value.bytes < 1 || value.bytes > 2147483648) return null;
-      result = {...base,purpose:'probe',bytes:value.bytes}; keys=['version','type','sessionId','purpose','bytes'];
+      if (value.purpose !== 'probe' || value.probeVersion !== 2 || !Number.isSafeInteger(value.bytes) || value.bytes < 1 || value.bytes > 2147483648) return null;
+      result = {...base,purpose:'probe',probeVersion:2,bytes:value.bytes}; keys=['version','type','sessionId','purpose','probeVersion','bytes'];
     } else if (value.type === 'offer') {
       const offer=value.offer;
       if (!offer || offer.protocol !== 'phantom-bulk-quic-v1' || offer.sessionId !== value.sessionId ||

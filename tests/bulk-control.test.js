@@ -7,7 +7,7 @@ const wait=()=>new Promise(r=>setImmediate(r));
 async function until(fn){for(let n=0;n<1000;n++){if(fn())return;await new Promise(r=>setTimeout(r,5));}assert.fail('Bulk condition did not settle');}
 const id='ab'.repeat(16),a='a'.repeat(16),b='b'.repeat(16);
 function offer(from,to,sessionId=id){return {protocol:'phantom-bulk-quic-v1',sessionId,from,to,certificateDer:'aa',iceSdp:'a=ice-pwd:SECRET_SENTINEL\r\na=candidate:test\r\n'};}
-function request(sessionId=id){return {version:1,type:'request',sessionId,purpose:'probe',bytes:1024};}
+function request(sessionId=id){return {version:1,type:'request',sessionId,purpose:'probe',probeVersion:2,bytes:1024};}
 function frame(from,to,sessionId=id){return {version:1,type:'offer',sessionId,offer:offer(from,to,sessionId)};}
 function deferred(){let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b;});promise.catch(()=>{});return {promise,resolve,reject};}
 function fixture(){

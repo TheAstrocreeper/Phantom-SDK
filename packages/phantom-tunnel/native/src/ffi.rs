@@ -382,6 +382,11 @@ pub unsafe extern "C" fn phantom_tunnel_status(
     })
 }
 #[no_mangle]
+pub extern "C" fn phantom_tunnel_probe_version() -> u32 {
+    crate::probe::VERSION
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn phantom_tunnel_run_probe(
     handle: *const Session,
     bytes: usize,

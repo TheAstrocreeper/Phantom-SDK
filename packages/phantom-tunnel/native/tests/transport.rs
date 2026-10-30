@@ -144,3 +144,55 @@ async fn invalid_scope_and_unbounded_deadlines_are_rejected() {
     opts.deadline = Duration::from_secs(121);
     assert!(PreparedTunnel::gather(opts).await.is_err());
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn probe_source_rejects_a_wrong_peer_hash() {
+    let (a, b) = pair().await;
+    let source = phantom_tunnel_native::probe::run(a, 1024, true);
+    let rogue = async {
+        let (mut tx, mut rx) = b.connection.accept_bi().await.unwrap();
+        let mut header = [0u8; 16];
+        rx.read_exact(&mut header).await.unwrap();
+        assert_eq!(&header, b"PHANTOM-PROBE/2\n");
+        let mut body = [0u8; 1024];
+        rx.read_exact(&mut body).await.unwrap();
+        tx.write_all(&[b'0'; 64]).await.unwrap();
+        tx.finish().unwrap();
+    };
+    let (result, _) = tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::join!(source, rogue)
+    })
+    .await
+    .unwrap();
+    assert!(result
+        .err()
+        .unwrap()
+        .to_string()
+        .contains("receipt mismatch"));
+    b.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn probe_receiver_requires_explicit_peer_verification_before_success() {
+    let (a, b) = pair().await;
+    let sink = phantom_tunnel_native::probe::run(b, 1024, false);
+    let rogue = async {
+        let (mut tx, mut rx) = a.connection.open_bi().await.unwrap();
+        tx.write_all(b"PHANTOM-PROBE/2\n").await.unwrap();
+        tx.write_all(&[0xa7; 1024]).await.unwrap();
+        let mut receipt = [0u8; 64];
+        rx.read_exact(&mut receipt).await.unwrap();
+        tx.write_all(b"not_verified").await.unwrap();
+        tx.finish().unwrap();
+    };
+    let (result, _) =
+        tokio::time::timeout(Duration::from_secs(5), async { tokio::join!(sink, rogue) })
+            .await
+            .unwrap();
+    assert!(result
+        .err()
+        .unwrap()
+        .to_string()
+        .contains("acknowledgement missing"));
+    a.shutdown().await;
+}

@@ -12,7 +12,8 @@ test('two native processes establish ICE/QUIC and verify a 32 MiB stream', {time
   const peers=[];
   function launch(local,remote,mode) {
     const child=spawn(exe,[local,remote,session,mode,String(bytes),'127.0.0.1'],{stdio:['pipe','pipe','pipe']});
-    t.after(()=>{if(child.exitCode===null)child.kill();});
+    const phases=[];
+    t.after(()=>{if(child.exitCode===null){t.diagnostic(local+' native phases before cancellation: '+phases.join(','));child.kill();}});
     let buffer='',stderr=''; const events=[];
     let gotOffer,failOffer;
     const offer=new Promise((resolve,reject)=>{gotOffer=resolve;failOffer=reject;});
@@ -27,7 +28,7 @@ test('two native processes establish ICE/QUIC and verify a 32 MiB stream', {time
         while((index=buffer.indexOf('\n'))>=0){
           const line=buffer.slice(0,index);buffer=buffer.slice(index+1);
           try {
-            const event=JSON.parse(line);
+            const event=JSON.parse(line);phases.push(event.type);
             if(event.type==='offer') {
               assert.equal(event.offer.from,local);assert.equal(event.offer.to,remote);assert.equal(event.offer.sessionId,session);
               gotOffer(event.offer);
@@ -35,7 +36,7 @@ test('two native processes establish ICE/QUIC and verify a 32 MiB stream', {time
           }catch(error){child.kill();failOffer(error);reject(error);}
         }
       });
-      child.on('exit',(code,signal)=>{
+      child.on('close',(code,signal)=>{ // stdout must be drained before validating completion.
         if(code!==0){const error=Error(`Native probe failed (${code??signal}): ${stderr}`);failOffer(error);reject(error);return;}
         const result=events.find(e=>e.type==='complete');
         if(!result){const error=Error('Missing completion receipt');failOffer(error);reject(error);return;}

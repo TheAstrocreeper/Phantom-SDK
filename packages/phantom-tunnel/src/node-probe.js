@@ -33,6 +33,7 @@ export function createNativeProbeAdapter({binary,bindAddress='0.0.0.0',stun=null
           try {
             const event=JSON.parse(line);
             if(event.type==='offer'&&!offerSeen){
+              if(event.probeVersion!==2)throw Error('Native probe version mismatch');
               offerSeen=true;
               resolveOffer({offer:event.offer,close,connect(remote){
                 if(remoteSent||ended)throw new Error('Native session consumed');remoteSent=true;

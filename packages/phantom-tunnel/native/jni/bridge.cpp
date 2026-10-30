@@ -37,3 +37,5 @@ extern "C" JNIEXPORT jstring JNICALL Java_io_phantom_tunnel_NativeTunnel_nProbe(
 }
 extern "C" JNIEXPORT void JNICALL Java_io_phantom_tunnel_NativeTunnel_nClose(JNIEnv *env,jclass,jlong handle) { if(phantom_tunnel_close(session(handle))!=0)fail(env); }
 extern "C" JNIEXPORT void JNICALL Java_io_phantom_tunnel_NativeTunnel_nFree(JNIEnv *,jclass,jlong handle) { phantom_tunnel_session_free(session(handle)); }
+
+extern "C" JNIEXPORT jint JNICALL Java_io_phantom_tunnel_NativeTunnel_nProbeVersion(JNIEnv *,jclass) { return static_cast<jint>(phantom_tunnel_probe_version()); }

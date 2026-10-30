@@ -38,6 +38,7 @@ export function createHelperProbeAdapter({port,crypto=globalThis.crypto,timeoutM
       const job={id,bytes,resolve,reject,signal,abort:()=>closeJob(job),connecting:false};jobs.set(id,job);signal?.addEventListener('abort',job.abort,{once:true});
       try {
         const reply=await rpc({action:'prepare',jobId:id,localPeer,remotePeer,sessionId,bytes,initiator});
+        if(reply.probeVersion!==2)throw new Error('Native helper probe version mismatch');
         if(jobs.get(id)!==job||signal?.aborted)throw new Error('Native helper cancelled');
         return {offer:reply.offer,close:()=>closeJob(job),async connect(offer){
           if(jobs.get(id)!==job||job.connecting)throw new Error('Native helper session consumed');job.connecting=true;

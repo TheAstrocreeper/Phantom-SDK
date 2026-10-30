@@ -47,6 +47,15 @@ impl Tunnel {
     pub fn local_packet_drops(&self) -> (u64, u64) {
         self.ice.dropped()
     }
+    /// Finish protocol shutdown before an embedding runtime/process exits.
+    pub async fn shutdown(&self) {
+        self.drain_close(b"closed").await;
+    }
+    pub(crate) async fn drain_close(&self, reason: &[u8]) {
+        self.connection.close(0u32.into(), reason);
+        self.endpoint.close(0u32.into(), reason);
+        self.endpoint.wait_idle().await;
+    }
     pub fn close(&self) {
         self.connection.close(0u32.into(), b"closed");
         self.endpoint.close(0u32.into(), b"closed");
