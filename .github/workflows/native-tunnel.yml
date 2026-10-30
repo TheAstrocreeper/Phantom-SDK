@@ -62,3 +62,12 @@ jobs:
         run: |
           export PHANTOM_PLAYWRIGHT_MODULE="$RUNNER_TEMP/phantom-browser/node_modules/playwright/index.mjs"
           node --test packages/phantom-tunnel/native/test-browser-helper.mjs
+      - name: Package Linux helper
+        run: |
+          cargo build --locked --release --bin phantom_helper --manifest-path packages/phantom-tunnel/native/Cargo.toml
+          strip --strip-unneeded packages/phantom-tunnel/native/target/release/phantom_helper
+      - uses: actions/upload-artifact@v4
+        with:
+          name: phantom-helper-linux-x64
+          path: packages/phantom-tunnel/native/target/release/phantom_helper
+          if-no-files-found: error
