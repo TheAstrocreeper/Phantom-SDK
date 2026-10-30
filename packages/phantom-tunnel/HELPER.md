@@ -87,6 +87,20 @@ same target ABI. This is a source binding; **the Android app/WebView bridge,
 Gradle packaging, NDK build and actual device are not yet integrated/verified**.
 Android Chrome is not assumed to support this desktop extension.
 
+The Android cross-build script accepts a Rust Android target and uses the NDK
+for both the Rust/C ICE backend and the JNI shim. For the phone's ARM64 ABI:
+
+```sh
+rustup target add aarch64-linux-android
+node packages/phantom-tunnel/tools/build-android.mjs aarch64-linux-android
+```
+
+Set `ANDROID_NDK_HOME` and the pinned `PHANTOM_LIBJUICE_SOURCE` first. The script
+builds API 33 by default and places both libraries under
+`native/target/android-jniLibs/arm64-v8a`. It does not build an APK or modify
+Gradle. `.github/workflows/native-android.yml` checks this cross-build separately;
+other target mappings are provided but remain unverified until built.
+
 With a JDK and CMake available, run:
 
 ```sh
@@ -115,10 +129,11 @@ Locally verified on Linux:
 The SDK's paired memory RTC represents the control transport in the automated
 native-host integration test. A separate real Chromium test loads the actual
 extension against intercepted test pages and temporary native host registration.
-It could not run in this execution environment: Chromium aborts at startup
-because the host denies a required Unix socket. **That browser path is unverified
-here**, not counted as a pass. `.github/workflows/native-tunnel.yml` includes it
-on a normal Linux runner. CI results must be checked separately.
+This restricted execution environment denies Chromium a startup Unix socket,
+so it could not run locally. The test **passed on the normal Linux CI runner**
+in run 41073648458, verifying a 32 MiB hash-matched transfer through actual
+page → extension → installed native helper paths. It uses test pages, not the
+live Share deployment or the user's PC/5G path.
 
 The optional browser test requires Playwright 1.62.1 and Chromium:
 

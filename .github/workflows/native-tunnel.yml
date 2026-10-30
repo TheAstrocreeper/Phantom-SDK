@@ -3,9 +3,22 @@ on:
   push:
     branches: [codex/native-bulk-transport]
     paths:
-      - 'packages/phantom-tunnel/**'
+      - 'packages/phantom-tunnel/src/**'
+      - 'packages/phantom-tunnel/browser-extension/**'
+      - 'packages/phantom-tunnel/native/src/**'
+      - 'packages/phantom-tunnel/native/ice-shim/**'
+      - 'packages/phantom-tunnel/native/jni/**'
+      - 'packages/phantom-tunnel/native/*.mjs'
+      - 'packages/phantom-tunnel/native/*.py'
+      - 'packages/phantom-tunnel/native/*.toml'
+      - 'packages/phantom-tunnel/native/Cargo.lock'
+      - 'packages/phantom-tunnel/native/build.rs'
+      - 'packages/phantom-tunnel/native/phantom_tunnel.h'
+      - 'packages/phantom-tunnel/tools/**'
+      - 'packages/phantom-tunnel/package.json'
       - 'packages/phantom-core/src/bulk-control.js'
       - 'tests/*bulk*'
+      - 'tests/fixtures/bulk-network.js'
       - 'tests/*helper*'
       - '.github/workflows/native-tunnel.yml'
   workflow_dispatch:
