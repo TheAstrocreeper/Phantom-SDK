@@ -1,5 +1,12 @@
 # Phantom bulk transport — experimental
 
+The [native core](native/README.md) now implements ICE + QUIC with a C ABI and
+Linux integration tests. It is independent of the initial Node TLS binding
+documented below. Platform wrappers and the actual Phantom/WebRTC control-plane
+integration remain pending. The two carriers use different wire protocols.
+
+## Initial Node TLS reference binding
+
 A separate bulk plane negotiated over Phantom's existing authenticated WebRTC
 control connection. Messaging, roster, discovery and admission remain unchanged.
 No existing app transfer path imports this package.
@@ -11,7 +18,7 @@ stack through Node TLS 1.3. It provides one reliable duplex byte stream per
 one-use offer. Payloads do not pass through RTCDataChannel, JSON, base64, or an
 Android JavaScript bridge. Node stream backpressure governs payload buffering.
 
-This is not yet the portable native core. The binding runs on Node-capable
+This Node reference is separate from the native core. It runs on Node-capable
 platforms; only Linux has been exercised here. Android, iOS and embedded native
 bindings remain to be implemented against the wire contract below. No Node
 runtime is proposed as an Android requirement.
@@ -32,7 +39,7 @@ runtime is proposed as an Android requirement.
 - Reliable streams are implemented. Datagram capability must be advertised
   separately by a future carrier; this TLS binding does not support it.
 
-The contract permits TCP/TLS, a future QUIC binding, and a later TUN/TAP front
+The contract permits TCP/TLS, the adjacent native QUIC binding, and a later TUN/TAP front
 end. A virtual interface is a consumer of the transport, not required for a
 bulk stream. Picking TLS for this reference binding does not settle the final
 internet carrier.
@@ -66,7 +73,7 @@ A consumed offer is not resurrected after disconnection.
    application concerns. Stream consumers handle errors and aborts after
    admission; the connector's AbortSignal covers establishment only.
 
-## Connectivity limits — explicitly unresolved
+## Node TLS connectivity limits — explicitly unresolved
 
 The current binding requires a **reachable explicit TCP endpoint**. It implements
 no STUN/ICE, hole punching, port mapping, relay or automatic endpoint selection.
