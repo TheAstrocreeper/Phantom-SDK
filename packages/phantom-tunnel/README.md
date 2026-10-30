@@ -2,8 +2,8 @@
 
 The [native core](native/README.md) now implements ICE + QUIC with a C ABI and
 Linux integration tests. The [SDK control bridge and desktop probe binding](CONTROL.md)
-now connect it to scoped peer control. An installed browser helper and other
-platform wrappers remain pending. The initial Node TLS reference below uses a
+now connect it to scoped peer control. An [installed page helper and Java/JNI source binding](HELPER.md) are now
+implemented. Android app integration and non-Linux platform verification remain pending. The initial Node TLS reference below uses a
 different wire protocol.
 
 ## Initial Node TLS reference binding

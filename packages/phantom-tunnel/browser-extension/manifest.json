@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "Phantom Native Transport (Prototype)",
+  "version": "0.0.1",
+  "description": "Connect Phantom Share to its installed native bulk-transport helper.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAv82hnz0o2cUJ7+Y/izAFMPDVF4qtjGzvRgdWpTet+vsBidmZbLmc9gBmA0FOes+2ypZZtV0/UFcyoX5BtGmCiC3p81nyobf4J6qiaLRD/n/5vVbxsFB3hrYysYC74fhgXkQNssb+0jl5aEXTKmX+xHYI8LaItdHILcN75BJbOz0ryhIAtUhzh09Zf0sdWoktsb8iyEc0u3roYrCp9APkzgkqh+PrIE4lFCrZNJswhFsY8lbQCUa9+3NzoqH2UKk30HX3mnoEfeNmufZ0CSGGWJp/rKi1IN94aGSd+UtiHGnwiMneNiqohuN3A82CcoIVnfHd/05bc/X5qWmE8Q5vqQIDAQAB",
+  "permissions": [
+    "nativeMessaging"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://phantomshare.app/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ]
+}

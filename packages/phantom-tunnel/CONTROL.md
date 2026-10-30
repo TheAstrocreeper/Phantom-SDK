@@ -62,10 +62,10 @@ approval policy to the coordinator. Once the SDK reports the peer ready,
 and `onState` deliberately exclude offers and ICE credentials.
 
 The Node adapter is a desktop host/reference binding. **It cannot be imported
-into an ordinary browser page.** An authenticated installed-helper bridge between
-the page and native host remains to be built, along with mobile/platform wrappers
-around the C ABI. No privileged localhost HTTP/WebSocket service has been exposed
-by this commit. There is no change to Share or its normal file-transfer path.
+into an ordinary browser page.** The [installed browser helper and Java/JNI binding](HELPER.md) now supply
+additional adapter surfaces. The browser extension path is unverified in this
+restricted environment; Android app packaging remains pending. The installed bridge uses browser native messaging; it exposes no localhost
+HTTP/WebSocket service. There is no change to Share or its normal file-transfer path.
 
 ## Validation and limits
 

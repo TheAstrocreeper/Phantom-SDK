@@ -24,6 +24,7 @@ struct Config {
 enum State {
     Prepared(Box<PreparedTunnel>),
     Connecting,
+    Probing,
     Connected(Tunnel),
     Closed,
 }
@@ -369,10 +370,56 @@ pub unsafe extern "C" fn phantom_tunnel_status(
             }
             State::Prepared(_) => serde_json::json!({"state":"prepared"}),
             State::Connecting => serde_json::json!({"state":"connecting"}),
+            State::Probing => serde_json::json!({"state":"probing"}),
             State::Closed => serde_json::json!({"state":"closed"}),
         };
         output(
             &serde_json::to_vec(&value).map_err(io::Error::other)?,
+            buf,
+            capacity,
+            written,
+        )
+    })
+}
+#[no_mangle]
+pub unsafe extern "C" fn phantom_tunnel_run_probe(
+    handle: *const Session,
+    bytes: usize,
+    initiator: c_int,
+    buf: *mut u8,
+    capacity: usize,
+    written: *mut usize,
+) -> c_int {
+    invoke(|| {
+        if buf.is_null()
+            || written.is_null()
+            || capacity < 2048
+            || bytes == 0
+            || bytes > 32 * 1024 * 1024
+            || !(0..=1).contains(&initiator)
+        {
+            return Err(error("Invalid probe output/scope"));
+        }
+        *written = 0;
+        let owner = &session(handle)?.owner;
+        let tunnel = {
+            let mut state = lock(&owner.state)?;
+            match std::mem::replace(&mut *state, State::Probing) {
+                State::Connected(t) => t,
+                other => {
+                    *state = other;
+                    return Err(error("Probe requires a connected session"));
+                }
+            }
+        };
+        let mut cancel = owner.cancel.subscribe();
+        let result=owner.runtime.block_on(async {
+            if *cancel.borrow(){return Err(error("Cancelled"));}
+            tokio::select!{result=crate::probe::run(tunnel,bytes,initiator==1)=>result,_=cancel.changed()=>Err(error("Cancelled"))}
+        });
+        *lock(&owner.state)? = State::Closed;
+        output(
+            &serde_json::to_vec(&result?).map_err(io::Error::other)?,
             buf,
             capacity,
             written,

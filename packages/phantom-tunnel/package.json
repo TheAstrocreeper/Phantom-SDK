@@ -7,11 +7,13 @@
   "exports": {
     "./node": "./src/node-tls.js",
     "./control": "./src/control.js",
-    "./node-probe": "./src/node-probe.js"
+    "./node-probe": "./src/node-probe.js",
+    "./browser-helper": "./src/browser-helper.js"
   },
   "scripts": {
     "test": "node --test test/*.test.js",
-    "test:native": "node native/verify.mjs"
+    "test:native": "node native/verify.mjs",
+    "test:jni": "node native/verify-jni.mjs"
   },
   "engines": {
     "node": ">=22"

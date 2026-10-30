@@ -2,6 +2,7 @@
 //! Offers must be exchanged over an authenticated confidential Phantom channel.
 mod ffi;
 mod ice;
+pub mod probe;
 use quinn::crypto::rustls::{QuicClientConfig, QuicServerConfig};
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 use serde::{Deserialize, Serialize};

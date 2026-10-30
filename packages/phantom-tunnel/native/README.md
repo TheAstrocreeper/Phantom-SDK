@@ -9,8 +9,9 @@ The core is Rust plus a small C shim to libjuice. `phantom_tunnel.h` exposes the
 same implementation through a blocking C ABI, so platform wrappers need not be
 written in Rust. Rust `rlib`, C static library and shared library builds are
 configured. **Only Linux has been built and tested here.** Windows, macOS,
-Android and iOS builds/bindings are not yet verified. This is not an installed
-page helper, VPN, TUN/TAP interface or finished Share integration.
+Android and iOS builds/bindings are not yet verified. An installed native-messaging helper and Java/JNI source binding now live
+alongside this core (see ../HELPER.md). There is no VPN/TUN/TAP interface or
+finished Share integration.
 
 ## Connection setup and authentication
 
@@ -137,8 +138,8 @@ helper service or automatically integrated benchmark in Share.
 
 ## Remaining integration
 
-Add platform wrappers/build validation around the C API and an authenticated
-installed desktop helper. The scoped SDK control/peer-lifecycle bridge and Node
+Complete Android app packaging and non-Linux platform validation. The installed
+page helper and Java/JNI binding are documented in ../HELPER.md. The scoped SDK control/peer-lifecycle bridge and Node
 probe binding are now implemented; see ../CONTROL.md.
 Bulk data must stay in native streams/native file handles. Bind tunnel closure
 to peer removal, leave and shutdown before exposing it to Share. Test direct
